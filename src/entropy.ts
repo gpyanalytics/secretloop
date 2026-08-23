@@ -1,0 +1,97 @@
+/**
+ * Calculates Shannon entropy of a string. High entropy (~4.3+ for base64-ish
+ * strings of reasonable length) is a strong signal of randomly generated
+ * secrets, as opposed to natural language or predictable identifiers.
+ */
+export function shannonEntropy(input: string): number {
+  if (input.length === 0) return 0;
+
+  const freq = new Map<string, number>();
+  for (const char of input) {
+    freq.set(char, (freq.get(char) ?? 0) + 1);
+  }
+
+  let entropy = 0;
+  const len = input.length;
+  for (const count of freq.values()) {
+    const p = count / len;
+    entropy -= p * Math.log2(p);
+  }
+  return entropy;
+}
+
+// Quoted tokens and bare assignment values both get considered. Restricting to
+// quoted strings alone misses .env files and YAML, which is where secrets
+// actually tend to live.
+const QUOTED_TOKEN = /["'`]([A-Za-z0-9+/=_\-.]{20,})["'`]/g;
+const BARE_ASSIGNMENT = /(?:^|\s)[A-Za-z_][A-Za-z0-9_]*\s*[:=]\s*([A-Za-z0-9+/=_\-.]{20,})(?=\s|$)/gm;
+
+export interface EntropyMatch {
+  value: string;
+  index: number;
+  entropy: number;
+}
+
+/**
+ * Structured strings that clear the entropy bar but are never credentials.
+ * These are the single biggest source of entropy-scanner noise; every one of
+ * them is a class of finding that would otherwise train users to ignore alerts.
+ */
+const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
+  /^[0-9a-f]{40}$/i,                                          // git SHA-1
+  /^[0-9a-f]{64}$/i,                                          // SHA-256 digest / lockfile integrity
+  /^sha(?:256|512)-/,                                         // SRI hash
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, // UUID
+  /^data:[a-z]+\/[a-z0-9.+-]+;base64,/i,                      // inline data URI
+  /^(?:[A-Za-z]:)?[\\/](?:[\w.-]+[\\/])+[\w.-]+$/,            // filesystem path
+  /^https?:\/\//i,                                            // bare URL (credential URLs have their own rule)
+  /^[A-Za-z0-9+/=_-]*\.(?:js|ts|css|png|jpg|svg|woff2?|json|map)$/i, // hashed asset filename
+  /^[0-9.]+$/,                                                // version / numeric
+  /^(?:[A-Fa-f0-9]{2}:){5,}[A-Fa-f0-9]{2}$/,                  // MAC / fingerprint
+];
+
+function isStructuralFalsePositive(value: string): boolean {
+  return STRUCTURAL_FALSE_POSITIVES.some((r) => r.test(value));
+}
+
+/**
+ * A string of only one character class (all-lowercase-hex, all-digits) carries
+ * less real randomness than its Shannon score suggests, so it needs a higher
+ * bar. Mixed-case-plus-digits-plus-symbols is the shape real tokens have.
+ */
+function charsetDiversity(value: string): number {
+  let classes = 0;
+  if (/[a-z]/.test(value)) classes++;
+  if (/[A-Z]/.test(value)) classes++;
+  if (/[0-9]/.test(value)) classes++;
+  if (/[+/=_\-.]/.test(value)) classes++;
+  return classes;
+}
+
+export function findHighEntropyStrings(text: string, threshold: number): EntropyMatch[] {
+  const matches: EntropyMatch[] = [];
+  const seen = new Set<number>();
+
+  for (const pattern of [QUOTED_TOKEN, BARE_ASSIGNMENT]) {
+    pattern.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(text)) !== null) {
+      const value = m[1];
+      const index = m.index + m[0].lastIndexOf(value);
+      if (seen.has(index)) continue;
+
+      if (isStructuralFalsePositive(value)) continue;
+      if (charsetDiversity(value) < 2) continue;
+
+      const entropy = shannonEntropy(value);
+      // Single-charset strings need a clearly higher score to qualify.
+      const effectiveThreshold = charsetDiversity(value) === 2 ? threshold + 0.2 : threshold;
+      if (entropy >= effectiveThreshold) {
+        seen.add(index);
+        matches.push({ value, index, entropy });
+      }
+    }
+  }
+
+  return matches.sort((a, b) => a.index - b.index);
+}

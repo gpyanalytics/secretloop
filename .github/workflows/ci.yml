@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm test
+
+  self-scan:
+    # A secret scanner that leaks a secret is the worst possible headline, so
+    # the tool runs against its own repo on every PR.
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history, so the history scan has something to scan
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: Use the CI scan config
+        # tests/fixtures.ts generates credential-shaped strings on purpose, so the
+        # self-scan would otherwise fail on the test suite rather than on a real
+        # leak. This scopes the exclusion to CI only — it is not checked in as
+        # .secretloop.json, so local scans still cover tests/.
+        run: cp .github/secretloop.ci.json .secretloop.json
+      - name: Scan working tree
+        run: node out/cli.js scan --format sarif --output secretloop.sarif --fail-on high
+      - name: Scan git history
+        if: always()
+        run: node out/cli.js history --fail-on critical
+      - name: Upload SARIF to code scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: secretloop.sarif

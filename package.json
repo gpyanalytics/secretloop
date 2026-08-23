@@ -1,0 +1,209 @@
+{
+  "name": "secretloop",
+  "displayName": "SecretLoop",
+  "description": "SecretLoop detects exposed secrets, verifies whether they are live, and helps developers rotate and remediate them. A GPY Analytics product.",
+  "version": "0.1.0",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "secretloop.scanWorkspace",
+        "title": "SecretLoop: Scan Entire Workspace"
+      },
+      {
+        "command": "secretloop.scanStagedFiles",
+        "title": "SecretLoop: Scan Staged Files"
+      },
+      {
+        "command": "secretloop.installPrecommitHook",
+        "title": "SecretLoop: Install Pre-commit Hook"
+      },
+      {
+        "command": "secretloop.uninstallPrecommitHook",
+        "title": "SecretLoop: Uninstall Pre-commit Hook"
+      },
+      {
+        "command": "secretloop.scanHistory",
+        "title": "SecretLoop: Scan Git History for Secrets"
+      },
+      {
+        "command": "secretloop.writeBaseline",
+        "title": "SecretLoop: Accept Current Findings as Baseline"
+      }
+    ],
+    "configuration": {
+      "title": "SecretLoop",
+      "properties": {
+        "secretloop.entropyThreshold": {
+          "type": "number",
+          "default": 4.3,
+          "description": "Shannon entropy threshold above which a string is flagged as a possible secret."
+        },
+        "secretloop.autoScanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically scan a file for secrets when it is saved."
+        },
+        "secretloop.blockCommitOnSecret": {
+          "type": "boolean",
+          "default": true,
+          "description": "Warn in Source Control when staged files contain unresolved secrets."
+        },
+        "secretloop.envFilePath": {
+          "type": "string",
+          "default": ".env",
+          "description": "File that extracted secrets are moved into."
+        },
+        "secretloop.enableLiveVerification": {
+          "type": "boolean",
+          "default": true,
+          "description": "Make safe, read-only calls to providers (GitHub, Slack, Stripe, Google, AWS) to confirm whether a detected credential is actually active. Disable if you don't want SecretLoop making outbound network calls with detected values."
+        },
+        "secretloop.awsAdminAccessKeyId": {
+          "type": "string",
+          "default": "",
+          "description": "Access key ID for a separate AWS admin identity (with iam:UpdateAccessKey permission) used ONLY to deactivate leaked keys. A leaked key cannot deactivate itself. Leave blank to fall back to opening the IAM console manually."
+        },
+        "secretloop.awsAdminSecretAccessKey": {
+          "type": "string",
+          "default": "",
+          "description": "Secret access key paired with secretloop.awsAdminAccessKeyId. Store this in a secure settings scope, not committed workspace settings."
+        },
+        "secretloop.excludePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Additional glob patterns never scanned. Added to the built-in list (node_modules, lockfiles, minified bundles), not replacing it."
+        },
+        "secretloop.entropyPassEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Report generic high-entropy strings that match no known credential format. Turn off if the heuristic tier is too noisy for your codebase; named-format rules keep working."
+        },
+        "secretguard.entropyThreshold": {
+          "type": "number",
+          "default": 4.3,
+          "description": "Deprecated alias for secretloop.entropyThreshold.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.entropyThreshold` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.autoScanOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "Deprecated alias for secretloop.autoScanOnSave.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.autoScanOnSave` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.blockCommitOnSecret": {
+          "type": "boolean",
+          "default": true,
+          "description": "Deprecated alias for secretloop.blockCommitOnSecret.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.blockCommitOnSecret` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.envFilePath": {
+          "type": "string",
+          "default": ".env",
+          "description": "Deprecated alias for secretloop.envFilePath.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.envFilePath` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.enableLiveVerification": {
+          "type": "boolean",
+          "default": true,
+          "description": "Deprecated alias for secretloop.enableLiveVerification.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.enableLiveVerification` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.awsAdminAccessKeyId": {
+          "type": "string",
+          "default": "",
+          "description": "Deprecated alias for secretloop.awsAdminAccessKeyId.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.awsAdminAccessKeyId` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.awsAdminSecretAccessKey": {
+          "type": "string",
+          "default": "",
+          "description": "Deprecated alias for secretloop.awsAdminSecretAccessKey.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.awsAdminSecretAccessKey` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.excludePaths": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Deprecated alias for secretloop.excludePaths.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.excludePaths` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        },
+        "secretguard.entropyPassEnabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Deprecated alias for secretloop.entropyPassEnabled.",
+          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.entropyPassEnabled` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "test": "ts-node --transpile-only tests/rules.test.ts && ts-node --transpile-only tests/scanner.test.ts && ts-node --transpile-only tests/config.test.ts && ts-node --transpile-only tests/history.test.ts && ts-node --transpile-only tests/report.test.ts && ts-node --transpile-only tests/verify.test.ts",
+    "scan": "ts-node --transpile-only src/cli.ts",
+    "package": "vsce package",
+    "publish:vsce": "vsce publish",
+    "publish:ovsx": "ovsx publish",
+    "bundle": "esbuild src/extension.ts src/cli.ts --bundle --outdir=out --external:vscode --format=cjs --platform=node --minify",
+    "vscode:prepublish": "npm run bundle"
+  },
+  "dependencies": {
+    "@aws-sdk/client-iam": "^3.600.0",
+    "@aws-sdk/client-sts": "^3.600.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "esbuild": "^0.28.2",
+    "ovsx": "^0.10.0",
+    "ts-node": "^10.9.0",
+    "typescript": "^5.4.0"
+  },
+  "keywords": [
+    "secretloop",
+    "secrets",
+    "security",
+    "secret-scanning",
+    "gitleaks",
+    "trufflehog",
+    "credentials",
+    "api-keys",
+    "pre-commit",
+    "sarif",
+    "devsecops"
+  ],
+  "license": "MIT",
+  "bin": {
+    "secretloop": "./out/cli.js",
+    "secretguard": "./out/cli.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/gpyanalytics/secretloop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/gpyanalytics/secretloop/issues"
+  },
+  "homepage": "https://github.com/gpyanalytics/secretloop#readme",
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

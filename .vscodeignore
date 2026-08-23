@@ -1,0 +1,44 @@
+# What ships in the VSIX: package.json, README.md, LICENSE, out/**, and the
+# production dependency tree in node_modules.
+#
+# node_modules is deliberately NOT excluded. This extension is not bundled, and
+# both AWS SDKs are loaded at runtime via dynamic import() — @aws-sdk/client-sts
+# for AWS credential verification and @aws-sdk/client-iam for key deactivation.
+# Excluding node_modules would leave AWS verification and rotation broken at
+# runtime with a module-not-found error. vsce already resolves and packages only
+# the production dependency tree, so devDependencies are left out on their own.
+#
+# out/ is also required in full: hooks.ts resolves out/cli.js from
+# context.extensionPath to install the pre-commit hook.
+
+# Development sources — only the compiled output in out/ is executed.
+src/**
+tests/**
+
+# Build configuration and repository tooling.
+tsconfig.json
+.npmignore
+.github/**
+.gitignore
+.vscode/**
+.vscode-test/**
+
+# Source maps: useful when debugging locally, dead weight in a published VSIX.
+out/**/*.map
+
+# Local validation and coverage artifacts, if any are ever produced here.
+*.py
+coverage/**
+.nyc_output/**
+
+# Editor and OS noise.
+.DS_Store
+**/.DS_Store
+
+# Config template — documentation, not runtime input. The extension reads a
+# real .secretloop.json from the user's own workspace, never from the VSIX.
+.secretloop.example.json
+
+# Previously built packages.
+*.vsix
+

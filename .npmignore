@@ -1,0 +1,22 @@
+# npm-side packaging. This mirrors what the package.json "files" field used to
+# declare; it had to move here because vsce refuses to run when a .vscodeignore
+# and a "files" field both exist.
+#
+# .npmignore also takes precedence over .gitignore for npm packing, which
+# matters here: out/ is gitignored, so without this file npm would publish the
+# CLI package with no build output at all and a dead `bin` entry.
+
+src/**
+tests/**
+.github/**
+.vscode/**
+.vscode-test/**
+tsconfig.json
+.vscodeignore
+.secretloop.example.json
+out/**/*.map
+*.vsix
+*.py
+coverage/**
+.DS_Store
+**/.DS_Store
