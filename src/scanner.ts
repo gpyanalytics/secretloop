@@ -59,19 +59,20 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
     // is what keeps a 90-rule set as fast on large files as a 12-rule one.
     if (rule.keywords && !rule.keywords.some((k) => lowerText.includes(k.toLowerCase()))) continue;
 
-    rule.regex.lastIndex = 0;
-    let m: RegExpExecArray | null;
-    while ((m = rule.regex.exec(text)) !== null) {
+    const regex = indexedRegex(rule);
+    regex.lastIndex = 0;
+    let m: IndexedMatch | null;
+    while ((m = regex.exec(text) as IndexedMatch | null) !== null) {
       // Guard against zero-length matches causing infinite loops.
       if (m[0].length === 0) {
-        rule.regex.lastIndex++;
+        regex.lastIndex++;
         continue;
       }
       const value = rule.fullMatch ? m[0] : m[1];
       if (!value) continue;
       if (!passesFilters(value, rule, allowValueRegexes)) continue;
 
-      const startIndex = rule.fullMatch ? m.index : m.index + m[0].lastIndexOf(value);
+      const startIndex = rule.fullMatch ? m.index : captureStart(m, value);
       const line = lineOf(startIndex, lineStarts);
       if (ignoredLines.has(line)) continue;
 
@@ -119,6 +120,48 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   }
 
   return findings.sort((a, b) => a.startIndex - b.startIndex);
+}
+
+/**
+ * `RegExpExecArray` plus the capture-group offsets the `d` flag adds. Declared
+ * here rather than raising the project's `lib` to ES2022 for one property.
+ */
+type IndexedMatch = RegExpExecArray & {
+  indices?: Array<[number, number] | undefined>;
+};
+
+const indexedRegexes = new Map<string, RegExp>();
+
+/**
+ * A rule's regex, cloned once with the `d` flag so the exact offset of the
+ * capture group is available. Cloning here rather than declaring `d` on all 103
+ * literals keeps the guarantee in one place — a rule added without the flag
+ * can't silently reintroduce the offset bug below.
+ */
+function indexedRegex(rule: SecretRule): RegExp {
+  let regex = indexedRegexes.get(rule.id);
+  if (!regex) {
+    const flags = rule.regex.flags.includes("d") ? rule.regex.flags : rule.regex.flags + "d";
+    regex = new RegExp(rule.regex.source, flags);
+    indexedRegexes.set(rule.id, regex);
+  }
+  return regex;
+}
+
+/**
+ * Where the captured secret actually starts in the scanned text.
+ *
+ * Searching the matched text for the value instead picks the wrong occurrence
+ * whenever the credential also appears in the match's trailing context — in
+ * `mongodb+srv://app:pw@host/pw_db` that meant reporting the database
+ * name. The quick-fixes rewrite this span, so the wrong offset redacted the
+ * host and left the password in the file while reporting success.
+ */
+function captureStart(m: IndexedMatch, value: string): number {
+  const captureIndices = m.indices?.[1];
+  if (captureIndices) return captureIndices[0];
+  // `indexedRegex` guarantees `d`; this only covers a runtime that lacks it.
+  return m.index + m[0].lastIndexOf(value);
 }
 
 function buildFinding(input: {

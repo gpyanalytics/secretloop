@@ -90,6 +90,38 @@ test("reports the correct 1-based line number", () => {
   assert.strictEqual(hit!.line, 3);
 });
 
+test("reports the offset of the credential, not a later copy of the same text", () => {
+  // The quick-fixes rewrite document text between startIndex and endIndex, so a
+  // span that merely *reads* the same as the secret is not good enough — it has
+  // to be the secret itself. Here the password recurs in the database name, and
+  // pointing at the wrong copy redacts the database name and leaves the
+  // credential sitting in the file.
+  const text = 'MONGO_URI="mongodb+srv://app:s3cret@cluster0.mongodb.net/s3cret_db"';
+  const hit = scanText(text, 4.3).find((f) => f.ruleId === "db-connection-string");
+  assert.ok(hit, "expected a db-connection-string finding");
+  assert.strictEqual(hit!.value, "s3cret");
+  assert.strictEqual(hit!.startIndex, text.indexOf("s3cret"), "must point at the password");
+  assert.strictEqual(text.slice(hit!.startIndex, hit!.endIndex), hit!.value);
+});
+
+test("reports the offset of basic-auth credentials that recur in the host", () => {
+  const text = 'fetch("https://svc:hunter2pw@hunter2pw-db.internal/health")';
+  const hit = scanText(text, 4.3).find((f) => f.ruleId === "http-basic-auth-url");
+  assert.ok(hit, "expected an http-basic-auth-url finding");
+  assert.strictEqual(hit!.startIndex, text.indexOf("hunter2pw"), "must point at the password");
+  assert.strictEqual(text.slice(hit!.startIndex, hit!.endIndex), hit!.value);
+});
+
+test("still reports the offset of a capture that ends the match", () => {
+  // Guards the other direction: most rules put the captured value last, and
+  // those offsets were already correct.
+  const text = 'aws_secret_access_key = "wJalrXUtnFEMI7MDENGbPxRfiCYzK9qLvT2sHdB4"';
+  const hit = scanText(text, 4.3).find((f) => f.ruleId === "aws-secret-key");
+  assert.ok(hit, "expected an aws-secret-key finding");
+  assert.strictEqual(hit!.startIndex, text.indexOf("wJalr"));
+  assert.strictEqual(text.slice(hit!.startIndex, hit!.endIndex), hit!.value);
+});
+
 test("fingerprint is stable across line moves but differs per value", () => {
   const a = scanText('x = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"', {
     filePath: "src/a.ts",
