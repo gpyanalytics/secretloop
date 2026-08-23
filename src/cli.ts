@@ -15,7 +15,7 @@ import { isVerifiable, verifyFinding } from "./verify";
  * between a list of maybes and a prioritized list of things to rotate today.
  */
 
-interface Args {
+export interface Args {
   command: "scan" | "staged" | "history" | "help";
   format: OutputFormat;
   verify: boolean;
@@ -30,7 +30,7 @@ interface Args {
   failOn: "any" | "verified" | "critical" | "high" | "never";
 }
 
-function parseArgs(argv: string[]): Args {
+export function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: "scan",
     format: "text",
@@ -86,7 +86,7 @@ function parseArgs(argv: string[]): Args {
   return args;
 }
 
-const HELP = `secretloop - detect exposed secrets, verify whether they are live,
+export const HELP = `secretloop - detect exposed secrets, verify whether they are live,
 and rotate or remediate them. A GPY Analytics product.
 
 USAGE
@@ -109,12 +109,13 @@ OPTIONS
   --rev-range <range>      history: scan a rev range, e.g. origin/main..HEAD
   --path <dir>             Directory to scan (default: cwd)
   --fail-on <any|verified|critical|high|never>
-                           Which findings cause a non-zero exit (default: any)
+                           Which findings cause a non-zero exit (default: any).
+                           The 'verified' mode requires --verify.
 
 EXAMPLES
   secretloop scan --verify --format sarif -o results.sarif
   secretloop history --max-commits 500 --verify
-  secretloop scan --baseline .secretloop-baseline.json --fail-on verified
+  secretloop scan --baseline .secretloop-baseline.json --verify --fail-on verified
 
 The secretguard command still works as a deprecated alias for secretloop.
 `;
@@ -147,7 +148,30 @@ function applyBaseline(findings: Finding[], baselineFile?: string): Finding[] {
   return findings.filter((f) => !f.fingerprint || !accepted.has(f.fingerprint));
 }
 
-function shouldFail(findings: Finding[], failOn: Args["failOn"]): boolean {
+/**
+ * Argument combinations that are cheaper to reject up front than to debug from
+ * a green build. Returns null when the arguments are coherent.
+ */
+export function validateArgs(args: Args): string | null {
+  // `--fail-on verified` gates on findings the verification pass marked live.
+  // Without `--verify` nothing ever sets that flag, so the gate exits 0 no
+  // matter how many live credentials are in the repo.
+  //
+  // Rejected rather than silently implying `--verify`: that flag sends every
+  // detected credential to a provider API, which is not something a flag about
+  // exit codes should turn on. It would not close the hole either — with no
+  // network egress the implied pass verifies nothing and the build goes green
+  // again, just less visibly.
+  if (args.failOn === "verified" && !args.verify) {
+    return (
+      "--fail-on verified requires --verify. Without it no finding is ever " +
+      "marked live, so the scan always exits 0."
+    );
+  }
+  return null;
+}
+
+export function shouldFail(findings: Finding[], failOn: Args["failOn"]): boolean {
   if (failOn === "never" || findings.length === 0) return false;
   switch (failOn) {
     case "verified":
@@ -201,6 +225,12 @@ async function main(): Promise<void> {
   if (args.command === "help") {
     process.stdout.write(HELP);
     process.exit(0);
+  }
+
+  const usageError = validateArgs(args);
+  if (usageError) {
+    process.stderr.write(`secretloop: ${usageError}\n`);
+    process.exit(2);
   }
 
   const root = findRepoRoot(args.root);
@@ -261,7 +291,11 @@ async function main(): Promise<void> {
   process.exit(shouldFail(findings, args.failOn) ? 1 : 0);
 }
 
-main().catch((err) => {
-  process.stderr.write(`secretloop: ${err?.message ?? err}\n`);
-  process.exit(2);
-});
+// Only run the CLI when invoked as a program. Without this guard, importing
+// this module for a unit test would scan the cwd and call process.exit.
+if (require.main === module) {
+  main().catch((err) => {
+    process.stderr.write(`secretloop: ${err?.message ?? err}\n`);
+    process.exit(2);
+  });
+}
