@@ -1,6 +1,17 @@
-import { parseArgs, shouldFail, validateArgs, HELP } from "../src/cli";
+import {
+  applyBaseline,
+  mergeBaseline,
+  parseArgs,
+  shouldFail,
+  triageFindings,
+  validateArgs,
+  HELP,
+} from "../src/cli";
 import { Finding } from "../src/scanner";
 import { test, suite, finish, assert } from "./harness";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import * as path from "path";
 
 function finding(overrides: Partial<Finding> = {}): Finding {
   return {
@@ -69,6 +80,110 @@ test("shouldFail('high') covers critical as well as high", () => {
 
 test("shouldFail('never') never fires", () => {
   assert.strictEqual(shouldFail([finding({ verified: true })], "never"), false);
+});
+
+/** Writes a baseline file into a throwaway directory and hands over its path. */
+function withBaselineFile(fingerprints: string[], fn: (file: string) => void): void {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-cli-test-"));
+  try {
+    const file = path.join(dir, "baseline.json");
+    writeFileSync(file, JSON.stringify({ version: 1, fingerprints }, null, 2), "utf8");
+    fn(file);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+suite("\ncli.ts — baseline");
+
+test("applyBaseline drops accepted findings and keeps the rest", () => {
+  const accepted = finding({ file: "a.ts", fingerprint: "a.ts:github-token:aaa" });
+  const fresh = finding({ file: "b.ts", fingerprint: "b.ts:github-token:bbb" });
+  withBaselineFile(["a.ts:github-token:aaa"], (file) => {
+    const kept = applyBaseline([accepted, fresh], file);
+    assert.deepStrictEqual(kept.map((f) => f.fingerprint), ["b.ts:github-token:bbb"]);
+  });
+});
+
+test("re-writing a baseline preserves the fingerprints already accepted", () => {
+  // `--baseline old --write-baseline new` used to write only what the baseline
+  // had NOT already accepted, so refreshing a baseline emptied it and the next
+  // scan failed on everything.
+  const fresh = [finding({ file: "b.ts", fingerprint: "b.ts:github-token:bbb" })];
+  const merged = mergeBaseline(fresh, new Set(["a.ts:github-token:aaa"]));
+  assert.deepStrictEqual(
+    [...merged].sort(),
+    ["a.ts:github-token:aaa", "b.ts:github-token:bbb"]
+  );
+});
+
+test("re-writing a baseline does not duplicate an already-accepted fingerprint", () => {
+  const same = [finding({ file: "a.ts", fingerprint: "a.ts:github-token:aaa" })];
+  assert.deepStrictEqual(mergeBaseline(same, new Set(["a.ts:github-token:aaa"])), [
+    "a.ts:github-token:aaa",
+  ]);
+});
+
+test("writing a baseline with no prior baseline records the current findings", () => {
+  const fresh = [finding({ file: "b.ts", fingerprint: "b.ts:github-token:bbb" })];
+  assert.deepStrictEqual(mergeBaseline(fresh, new Set()), ["b.ts:github-token:bbb"]);
+});
+
+test("findings with no fingerprint are not written to the baseline", () => {
+  // Raw-text scans carry no file path, so they have no stable identity.
+  assert.deepStrictEqual(mergeBaseline([finding({ fingerprint: undefined })], new Set()), []);
+});
+
+test("--baseline and --write-baseline cannot name the same file", () => {
+  const error = validateArgs(parseArgs(["scan", "--baseline", "b.json", "--write-baseline", "b.json"]));
+  assert.ok(error, "expected the same path for both flags to be rejected");
+  assert.match(error!, /--write-baseline/);
+});
+
+test("--baseline and --write-baseline naming the same file by different paths is rejected", () => {
+  const error = validateArgs(
+    parseArgs(["scan", "--baseline", "./b.json", "--write-baseline", "b.json"])
+  );
+  assert.ok(error, "paths must be compared after resolution");
+});
+
+test("--baseline and --write-baseline naming different files is accepted", () => {
+  assert.strictEqual(
+    validateArgs(parseArgs(["scan", "--baseline", "old.json", "--write-baseline", "new.json"])),
+    null
+  );
+});
+
+suite("\ncli.ts — verification ordering");
+
+test("an already-baselined finding is never handed to the verifier", () => {
+  // Verifying before baselining re-sent every already-triaged credential to its
+  // provider on every CI run.
+  const accepted = finding({ file: "a.ts", fingerprint: "a.ts:github-token:aaa" });
+  const fresh = finding({ file: "b.ts", fingerprint: "b.ts:github-token:bbb" });
+  withBaselineFile(["a.ts:github-token:aaa"], (file) => {
+    const plan = triageFindings([accepted, fresh], parseArgs(["scan", "--verify", "--baseline", file]));
+    assert.deepStrictEqual(plan.toVerify.map((f) => f.fingerprint), ["b.ts:github-token:bbb"]);
+    assert.deepStrictEqual(plan.reported.map((f) => f.fingerprint), ["b.ts:github-token:bbb"]);
+  });
+});
+
+test("nothing is queued for verification without --verify", () => {
+  const plan = triageFindings([finding()], parseArgs(["scan"]));
+  assert.strictEqual(plan.toVerify.length, 0);
+  assert.strictEqual(plan.reported.length, 1, "the finding is still reported");
+});
+
+test("every finding is queued for verification when no baseline is given", () => {
+  const plan = triageFindings([finding(), finding()], parseArgs(["scan", "--verify"]));
+  assert.strictEqual(plan.toVerify.length, 2);
+});
+
+test("queued findings are the same objects that get reported", () => {
+  // verifyAll marks findings in place, so the two lists must share identity or
+  // the verification results never reach the report.
+  const plan = triageFindings([finding()], parseArgs(["scan", "--verify"]));
+  assert.strictEqual(plan.toVerify[0], plan.reported[0]);
 });
 
 finish();

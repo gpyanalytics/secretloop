@@ -142,10 +142,45 @@ async function verifyAll(findings: Finding[], texts: Map<string, string>): Promi
   await Promise.all(workers);
 }
 
-function applyBaseline(findings: Finding[], baselineFile?: string): Finding[] {
+export function applyBaseline(findings: Finding[], baselineFile?: string): Finding[] {
   if (!baselineFile) return findings;
   const accepted = loadBaseline(baselineFile);
   return findings.filter((f) => !f.fingerprint || !accepted.has(f.fingerprint));
+}
+
+/**
+ * Fingerprints to record when writing a baseline: everything already accepted,
+ * plus everything found this run.
+ *
+ * The union matters because `findings` has already had the baseline applied, so
+ * it holds only what is *new*. Writing just those dropped every previously
+ * accepted fingerprint, and the next scan then failed on all of them.
+ */
+export function mergeBaseline(findings: Finding[], existing: Set<string>): string[] {
+  const merged = new Set(existing);
+  for (const f of findings) {
+    if (f.fingerprint) merged.add(f.fingerprint);
+  }
+  return [...merged];
+}
+
+/**
+ * Splits a scan's findings into what gets reported and what gets sent to a
+ * provider for liveness verification.
+ *
+ * Baseline first, verify second. The other order re-sent every already-triaged
+ * credential to its provider on every run — findings the team had explicitly
+ * accepted and which are then dropped from the report anyway.
+ *
+ * Both lists hold the same objects: verifyAll marks findings in place, so
+ * copying here would strand the results.
+ */
+export function triageFindings(
+  findings: Finding[],
+  args: Args
+): { reported: Finding[]; toVerify: Finding[] } {
+  const reported = applyBaseline(findings, args.baseline);
+  return { reported, toVerify: args.verify ? reported : [] };
 }
 
 /**
@@ -166,6 +201,19 @@ export function validateArgs(args: Args): string | null {
     return (
       "--fail-on verified requires --verify. Without it no finding is ever " +
       "marked live, so the scan always exits 0."
+    );
+  }
+  // Reading and rewriting one baseline in a single run is ambiguous: it reads
+  // as "refresh", but --write-baseline accepts every current finding and exits
+  // before reporting. Naming two files makes the intent explicit.
+  if (
+    args.baseline &&
+    args.writeBaseline &&
+    path.resolve(args.baseline) === path.resolve(args.writeBaseline)
+  ) {
+    return (
+      "--baseline and --write-baseline cannot name the same file. " +
+      "Write to a new file and replace the old one once you have reviewed it."
     );
   }
   return null;
@@ -259,12 +307,13 @@ async function main(): Promise<void> {
     texts = result.texts;
   }
 
-  if (args.verify) await verifyAll(findings, texts);
-
-  findings = applyBaseline(findings, args.baseline);
+  const triaged = triageFindings(findings, args);
+  findings = triaged.reported;
+  if (triaged.toVerify.length > 0) await verifyAll(triaged.toVerify, texts);
 
   if (args.writeBaseline) {
-    const fingerprints = [...new Set(findings.map((f) => f.fingerprint).filter(Boolean))];
+    const existing = args.baseline ? loadBaseline(args.baseline) : new Set<string>();
+    const fingerprints = mergeBaseline(findings, existing);
     writeFileSync(
       args.writeBaseline,
       JSON.stringify({ version: 1, fingerprints }, null, 2) + "\n",
