@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { Finding } from "./scanner";
 
 export interface VerificationResult {
@@ -21,6 +22,25 @@ export interface VerifyContext {
   /** Full text of the file being scanned, used to find a paired credential (e.g. AWS secret key near an access key ID). */
   fullText: string;
   fetchImpl: typeof fetch;
+  /** Abort a provider call after this long. Defaults to VERIFY_TIMEOUT_MS. */
+  timeoutMs?: number;
+}
+
+/**
+ * No provider call may outlive this. A hung endpoint used to block a CI job
+ * indefinitely and leak a pending promise per keystroke in the editor.
+ */
+export const VERIFY_TIMEOUT_MS = 5000;
+
+/** Enough to be quick, low enough not to look like an attack to a rate limiter. */
+export const VERIFY_CONCURRENCY = 5;
+
+/**
+ * Adds the abort signal every provider call must carry. A timed-out call throws,
+ * which verifyFinding turns into "unknown" — never into "disproven".
+ */
+function requestInit(ctx: VerifyContext, init: RequestInit = {}): RequestInit {
+  return { ...init, signal: AbortSignal.timeout(ctx.timeoutMs ?? VERIFY_TIMEOUT_MS) };
 }
 
 const verifiers: Record<string, Verifier> = {
@@ -61,10 +81,95 @@ export async function verifyFinding(
   }
 }
 
+/** How long a verification outcome stays good before the provider is asked again. */
+const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
+
+/**
+ * Remembers verification outcomes so the same credential is not re-sent to its
+ * provider on every scan. The editor re-scans a document on open and after
+ * every 400ms of typing, so without this a single open file means a steady
+ * stream of outbound requests carrying a live secret.
+ *
+ * Keyed on a hash of the value, never the value itself: this map outlives any
+ * one scan in the extension host, and it has no business holding plaintext
+ * credentials. Outcomes expire so a rotated or revoked key is re-checked.
+ */
+export class VerificationCache {
+  private readonly entries = new Map<string, { result: VerificationResult | null; expiresAt: number }>();
+
+  constructor(
+    private readonly ttlMs: number = DEFAULT_CACHE_TTL_MS,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  async verify(finding: Finding, context: VerifyContext): Promise<VerificationResult | null> {
+    const key = this.key(finding);
+    const hit = this.entries.get(key);
+    if (hit && hit.expiresAt > this.now()) return hit.result;
+
+    const result = await verifyFinding(finding, context);
+    this.entries.set(key, { result, expiresAt: this.now() + this.ttlMs });
+    return result;
+  }
+
+  /** Cache keys, so a test can assert no plaintext secret is retained. */
+  keys(): string[] {
+    return [...this.entries.keys()];
+  }
+
+  private key(finding: Finding): string {
+    return `${finding.ruleId}:${createHash("sha256").update(finding.value).digest("hex")}`;
+  }
+}
+
+export interface VerifyFindingsOptions {
+  /** Reuse outcomes across scans. Omit for a one-shot pass. */
+  cache?: VerificationCache;
+  concurrency?: number;
+}
+
+/**
+ * Verifies a batch of findings with bounded concurrency, marking each in place.
+ *
+ * The bound matters as much as the timeout: an unbounded pass fires one request
+ * per finding simultaneously, which reads as an attack to a provider's rate
+ * limiter and, in the editor, repeats on every keystroke.
+ */
+export async function verifyFindings(
+  findings: Finding[],
+  context: VerifyContext,
+  options: VerifyFindingsOptions = {}
+): Promise<void> {
+  const verifiable = findings.filter((f) => isVerifiable(f.ruleId));
+  if (verifiable.length === 0) return;
+
+  const { cache } = options;
+  const check = cache
+    ? (f: Finding) => cache.verify(f, context)
+    : (f: Finding) => verifyFinding(f, context);
+
+  let cursor = 0;
+  const workers = Array.from(
+    { length: Math.min(options.concurrency ?? VERIFY_CONCURRENCY, verifiable.length) },
+    async () => {
+      while (cursor < verifiable.length) {
+        const finding = verifiable[cursor++];
+        const result = await check(finding);
+        if (!result) continue; // unknown; leave as format-match
+        finding.verified = result.verified;
+        finding.verifyDetail = result.detail;
+        if (result.verified) finding.confidence = "verified-live";
+      }
+    }
+  );
+  await Promise.all(workers);
+}
+
 async function verifyGitHubToken(value: string, ctx: VerifyContext): Promise<VerificationResult> {
-  const res = await ctx.fetchImpl("https://api.github.com/user", {
-    headers: { Authorization: `token ${value}`, "User-Agent": "SecretLoop-VSCode" },
-  });
+  const res = await ctx.fetchImpl(
+    "https://api.github.com/user",
+    requestInit(ctx, { headers: { Authorization: `token ${value}`, "User-Agent": "SecretLoop-VSCode" } })
+  );
   if (res.status === 200) {
     const scopes = res.headers.get("x-oauth-scopes") ?? "unknown";
     return { verified: true, detail: `Active GitHub token. Scopes: ${scopes}` };
@@ -74,10 +179,10 @@ async function verifyGitHubToken(value: string, ctx: VerifyContext): Promise<Ver
 }
 
 async function verifySlackToken(value: string, ctx: VerifyContext): Promise<VerificationResult> {
-  const res = await ctx.fetchImpl("https://slack.com/api/auth.test", {
-    method: "POST",
-    headers: { Authorization: `Bearer ${value}` },
-  });
+  const res = await ctx.fetchImpl(
+    "https://slack.com/api/auth.test",
+    requestInit(ctx, { method: "POST", headers: { Authorization: `Bearer ${value}` } })
+  );
   const body = (await res.json()) as { ok: boolean; team?: string; error?: string };
   if (body.ok) {
     return { verified: true, detail: `Active Slack token for workspace "${body.team}".` };
@@ -87,9 +192,12 @@ async function verifySlackToken(value: string, ctx: VerifyContext): Promise<Veri
 
 async function verifyStripeKey(value: string, ctx: VerifyContext): Promise<VerificationResult> {
   // GET /v1/balance is a minimal read-only call sufficient to prove the key works.
-  const res = await ctx.fetchImpl("https://api.stripe.com/v1/balance", {
-    headers: { Authorization: `Basic ${Buffer.from(`${value}:`).toString("base64")}` },
-  });
+  const res = await ctx.fetchImpl(
+    "https://api.stripe.com/v1/balance",
+    requestInit(ctx, {
+      headers: { Authorization: `Basic ${Buffer.from(`${value}:`).toString("base64")}` },
+    })
+  );
   if (res.status === 200) {
     const isLive = value.startsWith("sk_live_") || value.startsWith("rk_live_");
     return { verified: true, detail: `Active Stripe key (${isLive ? "LIVE mode" : "test mode"}).` };
@@ -101,7 +209,8 @@ async function verifyStripeKey(value: string, ctx: VerifyContext): Promise<Verif
 async function verifyGoogleApiKey(value: string, ctx: VerifyContext): Promise<VerificationResult> {
   // Discovery API accepts a key param and is safe/read-only; a bad key returns 400 with API_KEY_INVALID.
   const res = await ctx.fetchImpl(
-    `https://www.googleapis.com/discovery/v1/apis?key=${encodeURIComponent(value)}`
+    `https://www.googleapis.com/discovery/v1/apis?key=${encodeURIComponent(value)}`,
+    requestInit(ctx)
   );
   if (res.status === 200) return { verified: true, detail: "Active Google API key." };
   const body = await res.text();
@@ -159,7 +268,7 @@ async function verifyByStatus(
   provider: string,
   liveDetail?: (res: Response) => Promise<string> | string
 ): Promise<VerificationResult> {
-  const res = await ctx.fetchImpl(url, init);
+  const res = await ctx.fetchImpl(url, requestInit(ctx, init));
   if (res.status === 200) {
     const detail = liveDetail ? await liveDetail(res) : `Active ${provider} credential.`;
     return { verified: true, detail };
@@ -275,9 +384,10 @@ async function verifyNotionToken(value: string, ctx: VerifyContext): Promise<Ver
 
 async function verifyCloudflareToken(value: string, ctx: VerifyContext): Promise<VerificationResult> {
   // Cloudflare has a purpose-built endpoint for exactly this check.
-  const res = await ctx.fetchImpl("https://api.cloudflare.com/client/v4/user/tokens/verify", {
-    headers: { Authorization: `Bearer ${value}` },
-  });
+  const res = await ctx.fetchImpl(
+    "https://api.cloudflare.com/client/v4/user/tokens/verify",
+    requestInit(ctx, { headers: { Authorization: `Bearer ${value}` } })
+  );
   const body = (await res.json().catch(() => ({}))) as {
     success?: boolean;
     result?: { status?: string };

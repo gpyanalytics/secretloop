@@ -2,7 +2,7 @@ import * as vscode from "vscode";
 import { scanText, Finding, ConfidenceTier } from "./scanner";
 import { loadConfig, mergeConfig, defaultConfig, legacyConfigNotice, SecretLoopConfig } from "./config";
 import { redactInPlace, extractToEnv } from "./remediate";
-import { isVerifiable, verifyFinding } from "./verify";
+import { isVerifiable, verifyFindings, VerificationCache } from "./verify";
 import { rotateFinding } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook } from "./hooks";
 import { setting } from "./settings";
@@ -12,6 +12,12 @@ const diagnosticCollection = vscode.languages.createDiagnosticCollection("secret
 const findingsByDocument = new Map<string, Finding[]>();
 /** Workspaces already warned about a legacy config file — warn once, not per scan. */
 const legacyConfigWarned = new Set<string>();
+/**
+ * Verification outcomes, shared across every scan in this session. A document
+ * is re-scanned on open and after every 400ms of typing, so without this an
+ * open file means the same credential is sent to its provider over and over.
+ */
+const verificationCache = new VerificationCache();
 
 export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(diagnosticCollection);
@@ -106,15 +112,7 @@ async function scanDocument(document: vscode.TextDocument) {
   // immediately above, then upgrade confidence in place as results land so
   // the editor never blocks on network calls.
   const fullText = document.getText();
-  await Promise.all(
-    findings.map(async (finding) => {
-      if (!isVerifiable(finding.ruleId)) return;
-      const result = await verifyFinding(finding, { fullText, fetchImpl: fetch });
-      if (result === null) return; // unknown; leave as format-match
-      finding.verified = result.verified;
-      if (result.verified) finding.confidence = "verified-live";
-    })
-  );
+  await verifyFindings(findings, { fullText, fetchImpl: fetch }, { cache: verificationCache });
 
   // Only re-render if this document is still the latest scan for its URI
   // (guards against stale async results from rapid edits).
