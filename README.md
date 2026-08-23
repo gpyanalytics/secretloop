@@ -60,16 +60,30 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
 
 - **Detect** — 103 provider rules with a keyword prescreen (so a large rule set
   stays fast), plus an entropy pass for credentials with no recognizable format.
-- **Verify** — read-only API calls to 18 providers confirm whether a credential
-  is *currently active*. A dead test token never interrupts you.
+- **Verify, when you ask for it** — read-only API calls to 18 providers confirm
+  whether a credential is *currently active*. A dead test token never interrupts
+  you.
+
+  **This is off by default, and deliberately so.** Verifying a credential means
+  sending it to a third party, and a repository you have just cloned may hold
+  credentials belonging to someone else entirely — failed auth attempts show up
+  in *their* audit logs, not yours. The first time a scan finds a credential
+  SecretLoop could check, it offers to turn verification on and names the
+  provider it would contact. In CI, `--verify` is explicit for the same reason.
 - **Confidence-tiered findings**, not one flat severity level:
-  - 🔴 **Verified live** — confirmed active against the provider. The only tier
-    that surfaces as an error-level diagnostic, and the only one `--fail-on
-    verified` blocks CI for.
-  - 🟡 **Format match** — matches a known credential format, unverified
-    (unsupported provider, network unavailable, or verification disabled).
+  - 🟡 **Format match** — matches a known credential format, liveness not
+    checked. **This is the default tier**: with verification off, every
+    format-matched credential lands here, as a warning-level diagnostic.
+  - 🔴 **Verified live** — confirmed active against the provider. Only reachable
+    once verification is enabled (or `--verify` is passed). The only tier that
+    surfaces as an error-level diagnostic, and the only one `--fail-on verified`
+    blocks CI for — which is why that flag now requires `--verify`.
   - ⚪ **Entropy heuristic** — high-entropy string with no known format. Shown
     as a hint, never as an error.
+
+  A finding stays at *format match* whenever liveness could not be established:
+  verification disabled, provider unsupported, network unavailable, or the call
+  timed out. Unverified never means safe.
 - **Scan history** — a secret deleted in a later commit is still in the object
   store and still fetchable by anyone who has ever cloned the repo. A clean
   working tree says nothing about whether the repo has leaked.
@@ -283,7 +297,7 @@ hover for the quick-fix lightbulb to redact or extract it.
 | `secretloop.envFilePath` | `.env` | Where extracted secrets are written |
 | `secretloop.excludePaths` | `[]` | Extra globs never scanned (added to built-in excludes) |
 | `secretloop.entropyPassEnabled` | `true` | Report generic high-entropy strings with no known format |
-| `secretloop.enableLiveVerification` | `true` | Make read-only calls to providers to confirm a credential is active |
+| `secretloop.enableLiveVerification` | `false` | Make read-only calls to providers to confirm a credential is active. SecretLoop offers to turn this on the first time it finds a credential it could check |
 | `secretloop.awsAdminAccessKeyId` / `awsAdminSecretAccessKey` | `""` | Separate admin AWS identity used only to deactivate leaked keys |
 
 Every setting also exists under the deprecated `secretguard.*` namespace. If you
@@ -296,9 +310,15 @@ when convenient; nothing breaks if you don't.
 
 - Verification calls send the detected credential value to the provider's own
   API (e.g. `api.github.com`, `slack.com`) to check validity — that's the only
-  way to confirm liveness. No detected value is ever sent anywhere else. Set
-  `secretloop.enableLiveVerification` to `false` if you don't want SecretLoop
-  making any outbound calls with detected secrets.
+  way to confirm liveness. No detected value is ever sent anywhere else. This is
+  **off by default**; SecretLoop asks before making its first such call, naming
+  the provider, and takes "Never" as permanent. Set
+  `secretloop.enableLiveVerification` to `true` to skip the prompt, or leave it
+  `false` to keep SecretLoop entirely offline.
+- Verification results are cached in memory for five minutes, keyed by a SHA-256
+  hash of the credential rather than the value itself, so re-scanning a file as
+  you type does not re-send the secret. Every call is abandoned after five
+  seconds; a timed-out check counts as unknown, never as "not a secret".
 - The AWS admin credentials you configure for rotation are stored in VS Code
   settings. Use a User (not Workspace) settings scope so they're never
   accidentally committed, and scope that IAM identity to `iam:UpdateAccessKey`

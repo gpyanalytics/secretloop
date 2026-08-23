@@ -1,4 +1,11 @@
-import { verifyFinding, isVerifiable, verifyFindings, VerificationCache } from "../src/verify";
+import {
+  verifyFinding,
+  isVerifiable,
+  verifyFindings,
+  verificationProvider,
+  VerificationCache,
+  VERIFIABLE_RULE_IDS,
+} from "../src/verify";
 import { Finding } from "../src/scanner";
 import * as assert from "node:assert";
 
@@ -291,6 +298,26 @@ async function main() {
     await verifyFindings([makeFinding("github-token", "ghp_same")], context, { cache });
     await verifyFindings([makeFinding("github-token", "ghp_same")], context, { cache });
     assert.strictEqual(calls, 1, "re-scanning the same document must not re-send the secret");
+  });
+
+  console.log("\nverify.ts — provider names");
+
+  await test("every verifiable rule can name its provider", async () => {
+    // The first-run prompt asks permission to contact a named third party.
+    // A rule with no name would degrade that to "the provider", which is
+    // exactly the vagueness the prompt exists to avoid.
+    const unnamed = VERIFIABLE_RULE_IDS.filter((id) => !verificationProvider(id));
+    assert.deepStrictEqual(unnamed, [], `rules missing a provider name: ${unnamed.join(", ")}`);
+  });
+
+  await test("a rule with no verifier has no provider name", async () => {
+    assert.strictEqual(verificationProvider("private-key-block"), undefined);
+  });
+
+  await test("provider names are the ones a user would recognise", async () => {
+    assert.strictEqual(verificationProvider("github-token"), "GitHub");
+    assert.strictEqual(verificationProvider("aws-access-key"), "AWS");
+    assert.strictEqual(verificationProvider("huggingface-token"), "Hugging Face");
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

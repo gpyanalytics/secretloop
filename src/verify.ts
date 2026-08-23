@@ -68,6 +68,39 @@ export function isVerifiable(ruleId: string): boolean {
   return ruleId in verifiers;
 }
 
+/** Every rule whose credential can be checked against a live provider. */
+export const VERIFIABLE_RULE_IDS: string[] = Object.keys(verifiers);
+
+/**
+ * The third party a rule's credential is checked against, by the name a user
+ * would recognise. Asking permission to contact "the provider" is not asking
+ * permission at all, so the consent prompt names the company.
+ */
+const providers: Record<string, string> = {
+  "github-token": "GitHub",
+  "github-oauth-token": "GitHub",
+  "github-app-token": "GitHub",
+  "github-fine-grained-pat": "GitHub",
+  "gitlab-pat": "GitLab",
+  "slack-token": "Slack",
+  "stripe-secret-key": "Stripe",
+  "google-api-key": "Google",
+  "aws-access-key": "AWS",
+  "openai-api-key": "OpenAI",
+  "anthropic-api-key": "Anthropic",
+  "huggingface-token": "Hugging Face",
+  "npm-token": "npm",
+  "digitalocean-token": "DigitalOcean",
+  "sendgrid-api-key": "SendGrid",
+  "discord-bot-token": "Discord",
+  "notion-token": "Notion",
+  "cloudflare-api-token": "Cloudflare",
+};
+
+export function verificationProvider(ruleId: string): string | undefined {
+  return providers[ruleId];
+}
+
 export async function verifyFinding(
   finding: Finding,
   context: VerifyContext

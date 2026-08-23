@@ -2,10 +2,10 @@ import * as vscode from "vscode";
 import { scanText, Finding, ConfidenceTier } from "./scanner";
 import { loadConfig, mergeConfig, defaultConfig, legacyConfigNotice, SecretLoopConfig } from "./config";
 import { redactInPlace, extractToEnv } from "./remediate";
-import { isVerifiable, verifyFindings, VerificationCache } from "./verify";
+import { isVerifiable, verifyFindings, verificationProvider, VerificationCache } from "./verify";
 import { rotateFinding } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook } from "./hooks";
-import { setting } from "./settings";
+import { setting, SETTINGS_NAMESPACE } from "./settings";
 
 
 const diagnosticCollection = vscode.languages.createDiagnosticCollection("secretloop");
@@ -19,7 +19,19 @@ const legacyConfigWarned = new Set<string>();
  */
 const verificationCache = new VerificationCache();
 
+/**
+ * Set at activation so a scan can reach globalState for the "Never" answer.
+ */
+let extensionContext: vscode.ExtensionContext | undefined;
+/** Persisted across sessions: the user asked never to be offered verification. */
+const VERIFICATION_PROMPT_DECLINED_KEY = "secretloop.verificationPromptDeclinedForever";
+/** "Not now" — forgotten when the window closes. */
+let verificationDeclinedThisSession = false;
+/** Several open documents scan at once; only one prompt should reach the user. */
+let verificationPromptShown = false;
+
 export function activate(context: vscode.ExtensionContext) {
+  extensionContext = context;
   context.subscriptions.push(diagnosticCollection);
 
   context.subscriptions.push(
@@ -98,7 +110,7 @@ async function scanDocument(document: vscode.TextDocument) {
   if (document.uri.scheme !== "file") return;
 
   const threshold = setting<number>("entropyThreshold", 4.3);
-  const verificationEnabled = setting<boolean>("enableLiveVerification", true);
+  const verificationEnabled = setting<boolean>("enableLiveVerification", false);
 
   const config = workspaceConfig(document, threshold);
   const relPath = vscode.workspace.asRelativePath(document.uri, false);
@@ -106,7 +118,10 @@ async function scanDocument(document: vscode.TextDocument) {
   findingsByDocument.set(document.uri.toString(), findings);
   renderDiagnostics(document, findings);
 
-  if (!verificationEnabled) return;
+  if (!verificationEnabled) {
+    await offerVerification(document, findings);
+    return;
+  }
 
   // Verification is async and network-bound; render initial diagnostics
   // immediately above, then upgrade confidence in place as results land so
@@ -119,6 +134,53 @@ async function scanDocument(document: vscode.TextDocument) {
   if (findingsByDocument.get(document.uri.toString()) === findings) {
     renderDiagnostics(document, findings);
   }
+}
+
+/**
+ * Offers live verification the first time a scan turns up a credential that
+ * could actually be checked.
+ *
+ * Verification is off by default because it sends the detected credential to a
+ * third party, and a freshly cloned repository may hold credentials belonging
+ * to someone else entirely. But a setting nobody discovers stays off forever
+ * and the feature ships dark, so the offer is made at the one moment its value
+ * is concrete: a real credential, a named provider, a decision the user can
+ * actually weigh.
+ */
+async function offerVerification(document: vscode.TextDocument, findings: Finding[]): Promise<void> {
+  if (verificationDeclinedThisSession || verificationPromptShown) return;
+  if (extensionContext?.globalState.get<boolean>(VERIFICATION_PROMPT_DECLINED_KEY)) return;
+
+  const candidate = findings.find((f) => isVerifiable(f.ruleId));
+  if (!candidate) return;
+
+  const provider = verificationProvider(candidate.ruleId);
+  if (!provider) return; // never ask permission to contact an unnamed party
+
+  verificationPromptShown = true;
+  const choice = await vscode.window.showInformationMessage(
+    `SecretLoop can confirm whether this ${candidate.description} is still active ` +
+      `by making a read-only call to ${provider}. Enable live verification?`,
+    "Enable",
+    "Not now",
+    "Never"
+  );
+
+  if (choice === "Enable") {
+    await vscode.workspace
+      .getConfiguration(SETTINGS_NAMESPACE)
+      .update("enableLiveVerification", true, vscode.ConfigurationTarget.Global);
+    await scanDocument(document); // re-run now that verification is allowed
+    return;
+  }
+
+  if (choice === "Never") {
+    await extensionContext?.globalState.update(VERIFICATION_PROMPT_DECLINED_KEY, true);
+    return;
+  }
+
+  // "Not now", or the notification was dismissed.
+  verificationDeclinedThisSession = true;
 }
 
 function renderDiagnostics(document: vscode.TextDocument, findings: Finding[]) {

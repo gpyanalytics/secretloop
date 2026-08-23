@@ -67,8 +67,8 @@
         },
         "secretloop.enableLiveVerification": {
           "type": "boolean",
-          "default": true,
-          "description": "Make safe, read-only calls to providers (GitHub, Slack, Stripe, Google, AWS) to confirm whether a detected credential is actually active. Disable if you don't want SecretLoop making outbound network calls with detected values."
+          "default": false,
+          "description": "Make safe, read-only calls to providers (GitHub, Slack, Stripe, Google, AWS) to confirm whether a detected credential is actually active. Off by default: verification sends the detected credential to a third party, which is not something to do to a repository you have only just opened. SecretLoop offers to turn this on the first time it finds a credential it could check."
         },
         "secretloop.awsAdminAccessKeyId": {
           "type": "string",
@@ -119,7 +119,7 @@
         },
         "secretguard.enableLiveVerification": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "Deprecated alias for secretloop.enableLiveVerification.",
           "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.enableLiveVerification` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
         },
