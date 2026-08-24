@@ -70,6 +70,19 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
   in *their* audit logs, not yours. The first time a scan finds a credential
   SecretLoop could check, it offers to turn verification on and names the
   provider it would contact. In CI, `--verify` is explicit for the same reason.
+
+  Every step of that is recorded in **View > Output > SecretLoop** — which
+  branch was taken and on whose authority, whether an offer was made and how it
+  was answered, and how many credentials actually left the machine and to whom:
+
+  ```
+  live verification is on (user setting secretloop.enableLiveVerification);
+    checking 1 of 2 finding(s) in app.js.
+  sent 1 credential(s) to GitHub from app.js.
+  ```
+
+  Cache hits are not counted as sends, so that number never overstates what was
+  transmitted.
 - **Confidence-tiered findings**, not one flat severity level:
   - 🟡 **Format match** — matches a known credential format, liveness not
     checked. **This is the default tier**: with verification off, every
@@ -362,16 +375,25 @@ when convenient; nothing breaks if you don't.
   copy. It does nothing about Settings Sync history, a committed
   `.vscode/settings.json`, or a dotfiles repository.
 
-  > **Unverified against a running extension host.** That migration reads the
-  > old values through `getConfiguration().inspect()` after their manifest
-  > entries were removed. The API documents no registration requirement, and VS
-  > Code retains unregistered keys in `settings.json`, but this has not been
-  > confirmed in a real extension host. Before publishing, put a value under
-  > `secretloop.awsAdminAccessKeyId` in `settings.json`, launch the extension,
-  > and check the extension host log: it reports either what it migrated or
-  > every key it inspected and found nothing under. If `inspect()` does return
-  > undefined for an unregistered key, migration silently no-ops and the
-  > plaintext value stays where it is.
+  > **Still unconfirmed against a running host — but now self-diagnosing.** That
+  > migration reads the old values through `getConfiguration().inspect()` after
+  > their manifest entries were removed. The API documents no registration
+  > requirement, and VS Code retains unregistered keys in `settings.json`, but
+  > that has not been observed here.
+  >
+  > A run reaching the "no AWS admin credential found" line does *not* settle
+  > it: that line lists the keys SecretLoop tried, which reads identically
+  > whether `inspect()` saw unset scopes or returned nothing at all. What
+  > settles it is the marker beside each key in **View > Output > SecretLoop**:
+  >
+  > ```
+  > Inspected: secretloop.awsAdminAccessKeyId, ...              <- inspectable, just unset
+  > Inspected: secretloop.awsAdminAccessKeyId (NO DESCRIPTOR)   <- not inspectable
+  > ```
+  >
+  > `(NO DESCRIPTOR)` on every key would mean unregistered keys cannot be read
+  > back, and this migration is dead code for exactly the users it exists for.
+  > Worth checking before publishing.
 
 ## Extending detection rules
 

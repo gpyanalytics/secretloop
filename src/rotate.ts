@@ -24,12 +24,23 @@ const LEGACY_KEYS: Array<[legacy: string, canonical: string]> = [
 export interface LegacyCredentialStore {
   read(key: string): { value: string; scope: string } | undefined;
   clear(key: string): Promise<void>;
+  /**
+   * Whether the configuration system returned a descriptor for the key at all,
+   * as opposed to one whose scopes are simply unset.
+   *
+   * These keys were removed from the manifest, so if inspect() returns
+   * undefined for an unregistered key then migration cannot see a value even
+   * when one exists — and "found nothing" is indistinguishable from "could not
+   * look". Optional: a store that cannot answer records nothing rather than
+   * guessing, since absence of the capability is not evidence either way.
+   */
+  describes?(key: string): boolean;
 }
 
 export type MigrationOutcome =
   | { status: "migrated"; moved: Array<{ key: string; scope: string }> }
   | { status: "already-stored" }
-  | { status: "absent"; inspected: string[] };
+  | { status: "absent"; inspected: string[]; descriptors?: Record<string, boolean> };
 
 /**
  * Moves any admin credential still in settings into SecretStorage and clears
@@ -42,14 +53,18 @@ export type MigrationOutcome =
  * rotate that IAM key. Leaving it readable as a fallback was the alternative,
  * and it would mean the insecure location keeps working forever.
  *
- * NEEDS MANUAL VERIFICATION IN A REAL EXTENSION HOST BEFORE PUBLISHING.
+ * STILL UNCONFIRMED AGAINST A RUNNING HOST, THOUGH NOW SELF-DIAGNOSING.
  * This reads the old values through getConfiguration().inspect() after their
  * manifest entries were removed. The API documents no registration requirement
  * — only that the name denote a leaf — and VS Code does retain unregistered
- * keys in settings.json. That has not been confirmed against a running host. If
- * inspect() returns undefined for an unregistered key, migration silently finds
- * nothing, which is why the "absent" outcome names every key it looked at:
- * "found nothing" and "there was nothing" must not look identical in the log.
+ * keys in settings.json, but that has not been observed here.
+ *
+ * A host pass reaching the "absent" branch does NOT settle it: `inspected` lists
+ * the keys that were tried, unconditionally, so it reads identically whether
+ * inspect() saw unset scopes or returned nothing at all. `descriptors` is the
+ * discriminator — false for every key means unregistered keys are not
+ * inspectable, and this migration is dead code for exactly the users it exists
+ * for.
  */
 export async function migrateAwsAdminCredentials(
   secrets: vscode.SecretStorage,
@@ -62,9 +77,11 @@ export async function migrateAwsAdminCredentials(
 
   const moved: Array<{ key: string; scope: string }> = [];
   const inspected: string[] = [];
+  const descriptors: Record<string, boolean> = {};
 
   for (const [legacyKey, canonicalKey] of LEGACY_KEYS) {
     inspected.push(legacyKey);
+    if (legacy.describes) descriptors[legacyKey] = legacy.describes(legacyKey);
     const found = legacy.read(legacyKey);
     if (!found?.value) continue;
     // Even half a pair is worth moving: rotation will not work without both,
@@ -74,7 +91,10 @@ export async function migrateAwsAdminCredentials(
     moved.push({ key: legacyKey, scope: found.scope });
   }
 
-  return moved.length > 0 ? { status: "migrated", moved } : { status: "absent", inspected };
+  if (moved.length > 0) return { status: "migrated", moved };
+  return legacy.describes
+    ? { status: "absent", inspected, descriptors }
+    : { status: "absent", inspected };
 }
 
 export interface RotationOutcome {

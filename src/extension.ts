@@ -313,6 +313,12 @@ async function offerVerification(document: vscode.TextDocument, findings: Findin
     "Never"
   );
 
+  // Above the branching on purpose. Enable and Never both returned before a log
+  // at the end, so the two most consequential answers left no trace — Never
+  // worst of all, since it writes a permanent flag nothing can clear. One log
+  // site cannot drift out of step with the branches.
+  log(`SecretLoop: verification offer answered with ${choice ?? "(dismissed)"}.`);
+
   if (choice === "Enable") {
     await vscode.workspace
       .getConfiguration(SETTINGS_NAMESPACE)
@@ -327,7 +333,6 @@ async function offerVerification(document: vscode.TextDocument, findings: Findin
   }
 
   // "Not now", or the notification was dismissed.
-  log(`SecretLoop: verification offer answered with ${choice ?? "(dismissed)"}.`);
   verificationDeclinedThisSession = true;
 }
 
@@ -561,6 +566,10 @@ function legacyCredentialStore(): LegacyCredentialStore {
           : "user";
       return { value: found, scope };
     },
+    describes(key) {
+      const { namespace, name } = split(key);
+      return vscode.workspace.getConfiguration(namespace).inspect<string>(name) !== undefined;
+    },
     async clear(key) {
       const { namespace, name } = split(key);
       const config = vscode.workspace.getConfiguration(namespace);
@@ -599,9 +608,12 @@ async function runAwsCredentialMigration(context: vscode.ExtensionContext): Prom
   }
 
   if (outcome.status === "absent") {
-    log(
-      `SecretLoop: no AWS admin credential found in settings. Inspected: ${outcome.inspected.join(", ")}.`
-    );
+    const detail = outcome.descriptors
+      ? outcome.inspected
+          .map((k) => `${k}${outcome.descriptors![k] ? "" : " (NO DESCRIPTOR)"}`)
+          .join(", ")
+      : outcome.inspected.join(", ");
+    log(`SecretLoop: no AWS admin credential found in settings. Inspected: ${detail}.`);
     return;
   }
 

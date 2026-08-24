@@ -47,10 +47,14 @@ function fakeSecrets(initial: Record<string, string> = {}) {
 }
 
 /** Settings that already hold a credential, and record what was inspected. */
-function fakeLegacy(present: Record<string, { value: string; scope: string }>) {
+function fakeLegacy(
+  present: Record<string, { value: string; scope: string }>,
+  describes?: boolean
+) {
   const inspected: string[] = [];
   const cleared: string[] = [];
   const store: LegacyCredentialStore = {
+    ...(describes === undefined ? {} : { describes: () => describes }),
     read(key: string) {
       inspected.push(key);
       return present[key];
@@ -176,6 +180,57 @@ test("only one of the pair present still gets the plaintext out", async () => {
   assert.strictEqual(outcome.status, "migrated");
   assert.strictEqual(legacy.cleared.length, 1);
   assert.ok(outcome.status === "migrated" && outcome.moved.length === 1);
+});
+
+suite("\nrotate.ts — can VS Code even see an unregistered key?");
+
+test("absent records whether a configuration descriptor existed at all", () => {
+  // The open question before publishing: the AWS keys were removed from the
+  // manifest, so if inspect() returns undefined for an unregistered key the
+  // migration is dead code for exactly the users it exists for. "Found nothing"
+  // and "could not look" produce the same absent outcome otherwise.
+  return (async () => {
+    const withDescriptors = await migrateAwsAdminCredentials(
+      fakeSecrets() as any,
+      fakeLegacy({}, true).store
+    );
+    assert.strictEqual(withDescriptors.status, "absent");
+    assert.ok(
+      withDescriptors.status === "absent" && withDescriptors.descriptors,
+      "the discriminator must be recorded"
+    );
+    assert.strictEqual(
+      withDescriptors.status === "absent" &&
+        withDescriptors.descriptors![AWS_ADMIN_ACCESS_KEY_ID],
+      true
+    );
+  })();
+});
+
+test("a store that cannot answer records no descriptors rather than guessing", () => {
+  return (async () => {
+    const outcome = await migrateAwsAdminCredentials(fakeSecrets() as any, fakeLegacy({}).store);
+    assert.strictEqual(outcome.status, "absent");
+    assert.strictEqual(
+      outcome.status === "absent" && outcome.descriptors,
+      undefined,
+      "absence of the capability is not evidence either way"
+    );
+  })();
+});
+
+test("an unreadable key is distinguishable from an unset one", () => {
+  return (async () => {
+    const outcome = await migrateAwsAdminCredentials(
+      fakeSecrets() as any,
+      fakeLegacy({}, false).store
+    );
+    assert.ok(outcome.status === "absent" && outcome.descriptors);
+    assert.strictEqual(
+      outcome.status === "absent" && outcome.descriptors!["secretguard.awsAdminAccessKeyId"],
+      false
+    );
+  })();
 });
 
 finish();
