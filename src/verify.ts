@@ -170,16 +170,22 @@ export interface VerifyFindingsOptions {
  */
 export async function verifyFindings(
   findings: Finding[],
-  context: VerifyContext,
+  context: VerifyContext | ((finding: Finding) => VerifyContext),
   options: VerifyFindingsOptions = {}
 ): Promise<void> {
   const verifiable = findings.filter((f) => isVerifiable(f.ruleId));
   if (verifiable.length === 0) return;
 
+  // A whole-workspace pass covers many files at once, and the AWS verifier reads
+  // ctx.fullText to find the secret key paired with an access key ID — so the
+  // context has to be resolvable per finding, not fixed for the batch. Editors
+  // scanning one document pass a plain context instead.
+  const contextFor = typeof context === "function" ? context : () => context;
+
   const { cache } = options;
   const check = cache
-    ? (f: Finding) => cache.verify(f, context)
-    : (f: Finding) => verifyFinding(f, context);
+    ? (f: Finding) => cache.verify(f, contextFor(f))
+    : (f: Finding) => verifyFinding(f, contextFor(f));
 
   let cursor = 0;
   const workers = Array.from(

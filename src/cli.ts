@@ -6,7 +6,7 @@ import { loadConfig, loadBaseline, legacyConfigNotice, SecretLoopConfig } from "
 import { listFiles, readTextFile, getStagedFiles, findRepoRoot } from "./walk";
 import { scanHistory, isGitRepo } from "./history";
 import { render, OutputFormat, sortFindings } from "./report";
-import { isVerifiable, verifyFinding } from "./verify";
+import { verifyFindings } from "./verify";
 
 /**
  * One binary that covers the three places secrets get caught: the working tree
@@ -120,28 +120,6 @@ EXAMPLES
 The secretguard command still works as a deprecated alias for secretloop.
 `;
 
-async function verifyAll(findings: Finding[], texts: Map<string, string>): Promise<void> {
-  const verifiable = findings.filter((f) => isVerifiable(f.ruleId));
-  // Bounded concurrency: enough to be fast, low enough not to look like an
-  // attack to a provider's rate limiter.
-  const CONCURRENCY = 5;
-  let cursor = 0;
-  const workers = Array.from({ length: Math.min(CONCURRENCY, verifiable.length) }, async () => {
-    while (cursor < verifiable.length) {
-      const f = verifiable[cursor++];
-      const result = await verifyFinding(f, {
-        fullText: texts.get(f.file ?? "") ?? "",
-        fetchImpl: fetch,
-      });
-      if (!result) continue;
-      f.verified = result.verified;
-      f.verifyDetail = result.detail;
-      if (result.verified) f.confidence = "verified-live";
-    }
-  });
-  await Promise.all(workers);
-}
-
 export function applyBaseline(findings: Finding[], baselineFile?: string): Finding[] {
   if (!baselineFile) return findings;
   const accepted = loadBaseline(baselineFile);
@@ -172,7 +150,7 @@ export function mergeBaseline(findings: Finding[], existing: Set<string>): strin
  * credential to its provider on every run — findings the team had explicitly
  * accepted and which are then dropped from the report anyway.
  *
- * Both lists hold the same objects: verifyAll marks findings in place, so
+ * Both lists hold the same objects: verifyFindings marks findings in place, so
  * copying here would strand the results.
  */
 export function triageFindings(
@@ -319,7 +297,15 @@ async function main(): Promise<void> {
 
   const triaged = triageFindings(findings, args);
   findings = triaged.reported;
-  if (triaged.toVerify.length > 0) await verifyAll(triaged.toVerify, texts);
+  if (triaged.toVerify.length > 0) {
+    // Context is resolved per finding: each one needs the text of the file it
+    // came from, so the AWS verifier pairs an access key ID with the secret key
+    // beside it rather than one in some other file.
+    await verifyFindings(triaged.toVerify, (f) => ({
+      fullText: texts.get(f.file ?? "") ?? "",
+      fetchImpl: fetch,
+    }));
+  }
 
   if (args.writeBaseline) {
     const existing = args.baseline ? loadBaseline(args.baseline) : new Set<string>();

@@ -307,6 +307,34 @@ async function main() {
     assert.strictEqual(calls, 1, "re-scanning the same document must not re-send the secret");
   });
 
+  console.log("\nverify.ts — per-finding context");
+
+  await test("verifyFindings resolves a fresh context for each finding", async () => {
+    // The CLI scans many files in one pass, and the AWS verifier reads
+    // ctx.fullText to find the secret key paired with an access key ID. One
+    // shared blob would pair a key in a.ts with a secret in b.ts.
+    const asked: string[] = [];
+    const findings = [
+      { ...makeFinding("github-token", "ghp_a"), file: "a.ts" },
+      { ...makeFinding("github-token", "ghp_b"), file: "b.ts" },
+    ];
+    await verifyFindings(
+      findings,
+      (finding) => {
+        asked.push(finding.file ?? "?");
+        return { fullText: `contents of ${finding.file}`, fetchImpl: mockFetch({ status: 200 }) };
+      },
+      { concurrency: 1 }
+    );
+    assert.deepStrictEqual(asked, ["a.ts", "b.ts"]);
+  });
+
+  await test("verifyFindings still accepts a single shared context", async () => {
+    const findings = [makeFinding("github-token", "ghp_x")];
+    await verifyFindings(findings, { fullText: "shared", fetchImpl: mockFetch({ status: 200 }) });
+    assert.strictEqual(findings[0].verified, true);
+  });
+
   console.log("\nverify.ts — provider names");
 
   await test("every verifiable rule can name its provider", async () => {
