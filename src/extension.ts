@@ -54,8 +54,23 @@ let verificationPromptShown = false;
  */
 let startupNoticeShown = false;
 
+/**
+ * Diagnostics a user can actually read.
+ *
+ * console.log goes to the Debug Console, which only exists while debugging — a
+ * published install has no way to see what the migration decided or why a
+ * prompt stayed silent. An OutputChannel is visible from View > Output.
+ */
+let output: vscode.OutputChannel | undefined;
+
+function log(message: string): void {
+  output?.appendLine(message);
+}
+
 export function activate(context: vscode.ExtensionContext) {
   extensionContext = context;
+  output = vscode.window.createOutputChannel("SecretLoop");
+  context.subscriptions.push(output);
   context.subscriptions.push(diagnosticCollection);
 
   context.subscriptions.push(
@@ -212,17 +227,65 @@ async function scanDocument(document: vscode.TextDocument) {
  * is concrete: a real credential, a named provider, a decision the user can
  * actually weigh.
  */
-async function offerVerification(document: vscode.TextDocument, findings: Finding[]): Promise<void> {
-  if (startupNoticeShown) return; // a migration notice already spoke this session
-  if (verificationDeclinedThisSession || verificationPromptShown) return;
-  if (extensionContext?.globalState.get<boolean>(VERIFICATION_PROMPT_DECLINED_KEY)) return;
+export interface PromptState {
+  startupNoticeShown: boolean;
+  declinedThisSession: boolean;
+  promptShown: boolean;
+  declinedPermanently: boolean;
+}
+
+export type PromptSuppression =
+  | "startup-notice-already-shown"
+  | "declined-this-session"
+  | "already-prompted-this-session"
+  | "declined-permanently"
+  | "no-verifiable-finding"
+  | "no-provider-name";
+
+export type PromptGate =
+  | { show: true; ruleId: string; description: string; provider: string }
+  | { show: false; reason: PromptSuppression };
+
+/**
+ * Whether to offer live verification, and when not, exactly why.
+ *
+ * Pure, and every refusal is named rather than being an early return, because
+ * a prompt that silently never appears is otherwise undiagnosable from outside
+ * — which is precisely how it was reported.
+ */
+export function decideVerificationPrompt(findings: Finding[], state: PromptState): PromptGate {
+  if (state.startupNoticeShown) return { show: false, reason: "startup-notice-already-shown" };
+  if (state.declinedThisSession) return { show: false, reason: "declined-this-session" };
+  if (state.promptShown) return { show: false, reason: "already-prompted-this-session" };
+  if (state.declinedPermanently) return { show: false, reason: "declined-permanently" };
 
   const candidate = findings.find((f) => isVerifiable(f.ruleId));
-  if (!candidate) return;
+  if (!candidate) return { show: false, reason: "no-verifiable-finding" };
 
   const provider = verificationProvider(candidate.ruleId);
-  if (!provider) return; // never ask permission to contact an unnamed party
+  // Never ask permission to contact an unnamed party.
+  if (!provider) return { show: false, reason: "no-provider-name" };
 
+  return { show: true, ruleId: candidate.ruleId, description: candidate.description, provider };
+}
+
+async function offerVerification(document: vscode.TextDocument, findings: Finding[]): Promise<void> {
+  const gate = decideVerificationPrompt(findings, {
+    startupNoticeShown,
+    declinedThisSession: verificationDeclinedThisSession,
+    promptShown: verificationPromptShown,
+    declinedPermanently:
+      extensionContext?.globalState.get<boolean>(VERIFICATION_PROMPT_DECLINED_KEY) === true,
+  });
+
+  if (!gate.show) {
+    log(`SecretLoop: verification prompt not offered (${gate.reason}).`);
+    return;
+  }
+  const candidate = { ruleId: gate.ruleId, description: gate.description };
+  const provider = gate.provider;
+
+  log(`SecretLoop: offering verification for ${candidate.ruleId} via ${provider}.`);
   verificationPromptShown = true;
   const choice = await vscode.window.showInformationMessage(
     `SecretLoop can confirm whether this ${candidate.description} is still active ` +
@@ -246,6 +309,7 @@ async function offerVerification(document: vscode.TextDocument, findings: Findin
   }
 
   // "Not now", or the notification was dismissed.
+  log(`SecretLoop: verification offer answered with ${choice ?? "(dismissed)"}.`);
   verificationDeclinedThisSession = true;
 }
 
@@ -507,30 +571,43 @@ async function runAwsCredentialMigration(context: vscode.ExtensionContext): Prom
   try {
     outcome = await migrateAwsAdminCredentials(context.secrets, legacyCredentialStore());
   } catch (err) {
-    console.log(`SecretLoop: AWS admin credential migration failed: ${(err as Error).message}`);
+    log(`SecretLoop: AWS admin credential migration failed: ${(err as Error).message}`);
     return;
   }
 
   if (outcome.status === "already-stored") {
-    console.log("SecretLoop: AWS admin credentials already in the keychain; no migration needed.");
+    log("SecretLoop: AWS admin credentials already in the keychain; no migration needed.");
     return;
   }
 
   if (outcome.status === "absent") {
-    console.log(
+    log(
       `SecretLoop: no AWS admin credential found in settings. Inspected: ${outcome.inspected.join(", ")}.`
     );
     return;
   }
 
   const moved = outcome.moved.map((m) => `${m.key} (${m.scope})`).join(", ");
-  console.log(`SecretLoop: migrated AWS admin credentials out of settings: ${moved}.`);
-  startupNoticeShown = true;
+  log(`SecretLoop: migrated AWS admin credentials out of settings: ${moved}.`);
+  startupNoticeShown = claimsStartupNotice(outcome);
   vscode.window.showWarningMessage(
     `SecretLoop moved your AWS admin credentials from settings into the OS keychain and cleared the setting (${moved}). ` +
       `Treat the old value as exposed and rotate that IAM key: a credential that has been in settings.json may already be in ` +
       `Settings Sync, a committed .vscode/settings.json, or a dotfiles repository, and clearing it removes only today's copy.`
   );
+}
+
+/**
+ * Whether a migration outcome takes the session's one startup-notice slot.
+ *
+ * Only a completed migration does: it raises a warning telling the user to
+ * rotate an exposed credential, which must not be stacked under anything else.
+ * "absent" and "already-stored" say nothing to the user, so they must not
+ * suppress the verification offer — that would silence it for every user who
+ * never had a credential in settings, which is nearly everyone.
+ */
+export function claimsStartupNotice(outcome: MigrationOutcome): boolean {
+  return outcome.status === "migrated";
 }
 
 /** Collects the admin credentials without them ever touching a settings file. */

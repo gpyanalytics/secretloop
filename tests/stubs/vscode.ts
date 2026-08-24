@@ -26,6 +26,7 @@ function record(api: string, ...args: unknown[]): void {
 
 export function reset(): void {
   calls.length = 0;
+  outputLines.length = 0;
 }
 
 /** True when the named API was called at least once. */
@@ -79,6 +80,22 @@ export const window = {
     record("window.showWarningMessage", message, ...items);
     return undefined;
   },
+  createOutputChannel: (name: string) => {
+    record("window.createOutputChannel", name);
+    return {
+      name,
+      appendLine: (line: string) => {
+        outputLines.push(line);
+        record("output.appendLine", line);
+      },
+      append: (value: string) => record("output.append", value),
+      clear: () => record("output.clear"),
+      show: (..._a: unknown[]) => record("output.show"),
+      hide: () => record("output.hide"),
+      replace: (value: string) => record("output.replace", value),
+      dispose: () => record("output.dispose"),
+    };
+  },
 };
 
 /** Only the `file` factory is used, and only its fsPath is read back. */
@@ -86,6 +103,23 @@ export const Uri = {
   file: (fsPath: string) => ({ fsPath, scheme: "file", toString: () => `file://${fsPath}` }),
   parse: (value: string) => ({ fsPath: value, scheme: value.split(":")[0], toString: () => value }),
 };
+
+/** Only what extension.ts touches at module load and when rendering. */
+export const languages = {
+  createDiagnosticCollection: (name: string) => {
+    record("languages.createDiagnosticCollection", name);
+    return {
+      name,
+      set: (..._a: unknown[]) => record("diagnostics.set"),
+      delete: (..._a: unknown[]) => record("diagnostics.delete"),
+      clear: () => record("diagnostics.clear"),
+      dispose: () => record("diagnostics.dispose"),
+    };
+  },
+};
+
+/** The lines an OutputChannel was given, so a test can read what was logged. */
+export const outputLines: string[] = [];
 
 export class Range {
   constructor(
