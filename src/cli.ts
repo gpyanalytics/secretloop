@@ -5,7 +5,6 @@ import { Finding, UnknownReason, scanText } from "./scanner";
 import {
   loadConfig,
   loadBaseline,
-  legacyConfigNotice,
   BASELINE_VERSION,
   SecretLoopConfig,
 } from "./config";
@@ -124,7 +123,6 @@ EXAMPLES
   secretloop history --max-commits 500 --verify
   secretloop scan --baseline .secretloop-baseline.json --verify --fail-on verified
 
-The secretguard command still works as a deprecated alias for secretloop.
 `;
 
 export function applyBaseline(findings: Finding[], baselineFile?: string): Finding[] {
@@ -278,22 +276,6 @@ function scanFileList(
   };
 }
 
-/**
- * The binary is installed under both `secretloop` and the pre-rebrand
- * `secretguard`. Both run this same entry point with identical behavior; the
- * old name only adds a notice, so existing hooks, CI jobs, and scripts keep
- * working untouched. The notice goes to stderr so it can never corrupt piped
- * JSON or SARIF on stdout.
- */
-function warnIfLegacyInvocation(): void {
-  const invokedAs = path.basename(process.argv[1] ?? "");
-  if (/^secretguard(\.js|\.cmd)?$/i.test(invokedAs)) {
-    process.stderr.write(
-      "secretloop: `secretguard` is a deprecated alias and will keep working for now. " +
-        "Use `secretloop` instead.\n"
-    );
-  }
-}
 
 /**
  * Sets process.exitCode and returns rather than calling process.exit().
@@ -304,8 +286,6 @@ function warnIfLegacyInvocation(): void {
  * way the whole report reliably arrives.
  */
 async function main(): Promise<void> {
-  warnIfLegacyInvocation();
-
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "help") {
     process.stdout.write(HELP);
@@ -320,8 +300,6 @@ async function main(): Promise<void> {
   }
 
   const root = findRepoRoot(args.root);
-  const configNotice = legacyConfigNotice(root);
-  if (configNotice) process.stderr.write(`secretloop: ${configNotice}\n`);
   const config = loadConfig(root);
 
   let findings: Finding[];

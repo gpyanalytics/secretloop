@@ -165,17 +165,15 @@ counting those would make this flag behave exactly like `--fail-on any`.
 Because the flag depends on a verification pass having run, `--fail-on verified`
 without `--verify` is rejected outright rather than silently exiting 0.
 
-The binary is installed under both `secretloop` and the pre-rebrand
-`secretguard`. Both behave identically; the old name additionally prints a
-deprecation notice to stderr, so it never corrupts piped JSON or SARIF.
-
 ## Controlling false positives
 
 False-positive fatigue is what gets scanners muted, so suppression is
 first-class rather than an afterthought:
 
 - `secretloop:allow` on the finding's line or the line above it. `gitleaks:allow`
-  is honored too, so a repo already annotated for gitleaks needs no re-annotation.
+  is honored too, so a repo already annotated for gitleaks needs no
+  re-annotation — gitleaks shipped and has a large installed base, which is
+  exactly the migration path worth carrying.
 - `.secretloop.json` — `excludePaths`, `excludeRules`, `allowValues`,
   `entropyPassEnabled`. A documented template ships in the repository as
   `.secretloop.example.json`.
@@ -189,34 +187,9 @@ first-class rather than an afterthought:
   reach you: git SHAs, SHA-256 digests, lockfile integrity hashes, UUIDs, data
   URIs, file paths, and version strings.
 
-## Upgrading from SecretGuard
-
-SecretGuard is now **SecretLoop**. The rename changed no detection, verification,
-or rotation behavior, and nothing in an existing setup has to change today —
-every old name is still honored:
-
-| Old | New | Status |
-|---|---|---|
-| `secretguard` CLI | `secretloop` | old binary still installed; prints a deprecation notice to stderr |
-| `.secretguard.json` | `.secretloop.json` | old filename still read when the new one is absent |
-| `secretguard:allow` | `secretloop:allow` | both directives still suppress findings |
-| `secretguard.*` settings | `secretloop.*` | old keys still read when the new one is unset |
-| `secretguard.*` commands | `secretloop.*` | old ids still registered, so keybindings keep working |
-| `# Installed by SecretGuard.` hook marker | `# Installed by SecretLoop.` | both recognized, so an old hook is still removable |
-
-Migrate at your own pace: rename `.secretguard.json` to `.secretloop.json`, move
-`secretguard.*` entries in `settings.json` to `secretloop.*`, and switch scripts
-to the `secretloop` command. Inline `secretguard:allow` annotations can be left
-alone indefinitely — they live in your source, not ours.
-
-One identifier is deliberately **not** renamed: the SARIF `partialFingerprints`
-key is still `secretguardFingerprint`. GitHub code scanning keys alert identity
-off that field, so renaming it would resurface every previously triaged alert as
-new. It is internal and never shown to users.
-
 ## Commands
 
-All six are in the Command Palette under **SecretLoop**:
+All of these are in the Command Palette under **SecretLoop**:
 
 | Command | What it does |
 |---|---|
@@ -225,11 +198,10 @@ All six are in the Command Palette under **SecretLoop**:
 | `SecretLoop: Scan Git History for Secrets` | Walks all commits for credentials already pushed |
 | `SecretLoop: Accept Current Findings as Baseline` | Writes `.secretloop-baseline.json` so only new findings fail |
 | `SecretLoop: Install Pre-commit Hook` | Wires `secretloop staged` into `.git/hooks/pre-commit` |
-| `SecretLoop: Uninstall Pre-commit Hook` | Removes it again |
-
-The command ids are `secretloop.*`. The pre-rebrand `secretguard.*` ids stay
-registered as forwarders, so existing entries in your `keybindings.json` or
-`tasks.json` keep working.
+| `SecretLoop: Uninstall Pre-commit Hook` | Removes it again, restoring any hook it displaced |
+| `SecretLoop: Set AWS Admin Credentials for Rotation` | Stores them in the OS keychain, never in a settings file |
+| `SecretLoop: Clear Stored AWS Admin Credentials` | Removes them from the keychain |
+| `SecretLoop: Reset Prompt Preferences` | Undoes a "Never" answer to the verification offer |
 
 ## Remediation
 
@@ -308,10 +280,8 @@ Six suites, no network and no real credentials:
   lookalikes (git SHAs, lockfile hashes, UUIDs, `process.env` references, AWS's
   documentation key), and must not exhibit catastrophic backtracking.
 - **`scanner.test.ts`** — confidence tiers, line numbers, fingerprint stability,
-  suppression (`secretloop:allow`, the legacy `secretguard:allow`, and
   `gitleaks:allow`), and config-driven exclusion.
 - **`config.test.ts`** — glob semantics (`*` must not cross `/`), exclude
-  merging, fingerprint normalization, and the `.secretguard.json` ->
   `.secretloop.json` fallback.
 - **`history.test.ts`** — patch parsing against fixture diffs: hunk line
   numbers, multi-line PEM assembly, deduplication across commits, and *not*
@@ -348,12 +318,6 @@ hover for the quick-fix lightbulb to redact or extract it.
 | `secretloop.excludePaths` | `[]` | Extra globs never scanned (added to built-in excludes) |
 | `secretloop.entropyPassEnabled` | `true` | Report generic high-entropy strings with no known format |
 | `secretloop.enableLiveVerification` | `false` | Make read-only calls to providers to confirm a credential is active. SecretLoop offers to turn this on the first time it finds a credential it could check |
-
-Every setting also exists under the deprecated `secretguard.*` namespace. If you
-set a value there and have not set the `secretloop.*` equivalent, SecretLoop
-still reads it — so an upgrade never silently reverts your configuration to
-defaults. VS Code marks the old keys as deprecated in the settings UI. Move them
-when convenient; nothing breaks if you don't.
 
 ## Security notes
 

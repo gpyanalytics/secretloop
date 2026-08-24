@@ -254,21 +254,6 @@ test("honors secretloop-ignore as well as secretloop:allow", () => {
   assert.strictEqual(scanText(text, 4.3).length, 0);
 });
 
-test("still honors the pre-rebrand secretguard:allow directive", () => {
-  // Suppression annotations live in the user's own source. Dropping the old
-  // spelling would re-report every previously dismissed finding at once.
-  const text = 'const t = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"; // secretguard:allow';
-  assert.strictEqual(scanText(text, 4.3).length, 0);
-});
-
-test("still honors the pre-rebrand secretguard:allow on the line above", () => {
-  const text = [
-    "// secretguard:allow -- annotated before the SecretLoop rebrand",
-    'const t = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";',
-  ].join("\n");
-  assert.strictEqual(scanText(text, 4.3).length, 0);
-});
-
 test("honors gitleaks:allow for repos migrating from gitleaks", () => {
   const text = 'const t = "ghp_16C7e42F292c6912E7710c838347Ae178B4a"; // gitleaks:allow';
   assert.strictEqual(scanText(text, 4.3).length, 0);

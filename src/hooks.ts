@@ -5,16 +5,9 @@ import { mkdirSync, copyFileSync, writeFileSync, existsSync, renameSync, chmodSy
 
 const HOOK_MARKER = "# Installed by SecretLoop.";
 
-/**
- * The pre-rebrand marker. Install and uninstall both still recognize it, so a
- * hook written by an older version is neither treated as a stranger's hook
- * (which would refuse to remove it) nor duplicated by a second install.
- */
-const LEGACY_HOOK_MARKER = "# Installed by SecretGuard.";
-
-/** True when this hook was written by either this tool or its predecessor. */
+/** True when this hook was written by SecretLoop rather than by something else. */
 function isOurHook(existing: string): boolean {
-  return existing.includes(HOOK_MARKER) || existing.includes(LEGACY_HOOK_MARKER);
+  return existing.includes(HOOK_MARKER);
 }
 
 /**

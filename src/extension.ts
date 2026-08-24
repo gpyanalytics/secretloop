@@ -4,7 +4,6 @@ import {
   loadConfig,
   mergeConfig,
   defaultConfig,
-  legacyConfigNotice,
   BASELINE_VERSION,
   SecretLoopConfig,
 } from "./config";
@@ -26,8 +25,6 @@ import * as path from "path";
 
 const diagnosticCollection = vscode.languages.createDiagnosticCollection("secretloop");
 const findingsByDocument = new Map<string, Finding[]>();
-/** Workspaces already warned about a legacy config file — warn once, not per scan. */
-const legacyConfigWarned = new Set<string>();
 /**
  * Verification outcomes, shared across every scan in this session. A document
  * is re-scanned on open and after every 400ms of typing, so without this an
@@ -189,7 +186,6 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  registerLegacyCommandAliases(context);
 
   // Lets an installed hook notice its copy of the scanner is behind. Writes
   // nothing in a repository that never asked for a hook.
@@ -544,11 +540,6 @@ function workspaceConfig(document: vscode.TextDocument, threshold: number): Secr
 /** The same resolution, for the commands that work on a folder rather than a document. */
 function configForFolder(folderPath: string, threshold: number): SecretLoopConfig {
   try {
-    const notice = legacyConfigNotice(folderPath);
-    if (notice && !legacyConfigWarned.has(folderPath)) {
-      legacyConfigWarned.add(folderPath);
-      vscode.window.showWarningMessage(`SecretLoop: ${notice}`);
-    }
     const loaded = loadConfig(folderPath);
     // A project that hasn't set a threshold defers to the user's editor setting.
     if (loaded.entropyThreshold === defaultConfig.entropyThreshold) {
@@ -901,32 +892,3 @@ async function writeBaseline(): Promise<void> {
 }
 
 
-/**
- * Commands are canonically `secretloop.*` — that is what the manifest declares
- * and the Command Palette shows. Each pre-rebrand `secretguard.*` id stays
- * registered as a forwarder, because a command id is a contract with the user's
- * own `keybindings.json` and `tasks.json`; dropping the old ids would break
- * custom keybindings with no error message pointing at the cause.
- */
-const ALIASED_COMMANDS = [
-  "redact",
-  "copyAndRedact",
-  "extractToEnv",
-  "rotate",
-  "scanWorkspace",
-  "scanStagedFiles",
-  "installPrecommitHook",
-  "uninstallPrecommitHook",
-  "scanHistory",
-  "writeBaseline",
-];
-
-function registerLegacyCommandAliases(context: vscode.ExtensionContext): void {
-  for (const name of ALIASED_COMMANDS) {
-    context.subscriptions.push(
-      vscode.commands.registerCommand(`secretguard.${name}`, (...args: unknown[]) =>
-        vscode.commands.executeCommand(`secretloop.${name}`, ...args)
-      )
-    );
-  }
-}

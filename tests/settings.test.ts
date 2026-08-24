@@ -51,15 +51,6 @@ test("a workspace value is named when no folder value exists", () => {
   assert.strictEqual(resolved.origin.kind === "explicit" && resolved.origin.scope, "workspace");
 });
 
-test("a deprecated secretguard value names that namespace", () => {
-  resetConfiguration();
-  setConfiguration("secretloop", "enableLiveVerification", { defaultValue: false });
-  setConfiguration("secretguard", "enableLiveVerification", { defaultValue: false, globalValue: true });
-  const resolved = resolveSetting<boolean>("enableLiveVerification", false);
-  assert.strictEqual(resolved.value, true);
-  assert.strictEqual(resolved.origin.kind === "explicit" && resolved.origin.namespace, "secretguard");
-});
-
 test("an explicit false is still explicit, not a fallthrough", () => {
   // ?? must not treat a deliberate `false` as absent.
   resetConfiguration();

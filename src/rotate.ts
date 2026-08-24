@@ -12,7 +12,18 @@ import { Finding } from "./scanner";
 export const AWS_ADMIN_ACCESS_KEY_ID = "secretloop.awsAdminAccessKeyId";
 export const AWS_ADMIN_SECRET_ACCESS_KEY = "secretloop.awsAdminSecretAccessKey";
 
-/** The pre-rebrand keys, read once during migration and then cleared. */
+/**
+ * The keys migration reads and clears.
+ *
+ * The two `secretguard.*` entries survive the removal of every other
+ * SecretGuard compatibility path, and NOT because SecretGuard is supported — it
+ * never shipped and nothing else here honours it. They survive because this is
+ * a credential sweep, not a compatibility path: its whole job is getting a
+ * plaintext AWS secret access key out of a settings file. Deleting them to
+ * "finish the job" would strand such a key in someone's settings.json with
+ * nothing left in the product able to find it. The cost of keeping them is two
+ * extra inspect() calls, once, at activation.
+ */
 const LEGACY_KEYS: Array<[legacy: string, canonical: string]> = [
   [AWS_ADMIN_ACCESS_KEY_ID, AWS_ADMIN_ACCESS_KEY_ID],
   [AWS_ADMIN_SECRET_ACCESS_KEY, AWS_ADMIN_SECRET_ACCESS_KEY],

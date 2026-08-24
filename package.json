@@ -94,51 +94,6 @@
           "type": "boolean",
           "default": true,
           "description": "Report generic high-entropy strings that match no known credential format. Turn off if the heuristic tier is too noisy for your codebase; named-format rules keep working."
-        },
-        "secretguard.entropyThreshold": {
-          "type": "number",
-          "default": 4.3,
-          "description": "Deprecated alias for secretloop.entropyThreshold.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.entropyThreshold` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.autoScanOnSave": {
-          "type": "boolean",
-          "default": true,
-          "description": "Deprecated alias for secretloop.autoScanOnSave.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.autoScanOnSave` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.blockCommitOnSecret": {
-          "type": "boolean",
-          "default": true,
-          "description": "Deprecated alias for secretloop.blockCommitOnSecret.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.blockCommitOnSecret` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.envFilePath": {
-          "type": "string",
-          "default": ".env",
-          "description": "Deprecated alias for secretloop.envFilePath.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.envFilePath` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.enableLiveVerification": {
-          "type": "boolean",
-          "default": false,
-          "description": "Deprecated alias for secretloop.enableLiveVerification.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.enableLiveVerification` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.excludePaths": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          },
-          "default": [],
-          "description": "Deprecated alias for secretloop.excludePaths.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.excludePaths` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.entropyPassEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "Deprecated alias for secretloop.entropyPassEnabled.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.entropyPassEnabled` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
         }
       }
     }
@@ -182,8 +137,7 @@
   ],
   "license": "MIT",
   "bin": {
-    "secretloop": "./out/cli.js",
-    "secretguard": "./out/cli.js"
+    "secretloop": "./out/cli.js"
   },
   "repository": {
     "type": "git",

@@ -35,28 +35,14 @@ export const defaultConfig: SecretLoopConfig = {
 
 export const CONFIG_FILENAME = ".secretloop.json";
 
-/**
- * The pre-rebrand filename. Still read when no `.secretloop.json` is present so
- * an existing checkout keeps its allowlists, excluded rules, and entropy
- * threshold after upgrading. A config file silently ceasing to apply is exactly
- * the failure that makes a scanner start reporting findings a team already
- * triaged away.
- */
-export const LEGACY_CONFIG_FILENAME = ".secretguard.json";
-
 export interface ResolvedConfigFile {
   path: string;
-  /** True when the config was found under the pre-rebrand filename. */
-  legacy: boolean;
 }
 
-/** Locates the config file, preferring the current name over the legacy one. */
+/** Locates the project's config file, if it has one. */
 export function resolveConfigFile(repoRoot: string): ResolvedConfigFile | null {
   const current = path.join(repoRoot, CONFIG_FILENAME);
-  if (existsSync(current)) return { path: current, legacy: false };
-  const legacy = path.join(repoRoot, LEGACY_CONFIG_FILENAME);
-  if (existsSync(legacy)) return { path: legacy, legacy: true };
-  return null;
+  return existsSync(current) ? { path: current } : null;
 }
 
 export function loadConfig(repoRoot: string): SecretLoopConfig {
@@ -70,15 +56,6 @@ export function loadConfig(repoRoot: string): SecretLoopConfig {
   }
 }
 
-/** Deprecation notice for a legacy config file, or null when none applies. */
-export function legacyConfigNotice(repoRoot: string): string | null {
-  const found = resolveConfigFile(repoRoot);
-  if (!found?.legacy) return null;
-  return (
-    `Using ${LEGACY_CONFIG_FILENAME}, which is deprecated. ` +
-    `Rename it to ${CONFIG_FILENAME} — the contents are unchanged.`
-  );
-}
 
 export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
   return {
@@ -246,6 +223,3 @@ export function loadBaseline(file: string): LoadedBaseline {
       `--write-baseline once you have reviewed them.`,
   };
 }
-
-/** @deprecated Renamed to SecretLoopConfig in the SecretLoop rebrand. */
-export type SecretGuardConfig = SecretLoopConfig;

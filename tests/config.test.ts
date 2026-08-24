@@ -5,9 +5,7 @@ import {
   fingerprint,
   defaultConfig,
   resolveConfigFile,
-  legacyConfigNotice,
   CONFIG_FILENAME,
-  LEGACY_CONFIG_FILENAME,
 } from "../src/config";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -69,38 +67,13 @@ test("reads the current .secretloop.json config filename", () => {
   withTempRepo({ [CONFIG_FILENAME]: JSON.stringify({ entropyThreshold: 5.1 }) }, (dir) => {
     const found = resolveConfigFile(dir);
     assert.ok(found);
-    assert.strictEqual(found!.legacy, false);
-    assert.strictEqual(legacyConfigNotice(dir), null, "no notice for the current filename");
+    assert.strictEqual(found!.path.endsWith(CONFIG_FILENAME), true);
   });
-});
-
-test("falls back to a pre-rebrand .secretguard.json config", () => {
-  // An existing checkout must keep its allowlists and threshold after upgrading.
-  withTempRepo({ [LEGACY_CONFIG_FILENAME]: JSON.stringify({ entropyThreshold: 5.1 }) }, (dir) => {
-    const found = resolveConfigFile(dir);
-    assert.ok(found, "legacy config must still be found");
-    assert.strictEqual(found!.legacy, true);
-    assert.ok(legacyConfigNotice(dir)?.includes(CONFIG_FILENAME), "notice names the new filename");
-  });
-});
-
-test("prefers the new filename when both are present", () => {
-  withTempRepo(
-    {
-      [CONFIG_FILENAME]: JSON.stringify({ entropyThreshold: 1.1 }),
-      [LEGACY_CONFIG_FILENAME]: JSON.stringify({ entropyThreshold: 9.9 }),
-    },
-    (dir) => {
-      const found = resolveConfigFile(dir);
-      assert.strictEqual(found!.legacy, false);
-    }
-  );
 });
 
 test("no config file yields no notice and no error", () => {
   withTempRepo({}, (dir) => {
     assert.strictEqual(resolveConfigFile(dir), null);
-    assert.strictEqual(legacyConfigNotice(dir), null);
   });
 });
 

@@ -453,13 +453,12 @@ function isPlaceholder(value: string): boolean {
  * Honors `secretloop:allow` / `secretloop-ignore` on the matching line or the
  * line directly above it.
  *
- * Two older spellings stay valid on purpose: `secretguard:allow` (this tool's
- * pre-rebrand directive) and `gitleaks:allow`. Suppression annotations live in
- * the user's own source files, so dropping either spelling would silently
- * re-report findings a team had already reviewed and dismissed — across every
- * annotated line at once.
+ * `gitleaks:allow` stays valid on purpose. gitleaks shipped and has a large
+ * installed base, so a repository already annotated for it needs no
+ * re-annotation to adopt SecretLoop — and a suppression annotation that stops
+ * being honoured silently re-reports a finding someone deliberately dismissed.
  */
-const IGNORE_DIRECTIVE = /(?:secret(?:loop|guard)[:-](?:allow|ignore)|gitleaks:allow)/i;
+const IGNORE_DIRECTIVE = /(?:secretloop[:-](?:allow|ignore)|gitleaks:allow)/i;
 
 function collectIgnoredLines(text: string): Set<number> {
   const ignored = new Set<number>();

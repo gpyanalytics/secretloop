@@ -2,12 +2,6 @@ import * as vscode from "vscode";
 
 export const SETTINGS_NAMESPACE = "secretloop";
 
-/**
- * The pre-rebrand settings namespace. Still read so an existing install keeps
- * its configuration after upgrading.
- */
-export const LEGACY_SETTINGS_NAMESPACE = "secretguard";
-
 /** The scopes VS Code lets a user set a value in, narrowest first. */
 export type SettingScope = "workspace folder" | "workspace" | "user";
 
@@ -48,17 +42,14 @@ function explicitFrom<T>(
  * to find: flipping enableLiveVerification's default to false changed nothing
  * for a profile that already had an explicit true, and nothing said so.
  *
- * Falls back to the pre-rebrand `secretguard.*` namespace, since VS Code offers
- * no built-in aliasing; without it an upgrade would silently revert an existing
- * install to defaults. Only *explicitly set* values are considered on either
- * namespace, so a package default never shadows a real user value on the other.
  */
 export function resolveSetting<T>(key: string, fallback: T): ResolvedSetting<T> {
-  for (const namespace of [SETTINGS_NAMESPACE, LEGACY_SETTINGS_NAMESPACE]) {
-    const found = explicitFrom<T>(namespace, key);
-    if (found) {
-      return { value: found.value, origin: { kind: "explicit", namespace, scope: found.scope } };
-    }
+  const found = explicitFrom<T>(SETTINGS_NAMESPACE, key);
+  if (found) {
+    return {
+      value: found.value,
+      origin: { kind: "explicit", namespace: SETTINGS_NAMESPACE, scope: found.scope },
+    };
   }
   return {
     value: vscode.workspace.getConfiguration(SETTINGS_NAMESPACE).get<T>(key, fallback),
@@ -77,8 +68,3 @@ export function describeOrigin(key: string, origin: SettingOrigin): string {
     : `package default for ${SETTINGS_NAMESPACE}.${key}`;
 }
 
-/** True when a value is set only under the deprecated `secretguard.*` namespace. */
-export function usesLegacySetting(key: string): boolean {
-  const origin = resolveSetting<unknown>(key, undefined).origin;
-  return origin.kind === "explicit" && origin.namespace === LEGACY_SETTINGS_NAMESPACE;
-}
