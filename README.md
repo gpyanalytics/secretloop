@@ -76,14 +76,18 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
     format-matched credential lands here, as a warning-level diagnostic.
   - 🔴 **Verified live** — confirmed active against the provider. Only reachable
     once verification is enabled (or `--verify` is passed). The only tier that
-    surfaces as an error-level diagnostic, and the only one `--fail-on verified`
-    blocks CI for — which is why that flag now requires `--verify`.
+    surfaces as an error-level diagnostic.
   - ⚪ **Entropy heuristic** — high-entropy string with no known format. Shown
     as a hint, never as an error.
+  - ⚫ **Confirmed dead** — checked, and the provider says it no longer works.
+    Reported quietly and last: not urgent, but still a credential sitting in
+    your source, and "dead" is a claim about today.
 
-  A finding stays at *format match* whenever liveness could not be established:
-  verification disabled, provider unsupported, network unavailable, or the call
-  timed out. Unverified never means safe.
+  When a check runs but reaches no verdict, the finding is *unresolved* rather
+  than safe, and SecretLoop records why — the provider was unreachable, refused
+  the check with a 403, was rate-limited, or a paired credential was missing.
+  Those share an outcome but not a remedy: one is an egress fix, another needs
+  someone to open a provider console. Unverified never means safe.
 - **Scan history** — a secret deleted in a later commit is still in the object
   store and still fetchable by anyone who has ever cloned the repo. A clean
   working tree says nothing about whether the repo has leaked.
@@ -109,11 +113,38 @@ secretloop history               # every commit, for secrets already pushed
   --rev-range origin/main..HEAD   # history: scan only this range
 ```
 
-Typical CI use — fail the build only on credentials confirmed to still work:
+Typical CI use — fail the build on credentials that still work, and on any the
+scan could not vouch for:
 
 ```bash
 secretloop scan --verify --fail-on verified --format sarif -o results.sarif
 ```
+
+`--fail-on verified` fails on a **confirmed-live** credential and on one whose
+check **reached no verdict** — a provider that could not be reached, answered
+403, or rate-limited the request. It does *not* fail on rules that have no
+verifier at all: 85 of the 103 rules cannot be checked against a provider, and
+counting those would make this flag behave exactly like `--fail-on any`.
+
+> **This is stricter than it used to be.** A runner without network egress
+> previously passed green: every check returned "unknown", nothing was ever
+> marked live, and the gate had nothing to fire on — with live credentials
+> sitting in the repository. Such a run now fails, and prints why on stderr:
+>
+> ```
+> secretloop: --fail-on verified could not vouch for 3 credential(s):
+>   2 — could not reach the provider: a connectivity problem, not a verdict on
+>       the credential — fix egress and re-run
+>   1 — the provider refused the check: a live-but-scoped credential and a
+>       revoked one look identical here — inspect these directly
+> ```
+>
+> If a build starts failing after an upgrade, that message names the cause. The
+> usual fix is allowing egress to the provider APIs on the runner; `--fail-on
+> high` remains available if you would rather gate on format alone.
+
+Because the flag depends on a verification pass having run, `--fail-on verified`
+without `--verify` is rejected outright rather than silently exiting 0.
 
 The binary is installed under both `secretloop` and the pre-rebrand
 `secretguard`. Both behave identically; the old name additionally prints a

@@ -46,12 +46,6 @@ export interface Finding {
   verifyStatus?: LivenessStatus;
   /** Why liveness is unknown. Set only when verifyStatus is "unknown". */
   verifyReason?: UnknownReason;
-  /**
-   * @deprecated Mirrors verifyStatus for consumers not yet migrated. A boolean
-   * cannot express "unknown", which is exactly the distinction that made a 403
-   * read as a revocation. Removed once report.ts and cli.ts are on verifyStatus.
-   */
-  verified?: boolean;
   /** Human-readable verification detail, if verification ran. */
   verifyDetail?: string;
   /** Path of the file this came from, when scanning files rather than raw text. */

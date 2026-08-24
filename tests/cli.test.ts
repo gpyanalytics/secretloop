@@ -2,7 +2,7 @@ import {
   applyBaseline,
   mergeBaseline,
   parseArgs,
-  shouldFail,
+  evaluateGate,
   triageFindings,
   validateArgs,
   HELP,
@@ -57,29 +57,79 @@ test("the help text never advertises --fail-on verified without --verify", () =>
   }
 });
 
-suite("\ncli.ts — shouldFail");
+suite("\ncli.ts — the --fail-on gate");
 
-test("shouldFail('verified') cannot fire on findings that were never verified", () => {
-  // Documents why the guard above is necessary: shouldFail is not itself wrong.
-  const findings = [finding(), finding()];
-  assert.strictEqual(shouldFail(findings, "verified"), false);
-  findings[0].verified = true;
-  assert.strictEqual(shouldFail(findings, "verified"), true);
+test("the gate fires on a confirmed-live credential", () => {
+  assert.strictEqual(evaluateGate([finding({ verifyStatus: "live" })], "verified").fail, true);
 });
 
-test("shouldFail('any') fires on any finding at all", () => {
-  assert.strictEqual(shouldFail([finding({ severity: "low" })], "any"), true);
-  assert.strictEqual(shouldFail([], "any"), false);
+test("the gate stays quiet when everything checkable came back dead", () => {
+  const outcome = evaluateGate([finding({ verifyStatus: "dead" })], "verified");
+  assert.strictEqual(outcome.fail, false);
+  assert.strictEqual(outcome.note, undefined);
 });
 
-test("shouldFail('high') covers critical as well as high", () => {
-  assert.strictEqual(shouldFail([finding({ severity: "critical" })], "high"), true);
-  assert.strictEqual(shouldFail([finding({ severity: "high" })], "high"), true);
-  assert.strictEqual(shouldFail([finding({ severity: "medium" })], "high"), false);
+test("--fail-on any fires on any finding at all", () => {
+  assert.strictEqual(evaluateGate([finding({ severity: "low" })], "any").fail, true);
+  assert.strictEqual(evaluateGate([], "any").fail, false);
 });
 
-test("shouldFail('never') never fires", () => {
-  assert.strictEqual(shouldFail([finding({ verified: true })], "never"), false);
+test("--fail-on high covers critical as well as high", () => {
+  assert.strictEqual(evaluateGate([finding({ severity: "critical" })], "high").fail, true);
+  assert.strictEqual(evaluateGate([finding({ severity: "high" })], "high").fail, true);
+  assert.strictEqual(evaluateGate([finding({ severity: "medium" })], "high").fail, false);
+});
+
+test("--fail-on never never fires", () => {
+  assert.strictEqual(evaluateGate([finding({ verifyStatus: "live" })], "never").fail, false);
+});
+
+suite("\ncli.ts — unresolved checks fail the verified gate");
+
+test("a credential that could not be checked fails the gate", () => {
+  // The runner with no egress used to pass green with live secrets in the repo.
+  const outcome = evaluateGate(
+    [finding({ verifyStatus: "unknown", verifyReason: "network" })],
+    "verified"
+  );
+  assert.strictEqual(outcome.fail, true, "--fail-on verified cannot vouch for what it never checked");
+  assert.ok(outcome.note, "a gate failing for something other than a live secret must say why");
+});
+
+test("a finding with no verifier does not fail the gate", () => {
+  // Option C: unknown fails only where a check was possible. Otherwise
+  // --fail-on verified collapses into --fail-on any and gets switched off.
+  const outcome = evaluateGate([finding({ ruleId: "private-key-block" })], "verified");
+  assert.strictEqual(outcome.fail, false, "never checkable is not the same as unresolved");
+});
+
+test("the gate note distinguishes an infra problem from one needing a human", () => {
+  const outcome = evaluateGate(
+    [
+      finding({ ruleId: "a", verifyStatus: "unknown", verifyReason: "network" }),
+      finding({ ruleId: "b", verifyStatus: "unknown", verifyReason: "network" }),
+      finding({ ruleId: "c", verifyStatus: "unknown", verifyReason: "provider-refused" }),
+    ],
+    "verified"
+  );
+  assert.strictEqual(outcome.fail, true);
+  assert.match(outcome.note!, /2/, "counts per reason");
+  assert.match(outcome.note!, /could not reach the provider/i);
+  assert.match(outcome.note!, /refused the check/i);
+  assert.match(outcome.note!, /egress|connectivity/i, "one remedy is infrastructure");
+  assert.match(outcome.note!, /inspect/i, "the other needs a person");
+});
+
+test("a live credential alone needs no explanatory note", () => {
+  const outcome = evaluateGate([finding({ verifyStatus: "live" })], "verified");
+  assert.strictEqual(outcome.fail, true);
+  assert.strictEqual(outcome.note, undefined, "CONFIRMED LIVE in the report says it already");
+});
+
+test("unresolved checks do not affect the severity gates", () => {
+  const unresolved = [finding({ severity: "low", verifyStatus: "unknown", verifyReason: "network" })];
+  assert.strictEqual(evaluateGate(unresolved, "high").fail, false);
+  assert.strictEqual(evaluateGate(unresolved, "critical").fail, false);
 });
 
 /** Writes a baseline file into a throwaway directory and hands over its path. */

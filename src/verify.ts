@@ -244,8 +244,6 @@ export async function verifyFindings(
         finding.verifyStatus = result.status;
         finding.verifyReason = result.reason;
         finding.verifyDetail = result.detail;
-        // Deprecated mirror, kept until report.ts and cli.ts move to verifyStatus.
-        finding.verified = result.status === "live" ? true : result.status === "dead" ? false : undefined;
         if (result.status === "live") finding.confidence = "verified-live";
       }
     }

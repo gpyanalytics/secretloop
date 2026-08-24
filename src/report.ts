@@ -16,7 +16,7 @@ const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
  * but not a remedy, so the report groups by remedy — "the network is down" and
  * "go look at that credential" are not the same task.
  */
-const UNKNOWN_REASONS: Record<UnknownReason, { label: string; remedy: string }> = {
+export const UNKNOWN_REASONS: Record<UnknownReason, { label: string; remedy: string }> = {
   network: {
     label: "could not reach the provider",
     remedy: "a connectivity problem, not a verdict on the credential — fix egress and re-run",

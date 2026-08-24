@@ -1,11 +1,11 @@
 #!/usr/bin/env node
 import { writeFileSync } from "fs";
 import * as path from "path";
-import { Finding, scanText } from "./scanner";
+import { Finding, UnknownReason, scanText } from "./scanner";
 import { loadConfig, loadBaseline, legacyConfigNotice, SecretLoopConfig } from "./config";
 import { listFiles, readTextFile, getStagedFiles, findRepoRoot } from "./walk";
 import { scanHistory, isGitRepo } from "./history";
-import { render, OutputFormat, sortFindings } from "./report";
+import { render, OutputFormat, sortFindings, UNKNOWN_REASONS } from "./report";
 import { verifyFindings } from "./verify";
 
 /**
@@ -197,18 +197,64 @@ export function validateArgs(args: Args): string | null {
   return null;
 }
 
-export function shouldFail(findings: Finding[], failOn: Args["failOn"]): boolean {
-  if (failOn === "never" || findings.length === 0) return false;
+export interface GateOutcome {
+  fail: boolean;
+  /** Why the build failed, when the reason is not simply a live credential. */
+  note?: string;
+}
+
+/**
+ * Decides whether a scan fails the build.
+ *
+ * `verified` fails on a confirmed-live credential *and* on one that could not be
+ * resolved. Passing on unresolved checks is how a runner with no egress went
+ * green with live secrets in the repository: every check returned unknown and
+ * the gate had nothing to fire on.
+ *
+ * Unresolved means a check ran and reached no verdict. A rule with no verifier
+ * never gets a status at all and is deliberately excluded — otherwise, with 85
+ * of 103 rules unverifiable, `verified` would behave like `any` and teams would
+ * turn it off, which protects nothing.
+ */
+export function evaluateGate(findings: Finding[], failOn: Args["failOn"]): GateOutcome {
+  if (failOn === "never" || findings.length === 0) return { fail: false };
   switch (failOn) {
-    case "verified":
-      return findings.some((f) => f.verified === true);
+    case "verified": {
+      const live = findings.filter((f) => f.verifyStatus === "live");
+      const unresolved = findings.filter((f) => f.verifyStatus === "unknown");
+      if (live.length === 0 && unresolved.length === 0) return { fail: false };
+      // A live credential explains itself in the report; an unresolved one does
+      // not, and the remedy differs per reason.
+      if (unresolved.length === 0) return { fail: true };
+      return { fail: true, note: unresolvedNote(unresolved) };
+    }
     case "critical":
-      return findings.some((f) => f.severity === "critical");
+      return { fail: findings.some((f) => f.severity === "critical") };
     case "high":
-      return findings.some((f) => f.severity === "critical" || f.severity === "high");
+      return {
+        fail: findings.some((f) => f.severity === "critical" || f.severity === "high"),
+      };
     default:
-      return true;
+      return { fail: true };
   }
+}
+
+function unresolvedNote(unresolved: Finding[]): string {
+  const counts = new Map<UnknownReason, number>();
+  for (const f of unresolved) {
+    const reason = f.verifyReason ?? "no-verifier";
+    counts.set(reason, (counts.get(reason) ?? 0) + 1);
+  }
+  const lines = [
+    `--fail-on verified could not vouch for ${unresolved.length} credential(s):`,
+  ];
+  for (const reason of Object.keys(UNKNOWN_REASONS) as UnknownReason[]) {
+    const count = counts.get(reason);
+    if (!count) continue;
+    const { label, remedy } = UNKNOWN_REASONS[reason];
+    lines.push(`  ${count} — ${label}: ${remedy}`);
+  }
+  return lines.join("\n");
 }
 
 function scanFileList(
@@ -333,7 +379,9 @@ async function main(): Promise<void> {
     );
   }
 
-  process.exitCode = shouldFail(findings, args.failOn) ? 1 : 0;
+  const gate = evaluateGate(findings, args.failOn);
+  if (gate.note) process.stderr.write(`secretloop: ${gate.note}\n`);
+  process.exitCode = gate.fail ? 1 : 0;
 }
 
 // Only run the CLI when invoked as a program. Without this guard, importing
