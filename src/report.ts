@@ -1,4 +1,4 @@
-import { Finding, redactValue } from "./scanner";
+import { Finding, UnknownReason, redactValue } from "./scanner";
 
 export type OutputFormat = "text" | "json" | "sarif";
 
@@ -11,11 +11,56 @@ export interface ReportOptions {
 
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
+/**
+ * How each unknown reads to someone holding the report. They share an exit code
+ * but not a remedy, so the report groups by remedy — "the network is down" and
+ * "go look at that credential" are not the same task.
+ */
+const UNKNOWN_REASONS: Record<UnknownReason, { label: string; remedy: string }> = {
+  network: {
+    label: "could not reach the provider",
+    remedy: "a connectivity problem, not a verdict on the credential — fix egress and re-run",
+  },
+  "provider-refused": {
+    label: "the provider refused the check",
+    remedy:
+      "a live-but-scoped credential and a revoked one look identical here — inspect these directly",
+  },
+  "provider-unavailable": {
+    label: "the provider was unavailable",
+    remedy: "rate-limited or erroring; retry later",
+  },
+  "missing-pair": {
+    label: "a paired credential was missing",
+    remedy: "the check needs a second credential that is not next to this one",
+  },
+  "no-verifier": {
+    label: "no verifier exists for this credential type",
+    remedy: "nothing can confirm this one; judge it on format alone",
+  },
+};
+
+/**
+ * Ordering is by what to do next: rotate now, then look into, then judge
+ * yourself, then — last, whatever its severity — the one already proven dead.
+ */
+function livenessRank(f: Finding): number {
+  switch (f.verifyStatus) {
+    case "live":
+      return 0;
+    case "unknown":
+      return 1;
+    case "dead":
+      return 3;
+    default:
+      return 2; // never checked
+  }
+}
+
 export function sortFindings(findings: Finding[]): Finding[] {
   return [...findings].sort((a, b) => {
-    // Verified-live first: those are the ones that need action right now.
-    const av = a.verified === true ? 0 : 1;
-    const bv = b.verified === true ? 0 : 1;
+    const av = livenessRank(a);
+    const bv = livenessRank(b);
     if (av !== bv) return av - bv;
     const as = SEVERITY_ORDER[a.severity] ?? 9;
     const bs = SEVERITY_ORDER[b.severity] ?? 9;
@@ -43,38 +88,88 @@ function displayValue(f: Finding, redact: boolean): string {
 function renderText(findings: Finding[], options: ReportOptions): string {
   if (findings.length === 0) return "SecretLoop: no secrets found.";
 
+  const live = findings.filter((f) => f.verifyStatus === "live");
+  const needsLook = findings.filter((f) => f.verifyStatus === "unknown");
+  const unchecked = findings.filter((f) => f.verifyStatus === undefined);
+  const dead = findings.filter((f) => f.verifyStatus === "dead");
+
   const lines: string[] = [];
-  const live = findings.filter((f) => f.verified === true);
-  const unknown = findings.filter((f) => f.verified !== true);
 
   if (live.length > 0) {
     lines.push(`CONFIRMED LIVE (${live.length}) — these credentials currently work. Rotate them.`);
     for (const f of live) lines.push(...formatFinding(f, options));
     lines.push("");
   }
-  if (unknown.length > 0) {
-    lines.push(`UNVERIFIED (${unknown.length}) — matched a known format or entropy heuristic.`);
-    for (const f of unknown) lines.push(...formatFinding(f, options));
+
+  if (needsLook.length > 0) {
+    lines.push(
+      `NEEDS A LOOK (${needsLook.length}) — checked, but liveness could not be determined.`
+    );
+    // Grouped by remedy: one of these groups is an infrastructure fix and
+    // another is a person opening a provider console. Interleaving them buries
+    // that distinction, which is the only thing the reader is here for.
+    for (const [reason, group] of groupByReason(needsLook)) {
+      const { label, remedy } = UNKNOWN_REASONS[reason];
+      lines.push(`  ${label} (${group.length}) — ${remedy}`);
+      for (const f of group) lines.push(...formatFinding(f, options, "    "));
+    }
+    lines.push("");
+  }
+
+  if (unchecked.length > 0) {
+    lines.push(
+      `UNVERIFIED (${unchecked.length}) — matched a known format or entropy heuristic; ` +
+        `no liveness check was run.`
+    );
+    for (const f of unchecked) lines.push(...formatFinding(f, options));
+    lines.push("");
+  }
+
+  if (dead.length > 0) {
+    // Quiet on purpose. It is not an emergency, but it is still a credential
+    // sitting in your source, and "dead" is a claim about today.
+    lines.push(
+      `CONFIRMED DEAD (${dead.length}) — no longer active, but still in your source. Remove them.`
+    );
+    for (const f of dead) {
+      const loc = f.commit ? `${f.file}:${f.line} (commit ${f.commit.slice(0, 8)})` : `${f.file ?? "<text>"}:${f.line}`;
+      lines.push(`  [${f.severity}] ${f.description} (${f.ruleId}) — ${loc}`);
+    }
     lines.push("");
   }
 
   lines.push(
-    `${findings.length} finding(s): ${live.length} confirmed live, ${unknown.length} unverified.`
+    `${findings.length} finding(s): ${live.length} confirmed live, ` +
+      `${needsLook.length} needs a look, ${unchecked.length} unverified, ${dead.length} dead.`
   );
   return lines.join("\n");
 }
 
-function formatFinding(f: Finding, options: ReportOptions): string[] {
+/** Unknown findings by reason, in the order the reasons are declared. */
+function groupByReason(findings: Finding[]): Array<[UnknownReason, Finding[]]> {
+  const groups = new Map<UnknownReason, Finding[]>();
+  for (const f of findings) {
+    const reason = f.verifyReason ?? "no-verifier";
+    const bucket = groups.get(reason);
+    if (bucket) bucket.push(f);
+    else groups.set(reason, [f]);
+  }
+  return (Object.keys(UNKNOWN_REASONS) as UnknownReason[])
+    .filter((r) => groups.has(r))
+    .map((r) => [r, groups.get(r)!]);
+}
+
+function formatFinding(f: Finding, options: ReportOptions, indent = "  "): string[] {
   const loc = f.commit
     ? `${f.file}:${f.line} (commit ${f.commit.slice(0, 8)})`
     : `${f.file ?? "<text>"}:${f.line}`;
   const out = [
-    `  [${f.severity}] ${f.description} (${f.ruleId})`,
-    `    ${loc}`,
-    `    value: ${displayValue(f, options.redact)}`,
+    `${indent}[${f.severity}] ${f.description} (${f.ruleId})`,
+    `${indent}  ${loc}`,
+    `${indent}  value: ${displayValue(f, options.redact)}`,
   ];
-  if (f.verifyDetail) out.push(`    ${f.verifyDetail}`);
-  if (f.fingerprint) out.push(`    fingerprint: ${f.fingerprint}`);
+  if (f.verifyDetail) out.push(`${indent}  ${f.verifyDetail}`);
+  if (f.fingerprint) out.push(`${indent}  fingerprint: ${f.fingerprint}`);
   return out;
 }
 
@@ -84,15 +179,26 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
       tool: "secretloop",
       summary: {
         total: findings.length,
-        confirmedLive: findings.filter((f) => f.verified === true).length,
+        confirmedLive: findings.filter((f) => f.verifyStatus === "live").length,
         bySeverity: countBy(findings, (f) => f.severity),
+        byLiveness: {
+          live: findings.filter((f) => f.verifyStatus === "live").length,
+          dead: findings.filter((f) => f.verifyStatus === "dead").length,
+          unknown: findings.filter((f) => f.verifyStatus === "unknown").length,
+          unchecked: findings.filter((f) => f.verifyStatus === undefined).length,
+        },
       },
       findings: findings.map((f) => ({
         ruleId: f.ruleId,
         description: f.description,
         severity: f.severity,
         confidence: f.confidence,
-        verified: f.verified ?? null,
+        // The `verified` boolean this replaced could not express "unknown",
+        // which is how a 403 came to be reported as a revocation. null here
+        // means no verification pass ran, distinct from a run that could not
+        // reach a verdict.
+        verifyStatus: f.verifyStatus ?? null,
+        verifyReason: f.verifyReason ?? null,
         verifyDetail: f.verifyDetail ?? null,
         file: f.file ?? null,
         line: f.line,
@@ -136,8 +242,13 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
         results: findings.map((f) => ({
           ruleId: f.ruleId,
           level: sarifLevel(f),
-          message: {
-            text: `${f.description}${f.verified === true ? " — CONFIRMED LIVE" : ""}. Value: ${displayValue(f, options.redact)}`,
+          message: { text: sarifMessage(f, options) },
+          // Liveness lives here, not in partialFingerprints: that field is
+          // alert identity, and anything unstable in it re-opens every alert.
+          properties: {
+            verificationStatus: f.verifyStatus ?? "unchecked",
+            verificationReason: f.verifyReason ?? null,
+            verificationDetail: f.verifyDetail ?? null,
           },
           // Deliberately still `secretguardFingerprint` after the SecretLoop
           // rebrand. GitHub code scanning keys alert identity off this field:
@@ -160,14 +271,45 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
   return JSON.stringify(sarif, null, 2);
 }
 
+/**
+ * What a reviewer in code scanning should do about this line.
+ *
+ * The one non-obvious case is a refused check. A credential the provider does
+ * not recognise comes back 401; a 403 means it evaluated the credential and
+ * declined, which leans live — and it is precisely the case no amount of
+ * retrying resolves, so it stays at error however mild the rule's severity.
+ *
+ * Every other unknown taught us nothing, so the finding is worth exactly what
+ * its format was worth before the check ran.
+ */
 function sarifLevel(f: Finding): "error" | "warning" | "note" {
-  if (f.verified === true) return "error";
+  if (f.verifyStatus === "live") return "error";
+  if (f.verifyStatus === "dead") return "note";
+  if (f.verifyReason === "provider-refused") return "error";
   if (f.confidence === "entropy-heuristic") return "note";
   return f.severity === "critical" || f.severity === "high" ? "error" : "warning";
 }
 
+function sarifMessage(f: Finding, options: ReportOptions): string {
+  const value = `Value: ${displayValue(f, options.redact)}`;
+  switch (f.verifyStatus) {
+    case "live":
+      return `${f.description} — CONFIRMED LIVE. ${value}`;
+    case "dead":
+      return `${f.description} — confirmed no longer active, but still present in source. ${value}`;
+    case "unknown":
+      return (
+        `${f.description} — liveness unknown: ` +
+        `${UNKNOWN_REASONS[f.verifyReason ?? "no-verifier"].label}. ${value}`
+      );
+    default:
+      return `${f.description}. ${value}`;
+  }
+}
+
 function securityScore(f: Finding): string {
-  if (f.verified === true) return "9.8";
+  if (f.verifyStatus === "live") return "9.8";
+  if (f.verifyStatus === "dead") return "1.0";
   switch (f.severity) {
     case "critical":
       return "8.0";
