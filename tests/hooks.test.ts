@@ -4,26 +4,11 @@ import "./stubs/install-vscode";
 import { called, calls, reset, setWorkspaceFolder } from "./stubs/vscode";
 import { installPrecommitHook } from "../src/hooks";
 import * as assert from "node:assert";
+import { test, suite, finish } from "./harness";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
-
-// harness.ts takes `() => void` and would swallow an async failure.
-let passed = 0;
-let failed = 0;
-
-async function test(name: string, fn: () => Promise<void>) {
-  try {
-    await fn();
-    passed++;
-    console.log(`  ok - ${name}`);
-  } catch (err: any) {
-    failed++;
-    console.log(`  FAIL - ${name}`);
-    console.log(`    ${err.message}`);
-  }
-}
 
 /** The slice of ExtensionContext hookBody reads. */
 function context(extensionPath: string): any {
@@ -54,75 +39,69 @@ function warningText(): string {
   return String(call?.args[0] ?? "");
 }
 
-async function main() {
-  process.exitCode = 1;
-  console.log("hooks.ts — installing the pre-commit hook");
+suite("hooks.ts — installing the pre-commit hook");
 
-  await test("installing warns when the env file is already tracked", async () => {
-    // The hook scans staged changes, so a secret already committed to a tracked
-    // .env never appears in one — the repo looks clean at every future commit.
-    await withRepo(async (dir, git) => {
-      writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
-      git("add", ".env");
-      git("commit", "-qm", "track env");
-      reset();
+test("installing warns when the env file is already tracked", async () => {
+  // The hook scans staged changes, so a secret already committed to a tracked
+  // .env never appears in one — the repo looks clean at every future commit.
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
+    git("add", ".env");
+    git("commit", "-qm", "track env");
+    reset();
 
-      await installPrecommitHook(context(dir), ".env");
+    await installPrecommitHook(context(dir), ".env");
 
-      assert.strictEqual(called("window.showWarningMessage"), true, "the gap must be surfaced");
-      assert.match(warningText(), /tracked/i);
-      assert.match(warningText(), /git rm --cached \.env/);
-    });
+    assert.strictEqual(called("window.showWarningMessage"), true, "the gap must be surfaced");
+    assert.match(warningText(), /tracked/i);
+    assert.match(warningText(), /git rm --cached \.env/);
   });
+});
 
-  await test("installing still succeeds — the warning does not block", async () => {
-    // Installing a hook is not the moment a secret gets exposed, and the hook is
-    // worth having either way.
-    await withRepo(async (dir, git) => {
-      writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
-      git("add", ".env");
-      git("commit", "-qm", "track env");
-      reset();
+test("installing still succeeds — the warning does not block", async () => {
+  // Installing a hook is not the moment a secret gets exposed, and the hook is
+  // worth having either way.
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
+    git("add", ".env");
+    git("commit", "-qm", "track env");
+    reset();
 
-      await installPrecommitHook(context(dir), ".env");
+    await installPrecommitHook(context(dir), ".env");
 
-      assert.strictEqual(called("workspace.fs.writeFile"), true, "the hook is still written");
-      assert.strictEqual(called("window.showInformationMessage"), true, "and reported installed");
-    });
+    assert.strictEqual(called("workspace.fs.writeFile"), true, "the hook is still written");
+    assert.strictEqual(called("window.showInformationMessage"), true, "and reported installed");
   });
+});
 
-  await test("no warning when the env file is untracked", async () => {
-    await withRepo(async (dir, git) => {
-      writeFileSync(path.join(dir, "seed.txt"), "x\n");
-      git("add", "seed.txt");
-      git("commit", "-qm", "seed");
-      writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
-      reset();
+test("no warning when the env file is untracked", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "seed.txt"), "x\n");
+    git("add", "seed.txt");
+    git("commit", "-qm", "seed");
+    writeFileSync(path.join(dir, ".env"), "SECRET=1\n");
+    reset();
 
-      await installPrecommitHook(context(dir), ".env");
+    await installPrecommitHook(context(dir), ".env");
 
-      assert.strictEqual(called("window.showWarningMessage"), false);
-      assert.strictEqual(called("window.showInformationMessage"), true);
-    });
+    assert.strictEqual(called("window.showWarningMessage"), false);
+    assert.strictEqual(called("window.showInformationMessage"), true);
   });
+});
 
-  await test("a tracked env file in a subdirectory is warned about too", async () => {
-    await withRepo(async (dir, git) => {
-      mkdirSync(path.join(dir, "config"));
-      writeFileSync(path.join(dir, "config", ".env"), "SECRET=1\n");
-      git("add", "config/.env");
-      git("commit", "-qm", "track nested env");
-      reset();
+test("a tracked env file in a subdirectory is warned about too", async () => {
+  await withRepo(async (dir, git) => {
+    mkdirSync(path.join(dir, "config"));
+    writeFileSync(path.join(dir, "config", ".env"), "SECRET=1\n");
+    git("add", "config/.env");
+    git("commit", "-qm", "track nested env");
+    reset();
 
-      await installPrecommitHook(context(dir), "config/.env");
+    await installPrecommitHook(context(dir), "config/.env");
 
-      assert.strictEqual(called("window.showWarningMessage"), true);
-      assert.match(warningText(), /config\/\.env/);
-    });
+    assert.strictEqual(called("window.showWarningMessage"), true);
+    assert.match(warningText(), /config\/\.env/);
   });
+});
 
-  console.log(`\n${passed} passed, ${failed} failed\n`);
-  process.exitCode = failed > 0 ? 1 : 0;
-}
-
-main();
+finish();
