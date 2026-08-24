@@ -11,7 +11,7 @@ import {
   LegacyCredentialStore,
   MigrationOutcome,
 } from "./rotate";
-import { installPrecommitHook, uninstallPrecommitHook } from "./hooks";
+import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
 import { setting, SETTINGS_NAMESPACE } from "./settings";
 
 
@@ -127,7 +127,11 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("secretloop.scanWorkspace", scanWorkspace),
     vscode.commands.registerCommand("secretloop.scanStagedFiles", warnOnStagedSecrets),
     vscode.commands.registerCommand("secretloop.installPrecommitHook", () =>
-      installPrecommitHook(context, setting<string>("envFilePath", ".env"))
+      installPrecommitHook(
+        context,
+        setting<string>("envFilePath", ".env"),
+        extensionVersion(context)
+      )
     ),
     vscode.commands.registerCommand("secretloop.uninstallPrecommitHook", uninstallPrecommitHook),
     vscode.commands.registerCommand("secretloop.scanHistory", scanGitHistory),
@@ -143,6 +147,21 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   registerLegacyCommandAliases(context);
+
+  // Lets an installed hook notice its copy of the scanner is behind. Writes
+  // nothing in a repository that never asked for a hook.
+  for (const folder of vscode.workspace.workspaceFolders ?? []) {
+    try {
+      refreshHookVersionStamp(folder.uri.fsPath, extensionVersion(context));
+    } catch {
+      // A read-only or absent git directory is not worth interrupting startup.
+    }
+  }
+}
+
+/** The running extension's version, for stamping a repository's scanner copy. */
+function extensionVersion(context: vscode.ExtensionContext): string {
+  return (context.extension?.packageJSON?.version as string) ?? "unknown";
 }
 
 async function scanDocument(document: vscode.TextDocument) {

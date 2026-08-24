@@ -100,6 +100,20 @@ export function getStagedFiles(root: string): string[] {
   return res.stdout.split("\n").filter((l) => l.trim().length > 0);
 }
 
+/**
+ * The repository's git directory, absolute. A plain `.git` join is wrong in a
+ * worktree or submodule, where `.git` is a file pointing elsewhere.
+ */
+export function findGitDir(start: string): string | null {
+  const res = spawnSync("git", ["rev-parse", "--absolute-git-dir"], {
+    cwd: start,
+    encoding: "utf8",
+  });
+  if (res.error || res.status !== 0) return null;
+  const dir = res.stdout.trim();
+  return dir.length > 0 ? dir : null;
+}
+
 export function findRepoRoot(start: string): string {
   const res = spawnSync("git", ["rev-parse", "--show-toplevel"], { cwd: start, encoding: "utf8" });
   if (res.status === 0 && res.stdout.trim()) return res.stdout.trim();
