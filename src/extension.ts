@@ -3,7 +3,14 @@ import { scanText, Finding, ConfidenceTier } from "./scanner";
 import { loadConfig, mergeConfig, defaultConfig, legacyConfigNotice, SecretLoopConfig } from "./config";
 import { redactInPlace, extractToEnv } from "./remediate";
 import { isVerifiable, verifyFindings, verificationProvider, VerificationCache } from "./verify";
-import { rotateFinding } from "./rotate";
+import {
+  rotateFinding,
+  migrateAwsAdminCredentials,
+  AWS_ADMIN_ACCESS_KEY_ID,
+  AWS_ADMIN_SECRET_ACCESS_KEY,
+  LegacyCredentialStore,
+  MigrationOutcome,
+} from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook } from "./hooks";
 import { setting, SETTINGS_NAMESPACE } from "./settings";
 
@@ -29,6 +36,16 @@ const VERIFICATION_PROMPT_DECLINED_KEY = "secretloop.verificationPromptDeclinedF
 let verificationDeclinedThisSession = false;
 /** Several open documents scan at once; only one prompt should reach the user. */
 let verificationPromptShown = false;
+/**
+ * A startup notice has already claimed the user's attention this session.
+ *
+ * Migration fires once ever and tells the user to rotate an exposed credential;
+ * the verification prompt fires on the first checkable finding. Both land during
+ * activation, and stacking them means the important one gets dismissed with the
+ * other. Migration wins — it is actionable and it never comes back — and the
+ * verification offer waits for the next session.
+ */
+let startupNoticeShown = false;
 
 export function activate(context: vscode.ExtensionContext) {
   extensionContext = context;
@@ -53,7 +70,11 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
-  vscode.workspace.textDocuments.forEach((doc) => scanDocument(doc));
+  // Before the first scan, so a migration notice cannot be stacked underneath
+  // the verification prompt that scanning can raise.
+  void runAwsCredentialMigration(context).then(() => {
+    vscode.workspace.textDocuments.forEach((doc) => scanDocument(doc));
+  });
 
   context.subscriptions.push(
     vscode.languages.registerCodeActionsProvider(
@@ -91,7 +112,7 @@ export function activate(context: vscode.ExtensionContext) {
       );
       if (choice !== "Rotate") return;
 
-      const outcome = await rotateFinding(finding);
+      const outcome = await rotateFinding(finding, context.secrets);
       if (outcome.success) {
         vscode.window.showInformationMessage(`SecretLoop: ${outcome.message}`);
         const doc = await vscode.workspace.openTextDocument(docUri);
@@ -110,10 +131,19 @@ export function activate(context: vscode.ExtensionContext) {
     ),
     vscode.commands.registerCommand("secretloop.uninstallPrecommitHook", uninstallPrecommitHook),
     vscode.commands.registerCommand("secretloop.scanHistory", scanGitHistory),
-    vscode.commands.registerCommand("secretloop.writeBaseline", writeBaseline)
+    vscode.commands.registerCommand("secretloop.writeBaseline", writeBaseline),
+    vscode.commands.registerCommand("secretloop.setAwsAdminCredentials", () =>
+      promptForAwsAdminCredentials(context)
+    ),
+    vscode.commands.registerCommand("secretloop.clearAwsAdminCredentials", async () => {
+      await context.secrets.delete(AWS_ADMIN_ACCESS_KEY_ID);
+      await context.secrets.delete(AWS_ADMIN_SECRET_ACCESS_KEY);
+      vscode.window.showInformationMessage("SecretLoop: AWS admin credentials removed from the keychain.");
+    })
   );
 
   registerLegacyCommandAliases(context);
+
 
   vscode.window.showInformationMessage("SecretLoop is active and watching for secrets.");
 }
@@ -160,6 +190,7 @@ async function scanDocument(document: vscode.TextDocument) {
  * actually weigh.
  */
 async function offerVerification(document: vscode.TextDocument, findings: Finding[]): Promise<void> {
+  if (startupNoticeShown) return; // a migration notice already spoke this session
   if (verificationDeclinedThisSession || verificationPromptShown) return;
   if (extensionContext?.globalState.get<boolean>(VERIFICATION_PROMPT_DECLINED_KEY)) return;
 
@@ -389,6 +420,119 @@ function workspaceConfig(document: vscode.TextDocument, threshold: number): Secr
   }
 }
 
+
+/**
+ * Reads and clears explicitly-set configuration values across every scope.
+ *
+ * Only explicit values count: a package default is not a credential someone
+ * typed, and the manifest entries are gone anyway. Clearing targets the scope
+ * that actually held the value, so a Workspace-scoped credential is removed
+ * from the `.vscode/settings.json` it was committed in.
+ */
+function legacyCredentialStore(): LegacyCredentialStore {
+  const scopes: Array<[scope: string, target: vscode.ConfigurationTarget]> = [
+    ["workspace folder", vscode.ConfigurationTarget.WorkspaceFolder],
+    ["workspace", vscode.ConfigurationTarget.Workspace],
+    ["user", vscode.ConfigurationTarget.Global],
+  ];
+
+  const split = (key: string) => {
+    const dot = key.indexOf(".");
+    return { namespace: key.slice(0, dot), name: key.slice(dot + 1) };
+  };
+
+  return {
+    read(key) {
+      const { namespace, name } = split(key);
+      const inspected = vscode.workspace.getConfiguration(namespace).inspect<string>(name);
+      if (!inspected) return undefined;
+      const found =
+        inspected.workspaceFolderValue ?? inspected.workspaceValue ?? inspected.globalValue;
+      if (!found) return undefined;
+      const scope = inspected.workspaceFolderValue
+        ? "workspace folder"
+        : inspected.workspaceValue
+          ? "workspace"
+          : "user";
+      return { value: found, scope };
+    },
+    async clear(key) {
+      const { namespace, name } = split(key);
+      const config = vscode.workspace.getConfiguration(namespace);
+      for (const [, target] of scopes) {
+        try {
+          await config.update(name, undefined, target);
+        } catch {
+          // Not every scope exists (no folder open, no workspace file); the
+          // ones that do are what matter.
+        }
+      }
+    },
+  };
+}
+
+/**
+ * Moves any AWS admin credential still in settings into the OS keychain.
+ *
+ * See migrateAwsAdminCredentials in rotate.ts for the caveat this depends on:
+ * reading an unregistered key through inspect() is documented to work but has
+ * not been confirmed against a running extension host. Both outcomes are logged
+ * so a manual check can tell "found nothing" from "there was nothing".
+ */
+async function runAwsCredentialMigration(context: vscode.ExtensionContext): Promise<void> {
+  let outcome: MigrationOutcome;
+  try {
+    outcome = await migrateAwsAdminCredentials(context.secrets, legacyCredentialStore());
+  } catch (err) {
+    console.log(`SecretLoop: AWS admin credential migration failed: ${(err as Error).message}`);
+    return;
+  }
+
+  if (outcome.status === "already-stored") {
+    console.log("SecretLoop: AWS admin credentials already in the keychain; no migration needed.");
+    return;
+  }
+
+  if (outcome.status === "absent") {
+    console.log(
+      `SecretLoop: no AWS admin credential found in settings. Inspected: ${outcome.inspected.join(", ")}.`
+    );
+    return;
+  }
+
+  const moved = outcome.moved.map((m) => `${m.key} (${m.scope})`).join(", ");
+  console.log(`SecretLoop: migrated AWS admin credentials out of settings: ${moved}.`);
+  startupNoticeShown = true;
+  vscode.window.showWarningMessage(
+    `SecretLoop moved your AWS admin credentials from settings into the OS keychain and cleared the setting (${moved}). ` +
+      `Treat the old value as exposed and rotate that IAM key: a credential that has been in settings.json may already be in ` +
+      `Settings Sync, a committed .vscode/settings.json, or a dotfiles repository, and clearing it removes only today's copy.`
+  );
+}
+
+/** Collects the admin credentials without them ever touching a settings file. */
+async function promptForAwsAdminCredentials(context: vscode.ExtensionContext): Promise<void> {
+  const keyId = await vscode.window.showInputBox({
+    title: "SecretLoop: AWS admin access key ID",
+    prompt: "An identity with iam:UpdateAccessKey, used only to deactivate leaked keys. Stored in your OS keychain.",
+    ignoreFocusOut: true,
+  });
+  if (!keyId) return;
+
+  const secret = await vscode.window.showInputBox({
+    title: "SecretLoop: AWS admin secret access key",
+    prompt: "Paired with the access key ID above. Stored in your OS keychain, never in a settings file.",
+    password: true,
+    ignoreFocusOut: true,
+  });
+  if (!secret) return;
+
+  await context.secrets.store(AWS_ADMIN_ACCESS_KEY_ID, keyId);
+  await context.secrets.store(AWS_ADMIN_SECRET_ACCESS_KEY, secret);
+  vscode.window.showInformationMessage(
+    "SecretLoop: AWS admin credentials stored in the OS keychain."
+  );
+}
 
 /** Resolves the workspace root, or reports why we can't act without one. */
 function requireWorkspaceRoot(): string | undefined {

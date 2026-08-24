@@ -44,6 +44,10 @@ export const env = {
       record("env.clipboard.writeText", value);
     },
   },
+  openExternal: async (target: { toString(): string }): Promise<boolean> => {
+    record("env.openExternal", target.toString());
+    return true;
+  },
 };
 
 /** Set by a test to whatever the code under test should see as the open folder. */
@@ -80,6 +84,7 @@ export const window = {
 /** Only the `file` factory is used, and only its fsPath is read back. */
 export const Uri = {
   file: (fsPath: string) => ({ fsPath, scheme: "file", toString: () => `file://${fsPath}` }),
+  parse: (value: string) => ({ fsPath: value, scheme: value.split(":")[0], toString: () => value }),
 };
 
 export class Range {
@@ -144,6 +149,7 @@ export const conformsToRealApi = {
   applyEdit: workspace.applyEdit satisfies typeof vscode.workspace.applyEdit,
   showInformationMessage: window.showInformationMessage satisfies ShowMessage,
   showErrorMessage: window.showErrorMessage satisfies ShowMessage,
+  openExternal: env.openExternal satisfies (target: { toString(): string }) => Thenable<boolean>,
   workspaceEditReplace: new WorkspaceEdit().replace satisfies OmitLast<
     typeof vscode.WorkspaceEdit.prototype.replace
   >,

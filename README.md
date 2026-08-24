@@ -329,7 +329,6 @@ hover for the quick-fix lightbulb to redact or extract it.
 | `secretloop.excludePaths` | `[]` | Extra globs never scanned (added to built-in excludes) |
 | `secretloop.entropyPassEnabled` | `true` | Report generic high-entropy strings with no known format |
 | `secretloop.enableLiveVerification` | `false` | Make read-only calls to providers to confirm a credential is active. SecretLoop offers to turn this on the first time it finds a credential it could check |
-| `secretloop.awsAdminAccessKeyId` / `awsAdminSecretAccessKey` | `""` | Separate admin AWS identity used only to deactivate leaked keys |
 
 Every setting also exists under the deprecated `secretguard.*` namespace. If you
 set a value there and have not set the `secretloop.*` equivalent, SecretLoop
@@ -350,10 +349,29 @@ when convenient; nothing breaks if you don't.
   hash of the credential rather than the value itself, so re-scanning a file as
   you type does not re-send the secret. Every call is abandoned after five
   seconds; a timed-out check counts as unknown, never as "not a secret".
-- The AWS admin credentials you configure for rotation are stored in VS Code
-  settings. Use a User (not Workspace) settings scope so they're never
-  accidentally committed, and scope that IAM identity to `iam:UpdateAccessKey`
-  only — nothing broader.
+- The AWS admin credentials used for rotation are stored in your **OS keychain**
+  via VS Code's SecretStorage — never in a settings file. Set them with
+  **SecretLoop: Set AWS Admin Credentials for Rotation** from the Command
+  Palette, and remove them with **SecretLoop: Clear Stored AWS Admin
+  Credentials**. Scope that IAM identity to `iam:UpdateAccessKey` only — nothing
+  broader.
+
+  These used to be settings. If you ever put an admin key in `settings.json`,
+  **treat it as exposed and rotate it**: SecretLoop migrates the value into the
+  keychain and clears the setting on first launch, but that only removes today's
+  copy. It does nothing about Settings Sync history, a committed
+  `.vscode/settings.json`, or a dotfiles repository.
+
+  > **Unverified against a running extension host.** That migration reads the
+  > old values through `getConfiguration().inspect()` after their manifest
+  > entries were removed. The API documents no registration requirement, and VS
+  > Code retains unregistered keys in `settings.json`, but this has not been
+  > confirmed in a real extension host. Before publishing, put a value under
+  > `secretloop.awsAdminAccessKeyId` in `settings.json`, launch the extension,
+  > and check the extension host log: it reports either what it migrated or
+  > every key it inspected and found nothing under. If `inspect()` does return
+  > undefined for an unregistered key, migration silently no-ops and the
+  > plaintext value stays where it is.
 
 ## Extending detection rules
 

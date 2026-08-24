@@ -40,6 +40,14 @@
       {
         "command": "secretloop.writeBaseline",
         "title": "SecretLoop: Accept Current Findings as Baseline"
+      },
+      {
+        "command": "secretloop.setAwsAdminCredentials",
+        "title": "SecretLoop: Set AWS Admin Credentials for Rotation"
+      },
+      {
+        "command": "secretloop.clearAwsAdminCredentials",
+        "title": "SecretLoop: Clear Stored AWS Admin Credentials"
       }
     ],
     "configuration": {
@@ -69,16 +77,6 @@
           "type": "boolean",
           "default": false,
           "description": "Make safe, read-only calls to providers (GitHub, Slack, Stripe, Google, AWS) to confirm whether a detected credential is actually active. Off by default: verification sends the detected credential to a third party, which is not something to do to a repository you have only just opened. SecretLoop offers to turn this on the first time it finds a credential it could check."
-        },
-        "secretloop.awsAdminAccessKeyId": {
-          "type": "string",
-          "default": "",
-          "description": "Access key ID for a separate AWS admin identity (with iam:UpdateAccessKey permission) used ONLY to deactivate leaked keys. A leaked key cannot deactivate itself. Leave blank to fall back to opening the IAM console manually."
-        },
-        "secretloop.awsAdminSecretAccessKey": {
-          "type": "string",
-          "default": "",
-          "description": "Secret access key paired with secretloop.awsAdminAccessKeyId. Store this in a secure settings scope, not committed workspace settings."
         },
         "secretloop.excludePaths": {
           "type": "array",
@@ -123,18 +121,6 @@
           "description": "Deprecated alias for secretloop.enableLiveVerification.",
           "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.enableLiveVerification` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
         },
-        "secretguard.awsAdminAccessKeyId": {
-          "type": "string",
-          "default": "",
-          "description": "Deprecated alias for secretloop.awsAdminAccessKeyId.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.awsAdminAccessKeyId` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
-        "secretguard.awsAdminSecretAccessKey": {
-          "type": "string",
-          "default": "",
-          "description": "Deprecated alias for secretloop.awsAdminSecretAccessKey.",
-          "markdownDeprecationMessage": "**Deprecated.** Renamed to `secretloop.awsAdminSecretAccessKey` in the SecretLoop rebrand. This key is still read when the new one is unset, so nothing breaks today."
-        },
         "secretguard.excludePaths": {
           "type": "array",
           "items": {
@@ -156,7 +142,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "ts-node --transpile-only tests/rules.test.ts && ts-node --transpile-only tests/scanner.test.ts && ts-node --transpile-only tests/config.test.ts && ts-node --transpile-only tests/history.test.ts && ts-node --transpile-only tests/report.test.ts && ts-node --transpile-only tests/verify.test.ts && ts-node --transpile-only tests/cli.test.ts && ts-node --transpile-only tests/stubs.test.ts && ts-node --transpile-only tests/remediate.test.ts && ts-node --transpile-only tests/walk.test.ts && ts-node --transpile-only tests/hooks.test.ts",
+    "test": "ts-node --transpile-only tests/rules.test.ts && ts-node --transpile-only tests/scanner.test.ts && ts-node --transpile-only tests/config.test.ts && ts-node --transpile-only tests/history.test.ts && ts-node --transpile-only tests/report.test.ts && ts-node --transpile-only tests/verify.test.ts && ts-node --transpile-only tests/cli.test.ts && ts-node --transpile-only tests/stubs.test.ts && ts-node --transpile-only tests/remediate.test.ts && ts-node --transpile-only tests/walk.test.ts && ts-node --transpile-only tests/hooks.test.ts && ts-node --transpile-only tests/rotate.test.ts",
     "scan": "ts-node --transpile-only src/cli.ts",
     "package": "vsce package",
     "publish:vsce": "vsce publish",
