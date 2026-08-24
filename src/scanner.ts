@@ -4,6 +4,34 @@ import { SecretLoopConfig, defaultConfig, fingerprint } from "./config";
 
 export type ConfidenceTier = "verified-live" | "format-match" | "entropy-heuristic";
 
+/**
+ * Whether a credential currently works. `unknown` is a real answer, not a
+ * missing one — and it is the common case, since most rules have no verifier
+ * and verification is opt-in. Unknown never means safe.
+ */
+export type LivenessStatus = "live" | "dead" | "unknown";
+
+/**
+ * Why liveness could not be determined. These share an outcome but not a
+ * remedy, which is the whole reason to keep them apart:
+ *
+ * - `network`               — the provider was never reached. Fix egress.
+ * - `provider-refused`      — a 403. A live-but-scoped credential and a revoked
+ *                             one are indistinguishable here, so someone has to
+ *                             go look at this one.
+ * - `provider-unavailable`  — 429 or 5xx. Retry later; says nothing about the
+ *                             credential.
+ * - `missing-pair`          — the check needs a second credential that is not
+ *                             nearby (an AWS access key with no secret key).
+ * - `no-verifier`           — nothing supports checking this rule at all.
+ */
+export type UnknownReason =
+  | "network"
+  | "provider-refused"
+  | "provider-unavailable"
+  | "missing-pair"
+  | "no-verifier";
+
 export interface Finding {
   ruleId: string;
   description: string;
@@ -14,7 +42,15 @@ export interface Finding {
   severity: Severity;
   /** 1-based line number of the match within the scanned text. */
   line: number;
-  /** Populated after an async verification pass. Undefined = not yet checked. */
+  /** Liveness, once a verification pass has run. Undefined = not yet checked. */
+  verifyStatus?: LivenessStatus;
+  /** Why liveness is unknown. Set only when verifyStatus is "unknown". */
+  verifyReason?: UnknownReason;
+  /**
+   * @deprecated Mirrors verifyStatus for consumers not yet migrated. A boolean
+   * cannot express "unknown", which is exactly the distinction that made a 403
+   * read as a revocation. Removed once report.ts and cli.ts are on verifyStatus.
+   */
   verified?: boolean;
   /** Human-readable verification detail, if verification ran. */
   verifyDetail?: string;

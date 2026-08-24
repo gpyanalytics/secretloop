@@ -1,10 +1,50 @@
 import { createHash } from "crypto";
-import { Finding } from "./scanner";
+import { Finding, LivenessStatus, UnknownReason } from "./scanner";
 
 export interface VerificationResult {
-  verified: boolean;
+  status: LivenessStatus;
+  /** Set only when status is "unknown"; says what an operator should do next. */
+  reason?: UnknownReason;
   /** Human-readable reason, shown in the diagnostic hover. */
   detail: string;
+}
+
+const live = (detail: string): VerificationResult => ({ status: "live", detail });
+const dead = (detail: string): VerificationResult => ({ status: "dead", detail });
+const unknown = (reason: UnknownReason, detail: string): VerificationResult => ({
+  status: "unknown",
+  reason,
+  detail,
+});
+
+/**
+ * Classifies a non-conclusive HTTP status.
+ *
+ * 403 is deliberately never "dead". A credential lacking scope for the check
+ * endpoint, one belonging to an unverified org, and one that was revoked all
+ * answer 403 — so the only honest reading is that liveness is undetermined.
+ * Calling it revoked produces the exact sentence someone uses to decide not to
+ * rotate a live credential.
+ */
+function fromStatus(provider: string, status: number): VerificationResult {
+  if (status === 403) {
+    return unknown(
+      "provider-refused",
+      `${provider} refused the check (403), which it returns for a revoked credential ` +
+        `and for a live one lacking permission alike. Liveness could not be determined — ` +
+        `check this credential directly.`
+    );
+  }
+  if (status === 429) {
+    return unknown(
+      "provider-unavailable",
+      `${provider} rate-limited the check (429). Liveness could not be determined; retry later.`
+    );
+  }
+  return unknown(
+    "provider-unavailable",
+    `${provider} responded ${status}. Liveness could not be determined; retry later.`
+  );
 }
 
 /**
@@ -106,11 +146,17 @@ export async function verifyFinding(
   context: VerifyContext
 ): Promise<VerificationResult | null> {
   const verifier = verifiers[finding.ruleId];
-  if (!verifier) return null;
+  if (!verifier) return null; // no verifier for this rule; caller decides what that means
   try {
     return await verifier(finding.value, context);
-  } catch {
-    return null; // treat as unknown, never as "safe"
+  } catch (err: any) {
+    // Timeouts land here too, via the abort signal. Never "safe".
+    const cause = err?.name === "TimeoutError" || err?.name === "AbortError" ? "timed out" : "failed";
+    return unknown(
+      "network",
+      `The check ${cause} before reaching the provider. Liveness could not be determined — ` +
+        `this is a connectivity problem, not a verdict on the credential.`
+    );
   }
 }
 
@@ -194,10 +240,13 @@ export async function verifyFindings(
       while (cursor < verifiable.length) {
         const finding = verifiable[cursor++];
         const result = await check(finding);
-        if (!result) continue; // unknown; leave as format-match
-        finding.verified = result.verified;
+        if (!result) continue; // no verifier; leave as format-match
+        finding.verifyStatus = result.status;
+        finding.verifyReason = result.reason;
         finding.verifyDetail = result.detail;
-        if (result.verified) finding.confidence = "verified-live";
+        // Deprecated mirror, kept until report.ts and cli.ts move to verifyStatus.
+        finding.verified = result.status === "live" ? true : result.status === "dead" ? false : undefined;
+        if (result.status === "live") finding.confidence = "verified-live";
       }
     }
   );
@@ -211,10 +260,11 @@ async function verifyGitHubToken(value: string, ctx: VerifyContext): Promise<Ver
   );
   if (res.status === 200) {
     const scopes = res.headers.get("x-oauth-scopes") ?? "unknown";
-    return { verified: true, detail: `Active GitHub token. Scopes: ${scopes}` };
+    return live(`Active GitHub token. Scopes: ${scopes}`);
   }
-  if (res.status === 401) return { verified: false, detail: "GitHub token is invalid or already revoked." };
-  return { verified: false, detail: `GitHub responded ${res.status}; treating as unverified.` };
+  if (res.status === 401) return dead("GitHub token is invalid or already revoked.");
+  // GitHub also answers 403 for secondary rate limiting, so it proves nothing.
+  return fromStatus("GitHub", res.status);
 }
 
 async function verifySlackToken(value: string, ctx: VerifyContext): Promise<VerificationResult> {
@@ -224,9 +274,19 @@ async function verifySlackToken(value: string, ctx: VerifyContext): Promise<Veri
   );
   const body = (await res.json()) as { ok: boolean; team?: string; error?: string };
   if (body.ok) {
-    return { verified: true, detail: `Active Slack token for workspace "${body.team}".` };
+    return live(`Active Slack token for workspace "${body.team}".`);
   }
-  return { verified: false, detail: `Slack reports token invalid: ${body.error ?? "unknown"}.` };
+  // Slack reports transport problems through the same ok:false shape as a dead
+  // token, so only the errors that actually mean "this token is finished" count.
+  const error = body.error ?? "unknown";
+  const REVOKED = ["invalid_auth", "account_inactive", "token_revoked", "token_expired", "not_authed"];
+  if (REVOKED.includes(error)) {
+    return dead(`Slack reports token invalid: ${error}.`);
+  }
+  return unknown(
+    "provider-unavailable",
+    `Slack could not complete the check (${error}). Liveness could not be determined; retry later.`
+  );
 }
 
 async function verifyStripeKey(value: string, ctx: VerifyContext): Promise<VerificationResult> {
@@ -239,10 +299,10 @@ async function verifyStripeKey(value: string, ctx: VerifyContext): Promise<Verif
   );
   if (res.status === 200) {
     const isLive = value.startsWith("sk_live_") || value.startsWith("rk_live_");
-    return { verified: true, detail: `Active Stripe key (${isLive ? "LIVE mode" : "test mode"}).` };
+    return live(`Active Stripe key (${isLive ? "LIVE mode" : "test mode"}).`);
   }
-  if (res.status === 401) return { verified: false, detail: "Stripe key is invalid or revoked." };
-  return { verified: false, detail: `Stripe responded ${res.status}; treating as unverified.` };
+  if (res.status === 401) return dead("Stripe key is invalid or revoked.");
+  return fromStatus("Stripe", res.status);
 }
 
 async function verifyGoogleApiKey(value: string, ctx: VerifyContext): Promise<VerificationResult> {
@@ -251,12 +311,12 @@ async function verifyGoogleApiKey(value: string, ctx: VerifyContext): Promise<Ve
     `https://www.googleapis.com/discovery/v1/apis?key=${encodeURIComponent(value)}`,
     requestInit(ctx)
   );
-  if (res.status === 200) return { verified: true, detail: "Active Google API key." };
+  if (res.status === 200) return live("Active Google API key.");
   const body = await res.text();
   if (body.includes("API_KEY_INVALID")) {
-    return { verified: false, detail: "Google reports this API key is invalid." };
+    return dead("Google reports this API key is invalid.");
   }
-  return { verified: false, detail: `Google responded ${res.status}; treating as unverified.` };
+  return fromStatus("Google", res.status);
 }
 
 /**
@@ -273,8 +333,11 @@ async function verifyAwsAccessKey(
     /(?:aws_secret_access_key|aws_secret)\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?/i
   );
   if (!secretMatch) {
-    // Can't verify without the paired secret; caller should keep this as format-match.
-    return null;
+    return unknown(
+      "missing-pair",
+      "No AWS secret access key found alongside this access key ID, and AWS cannot be " +
+        "asked about one without the other. Liveness could not be determined."
+    );
   }
   const secretAccessKey = secretMatch[1];
 
@@ -284,12 +347,16 @@ async function verifyAwsAccessKey(
     const { STSClient, GetCallerIdentityCommand } = await import("@aws-sdk/client-sts");
     const client = new STSClient({ region: "us-east-1", credentials: { accessKeyId, secretAccessKey } });
     const identity = await client.send(new GetCallerIdentityCommand({}));
-    return { verified: true, detail: `Active AWS credentials. Account: ${identity.Account}, ARN: ${identity.Arn}` };
+    return live(`Active AWS credentials. Account: ${identity.Account}, ARN: ${identity.Arn}`);
   } catch (err: any) {
     if (err?.name === "InvalidClientTokenId" || err?.name === "SignatureDoesNotMatch") {
-      return { verified: false, detail: "AWS reports these credentials are invalid or revoked." };
+      return dead("AWS reports these credentials are invalid or revoked.");
     }
-    return { verified: false, detail: "Could not verify AWS credentials; treating as unverified." };
+    return unknown(
+      "provider-unavailable",
+      `AWS could not complete the check (${err?.name ?? "unknown error"}). ` +
+        "Liveness could not be determined."
+    );
   }
 }
 
@@ -310,12 +377,12 @@ async function verifyByStatus(
   const res = await ctx.fetchImpl(url, requestInit(ctx, init));
   if (res.status === 200) {
     const detail = liveDetail ? await liveDetail(res) : `Active ${provider} credential.`;
-    return { verified: true, detail };
+    return live(detail);
   }
-  if (res.status === 401 || res.status === 403) {
-    return { verified: false, detail: `${provider} reports this credential is invalid or revoked.` };
+  if (res.status === 401) {
+    return dead(`${provider} reports this credential is invalid or revoked.`);
   }
-  return { verified: false, detail: `${provider} responded ${res.status}; treating as unverified.` };
+  return fromStatus(provider, res.status);
 }
 
 async function verifyGitLabToken(value: string, ctx: VerifyContext): Promise<VerificationResult> {
@@ -432,10 +499,10 @@ async function verifyCloudflareToken(value: string, ctx: VerifyContext): Promise
     result?: { status?: string };
   };
   if (res.status === 200 && body.success && body.result?.status === "active") {
-    return { verified: true, detail: "Active Cloudflare API token." };
+    return live("Active Cloudflare API token.");
   }
-  if (res.status === 401 || res.status === 403) {
-    return { verified: false, detail: "Cloudflare reports this token is invalid or revoked." };
+  if (res.status === 401) {
+    return dead("Cloudflare reports this token is invalid or revoked.");
   }
-  return { verified: false, detail: `Cloudflare responded ${res.status}; treating as unverified.` };
+  return fromStatus("Cloudflare", res.status);
 }

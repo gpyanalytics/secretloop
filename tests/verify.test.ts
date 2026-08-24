@@ -74,15 +74,15 @@ async function main() {
       fetchImpl: mockFetch({ status: 200, headers: { "x-oauth-scopes": "repo, read:org" } }),
     });
     assert.ok(result);
-    assert.strictEqual(result!.verified, true);
+    assert.strictEqual(result!.status, "live");
     assert.match(result!.detail, /repo, read:org/);
   });
 
-  await test("GitHub: 401 response marks token invalid, not verified", async () => {
+  await test("GitHub: 401 response marks the token dead", async () => {
     const finding = makeFinding("github-token", "ghp_fake");
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 401 }) });
     assert.ok(result);
-    assert.strictEqual(result!.verified, false);
+    assert.strictEqual(result!.status, "dead");
   });
 
   await test("Slack: ok:true response marks token verified with team name", async () => {
@@ -92,7 +92,7 @@ async function main() {
       fetchImpl: mockFetch({ status: 200, jsonBody: { ok: true, team: "Acme Corp" } }),
     });
     assert.ok(result);
-    assert.strictEqual(result!.verified, true);
+    assert.strictEqual(result!.status, "live");
     assert.match(result!.detail, /Acme Corp/);
   });
 
@@ -103,7 +103,7 @@ async function main() {
       fetchImpl: mockFetch({ status: 200, jsonBody: { ok: false, error: "invalid_auth" } }),
     });
     assert.ok(result);
-    assert.strictEqual(result!.verified, false);
+    assert.strictEqual(result!.status, "dead");
     assert.match(result!.detail, /invalid_auth/);
   });
 
@@ -111,7 +111,7 @@ async function main() {
     const finding = makeFinding("stripe-secret-key", "sk_live_fake");
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 200 }) });
     assert.ok(result);
-    assert.strictEqual(result!.verified, true);
+    assert.strictEqual(result!.status, "live");
     assert.match(result!.detail, /LIVE mode/);
   });
 
@@ -119,22 +119,22 @@ async function main() {
     const finding = makeFinding("stripe-secret-key", "sk_test_fake");
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 200 }) });
     assert.ok(result);
-    assert.strictEqual(result!.verified, true);
+    assert.strictEqual(result!.status, "live");
     assert.match(result!.detail, /test mode/);
   });
 
-  await test("Stripe: 401 means key is invalid", async () => {
+  await test("Stripe: 401 means the key is dead", async () => {
     const finding = makeFinding("stripe-secret-key", "sk_live_fake");
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 401 }) });
     assert.ok(result);
-    assert.strictEqual(result!.verified, false);
+    assert.strictEqual(result!.status, "dead");
   });
 
   await test("Google: 200 means API key is active", async () => {
     const finding = makeFinding("google-api-key", "AIzaFake");
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 200 }) });
     assert.ok(result);
-    assert.strictEqual(result!.verified, true);
+    assert.strictEqual(result!.status, "live");
   });
 
   await test("Google: API_KEY_INVALID body means key is not verified", async () => {
@@ -144,16 +144,18 @@ async function main() {
       fetchImpl: mockFetch({ status: 400, textBody: '{"error": {"status": "API_KEY_INVALID"}}' }),
     });
     assert.ok(result);
-    assert.strictEqual(result!.verified, false);
+    assert.strictEqual(result!.status, "dead");
   });
 
-  await test("network error during verification returns null (unknown), not false", async () => {
+  await test("network error is unknown/network, never dead", async () => {
     const finding = makeFinding("github-token", "ghp_fake");
     const throwingFetch = (async () => {
       throw new Error("network unreachable");
     }) as unknown as typeof fetch;
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: throwingFetch });
-    assert.strictEqual(result, null, "network failure must not be reported as a disproven secret");
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown", "a network failure disproves nothing");
+    assert.strictEqual(result!.reason, "network", "an operator needs to know this is an infra fix");
   });
 
   await test("unverifiable rule id returns null without calling fetch", async () => {
@@ -166,6 +168,132 @@ async function main() {
     const result = await verifyFinding(finding, { fullText: "", fetchImpl: spyFetch });
     assert.strictEqual(result, null);
     assert.strictEqual(called, false, "fetch should never be called for a non-verifiable rule");
+  });
+
+  console.log("\nverify.ts — 403 is not a revocation");
+
+  await test("OpenAI 403 is unknown, not dead", async () => {
+    // A live key lacking model-list scope, a key in an unverified org, and a
+    // revoked key all return 403. Reading that as "revoked" hands someone the
+    // exact sentence they use to decide not to rotate a live credential.
+    const result = await verifyFinding(makeFinding("openai-api-key", "sk-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 403 }),
+    });
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown");
+    assert.strictEqual(result!.reason, "provider-refused");
+  });
+
+  await test("no 403 detail claims the credential is invalid or revoked", async () => {
+    for (const ruleId of ["gitlab-pat", "openai-api-key", "huggingface-token", "npm-token",
+                          "digitalocean-token", "sendgrid-api-key", "notion-token"]) {
+      const result = await verifyFinding(makeFinding(ruleId, "fake-value"), {
+        fullText: "",
+        fetchImpl: mockFetch({ status: 403 }),
+      });
+      assert.ok(result, `${ruleId} returned no result`);
+      assert.strictEqual(result!.status, "unknown", `${ruleId} must not resolve a 403`);
+      assert.doesNotMatch(
+        result!.detail,
+        /invalid or revoked/i,
+        `${ruleId}: a 403 detail must not read as a revocation`
+      );
+      assert.match(result!.detail, /could not|cannot|unable/i, `${ruleId}: say liveness is undetermined`);
+    }
+  });
+
+  await test("401 still reads as a revocation, and still means dead", async () => {
+    const result = await verifyFinding(makeFinding("openai-api-key", "sk-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 401 }),
+    });
+    assert.ok(result);
+    assert.strictEqual(result!.status, "dead");
+    assert.match(result!.detail, /invalid or revoked/i);
+  });
+
+  await test("a rate-limited provider is unknown/provider-unavailable", async () => {
+    // Retrying later fixes this; going to look at the credential does not.
+    const result = await verifyFinding(makeFinding("openai-api-key", "sk-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 429 }),
+    });
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown");
+    assert.strictEqual(result!.reason, "provider-unavailable");
+  });
+
+  await test("a 5xx from the provider is unknown/provider-unavailable", async () => {
+    const result = await verifyFinding(makeFinding("notion-token", "secret_fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 503 }),
+    });
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown");
+    assert.strictEqual(result!.reason, "provider-unavailable");
+  });
+
+  await test("GitHub 403 is unknown, since it also means rate-limited", async () => {
+    const result = await verifyFinding(makeFinding("github-token", "ghp_fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 403 }),
+    });
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown");
+    assert.strictEqual(result!.reason, "provider-refused");
+  });
+
+  await test("Cloudflare 403 is unknown; 401 is dead", async () => {
+    const refused = await verifyFinding(makeFinding("cloudflare-api-token", "cf-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 403, jsonBody: {} }),
+    });
+    assert.ok(refused);
+    assert.strictEqual(refused!.status, "unknown");
+    const dead = await verifyFinding(makeFinding("cloudflare-api-token", "cf-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 401, jsonBody: {} }),
+    });
+    assert.ok(dead);
+    assert.strictEqual(dead!.status, "dead");
+  });
+
+  await test("Slack distinguishes a revoked token from a rate-limited one", async () => {
+    const dead = await verifyFinding(makeFinding("slack-token", "xoxb-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 200, jsonBody: { ok: false, error: "token_revoked" } }),
+    });
+    assert.ok(dead);
+    assert.strictEqual(dead!.status, "dead");
+
+    const unknown = await verifyFinding(makeFinding("slack-token", "xoxb-fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 200, jsonBody: { ok: false, error: "ratelimited" } }),
+    });
+    assert.ok(unknown);
+    assert.strictEqual(unknown!.status, "unknown", "ratelimited says nothing about the token");
+    assert.strictEqual(unknown!.reason, "provider-unavailable");
+  });
+
+  await test("Google: a non-200 that is not API_KEY_INVALID is unknown", async () => {
+    const result = await verifyFinding(makeFinding("google-api-key", "AIzaFake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 500, textBody: "upstream boom" }),
+    });
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown");
+  });
+
+  await test("an AWS key with no secret key beside it is unknown/missing-pair", async () => {
+    // Nothing an operator can fix by retrying, and nothing to go look at either.
+    const result = await verifyFinding(makeFinding("aws-access-key", "AKIA2Q7RZDXK4LM9PBWT"), {
+      fullText: "no secret key anywhere in this file",
+      fetchImpl: mockFetch({ status: 200 }),
+    });
+    assert.ok(result, "an unpairable AWS key is a result, not a silent null");
+    assert.strictEqual(result!.status, "unknown");
+    assert.strictEqual(result!.reason, "missing-pair");
   });
 
   console.log("\nverify.ts — timeouts");
@@ -202,7 +330,9 @@ async function main() {
       fetchImpl: hangingFetch,
       timeoutMs: 5,
     });
-    assert.strictEqual(result, null, "a timed-out check is unknown, never disproven");
+    assert.ok(result);
+    assert.strictEqual(result!.status, "unknown", "a timed-out check is unknown, never disproven");
+    assert.strictEqual(result!.reason, "network");
   });
 
   console.log("\nverify.ts — result cache");
@@ -278,7 +408,7 @@ async function main() {
     const findings = Array.from({ length: 20 }, (_, i) => makeFinding("github-token", `ghp_${i}`));
     await verifyFindings(findings, { fullText: "", fetchImpl: slowFetch }, { concurrency: 5 });
     assert.ok(peak <= 5, `expected at most 5 concurrent requests, saw ${peak}`);
-    assert.strictEqual(findings.filter((f) => f.verified === true).length, 20, "all still verified");
+    assert.strictEqual(findings.filter((f) => f.verifyStatus === "live").length, 20, "all still verified");
   });
 
   await test("verifyFindings skips rules that have no verifier", async () => {
@@ -332,7 +462,7 @@ async function main() {
   await test("verifyFindings still accepts a single shared context", async () => {
     const findings = [makeFinding("github-token", "ghp_x")];
     await verifyFindings(findings, { fullText: "shared", fetchImpl: mockFetch({ status: 200 }) });
-    assert.strictEqual(findings[0].verified, true);
+    assert.strictEqual(findings[0].verifyStatus, "live");
   });
 
   console.log("\nverify.ts — provider names");
