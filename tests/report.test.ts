@@ -114,6 +114,41 @@ test("empty text report is branded SecretLoop", () => {
   assert.ok(render([], "text", opts).startsWith("SecretLoop:"));
 });
 
+suite("\nreport.ts — attribution");
+
+test("each finding renders its own value, location and fingerprint", () => {
+  // The one property this tool's output cannot get wrong. Rendering one
+  // credential's value against another finding would send someone to rotate the
+  // wrong key while the real one stays live.
+  const out = render(
+    [
+      finding({
+        ruleId: "github-token",
+        value: "ghp_AAAAAAAAAAAAAAAAAAAA",
+        file: "src/gh.ts",
+        line: 11,
+        fingerprint: "src/gh.ts:github-token:1111111111111111",
+      }),
+      finding({
+        ruleId: "npm-token",
+        value: "npm_BBBBBBBBBBBBBBBBBBBB",
+        file: "src/pub.ts",
+        line: 22,
+        fingerprint: "src/pub.ts:npm-token:2222222222222222",
+      }),
+    ],
+    "text",
+    { redact: false, root: "/repo" }
+  );
+  const gh = out.slice(out.indexOf("github-token"), out.indexOf("npm-token"));
+  const npm = out.slice(out.indexOf("npm-token"));
+  assert.ok(gh.includes("ghp_AAAAAAAAAAAAAAAAAAAA"), "the GitHub block must carry the GitHub value");
+  assert.ok(!gh.includes("npm_BBBBBBBBBBBBBBBBBBBB"), "and must not carry the npm one");
+  assert.ok(gh.includes("src/gh.ts:11") && gh.includes("1111111111111111"));
+  assert.ok(npm.includes("npm_BBBBBBBBBBBBBBBBBBBB") && !npm.includes("ghp_AAAAAAAAAAAAAAAAAAAA"));
+  assert.ok(npm.includes("src/pub.ts:22") && npm.includes("2222222222222222"));
+});
+
 suite("\nreport.ts — liveness in JSON");
 
 test("json reports the liveness tri-state, not a boolean", () => {
