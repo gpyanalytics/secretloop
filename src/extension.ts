@@ -19,7 +19,7 @@ import {
   MigrationOutcome,
 } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
-import { setting, SETTINGS_NAMESPACE } from "./settings";
+import { setting, resolveSetting, describeOrigin, SETTINGS_NAMESPACE } from "./settings";
 
 
 const diagnosticCollection = vscode.languages.createDiagnosticCollection("secretloop");
@@ -190,7 +190,8 @@ async function scanDocument(document: vscode.TextDocument) {
   if (document.uri.scheme !== "file") return;
 
   const threshold = setting<number>("entropyThreshold", 4.3);
-  const verificationEnabled = setting<boolean>("enableLiveVerification", false);
+  const verification = resolveSetting<boolean>("enableLiveVerification", false);
+  const verificationEnabled = verification.value;
 
   const config = workspaceConfig(document, threshold);
   const relPath = vscode.workspace.asRelativePath(document.uri, false);
@@ -203,11 +204,28 @@ async function scanDocument(document: vscode.TextDocument) {
     return;
   }
 
+  // Which branch was taken, and on whose authority. Without the origin, an
+  // inherited user setting looks exactly like the shipped default.
+  log(
+    `SecretLoop: live verification is on (${describeOrigin("enableLiveVerification", verification.origin)}); ` +
+      `checking ${findings.filter((f) => isVerifiable(f.ruleId)).length} of ${findings.length} finding(s) in ${relPath}.`
+  );
+
   // Verification is async and network-bound; render initial diagnostics
   // immediately above, then upgrade confidence in place as results land so
   // the editor never blocks on network calls.
   const fullText = document.getText();
-  await verifyFindings(findings, { fullText, fetchImpl: fetch }, { cache: verificationCache });
+  const sent: Finding[] = [];
+  await verifyFindings(
+    findings,
+    { fullText, fetchImpl: fetch },
+    { cache: verificationCache, onOutbound: (f) => sent.push(f) }
+  );
+
+  if (sent.length > 0) {
+    const providers = [...new Set(sent.map((f) => verificationProvider(f.ruleId) ?? f.ruleId))].sort();
+    log(`SecretLoop: sent ${sent.length} credential(s) to ${providers.join(", ")} from ${relPath}.`);
+  }
 
   // Only re-render if this document is still the latest scan for its URI
   // (guards against stale async results from rapid edits).
@@ -279,7 +297,7 @@ async function offerVerification(document: vscode.TextDocument, findings: Findin
   });
 
   if (!gate.show) {
-    log(`SecretLoop: verification prompt not offered (${gate.reason}).`);
+    log(`SecretLoop: live verification is off; prompt not offered (${gate.reason}).`);
     return;
   }
   const candidate = { ruleId: gate.ruleId, description: gate.description };

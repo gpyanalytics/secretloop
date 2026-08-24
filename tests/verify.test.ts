@@ -463,4 +463,40 @@ test("provider names are the ones a user would recognise", async () => {
   assert.strictEqual(verificationProvider("huggingface-token"), "Hugging Face");
 });
 
+suite("\nverify.ts — recording outbound calls");
+
+test("onOutbound fires once per credential that actually reaches a provider", async () => {
+  // The opt-in work was entirely about outbound calls carrying someone's
+  // credential, and nothing recorded that they happened.
+  const sent: string[] = [];
+  const findings = [makeFinding("github-token", "ghp_a"), makeFinding("slack-token", "xoxb-b")];
+  await verifyFindings(
+    findings,
+    { fullText: "", fetchImpl: mockFetch({ status: 200, jsonBody: { ok: true } }) },
+    { onOutbound: (f) => sent.push(f.ruleId) }
+  );
+  assert.deepStrictEqual(sent.sort(), ["github-token", "slack-token"]);
+});
+
+test("a cache hit is not an outbound call", async () => {
+  // Otherwise the log would claim a credential was sent when it never left.
+  const sent: string[] = [];
+  const cache = new VerificationCache();
+  const context = { fullText: "", fetchImpl: mockFetch({ status: 200 }) };
+  const opts = { cache, onOutbound: (f: Finding) => sent.push(f.ruleId) };
+  await verifyFindings([makeFinding("github-token", "ghp_same")], context, opts);
+  await verifyFindings([makeFinding("github-token", "ghp_same")], context, opts);
+  assert.deepStrictEqual(sent, ["github-token"], "the second scan sent nothing");
+});
+
+test("a rule with no verifier is never counted as outbound", async () => {
+  const sent: string[] = [];
+  await verifyFindings(
+    [makeFinding("private-key-block", "-----BEGIN...-----")],
+    { fullText: "", fetchImpl: mockFetch({ status: 200 }) },
+    { onOutbound: (f) => sent.push(f.ruleId) }
+  );
+  assert.deepStrictEqual(sent, []);
+});
+
 finish();

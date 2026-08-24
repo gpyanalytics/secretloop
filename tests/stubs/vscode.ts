@@ -134,7 +134,41 @@ export class WorkspaceEdit {
   }
 }
 
+/** Configuration state a test can set up, mirroring inspect()'s scopes. */
+export interface StubConfigEntry {
+  defaultValue?: unknown;
+  globalValue?: unknown;
+  workspaceValue?: unknown;
+  workspaceFolderValue?: unknown;
+}
+
+const configuration = new Map<string, StubConfigEntry>();
+
+export function setConfiguration(namespace: string, key: string, entry: StubConfigEntry): void {
+  configuration.set(`${namespace}.${key}`, entry);
+}
+
+export function resetConfiguration(): void {
+  configuration.clear();
+}
+
 export const workspace = {
+  getConfiguration: (namespace: string) => ({
+    get: <T>(key: string, fallback?: T): T | undefined => {
+      const e = configuration.get(`${namespace}.${key}`);
+      const v =
+        e?.workspaceFolderValue ?? e?.workspaceValue ?? e?.globalValue ?? e?.defaultValue;
+      return (v === undefined ? fallback : v) as T | undefined;
+    },
+    inspect: <T>(key: string) => {
+      const e = configuration.get(`${namespace}.${key}`);
+      return e === undefined ? undefined : { key: `${namespace}.${key}`, ...(e as object) };
+    },
+    has: (key: string) => configuration.has(`${namespace}.${key}`),
+    update: async (key: string, value: unknown, target?: unknown) => {
+      record("configuration.update", `${namespace}.${key}`, value, target);
+    },
+  }),
   applyEdit: async (edit: WorkspaceEdit): Promise<boolean> => {
     record("workspace.applyEdit", edit);
     return true;

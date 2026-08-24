@@ -8,40 +8,77 @@ export const SETTINGS_NAMESPACE = "secretloop";
  */
 export const LEGACY_SETTINGS_NAMESPACE = "secretguard";
 
-/**
- * Reads a setting under `secretloop.*`, falling back to the pre-rebrand
- * `secretguard.*` key when the user has not explicitly set the new one.
- *
- * VS Code offers no built-in aliasing for settings, so without this every
- * existing install would silently revert to defaults on upgrade — someone who
- * lowered their entropy threshold or disabled outbound verification would have
- * that quietly undone, which for a security tool means either a flood of new
- * findings or unexpected network calls.
- *
- * Only *explicitly set* values are considered on either namespace; a package
- * default never shadows a real user value on the other one.
- */
-export function setting<T>(key: string, fallback: T): T {
-  const explicit = explicitValue<T>(SETTINGS_NAMESPACE, key);
-  if (explicit !== undefined) return explicit;
+/** The scopes VS Code lets a user set a value in, narrowest first. */
+export type SettingScope = "workspace folder" | "workspace" | "user";
 
-  const legacy = explicitValue<T>(LEGACY_SETTINGS_NAMESPACE, key);
-  if (legacy !== undefined) return legacy;
+export type SettingOrigin =
+  | { kind: "explicit"; namespace: string; scope: SettingScope }
+  | { kind: "default" };
 
-  return vscode.workspace.getConfiguration(SETTINGS_NAMESPACE).get<T>(key, fallback);
+export interface ResolvedSetting<T> {
+  value: T;
+  origin: SettingOrigin;
 }
 
-function explicitValue<T>(namespace: string, key: string): T | undefined {
+function explicitFrom<T>(
+  namespace: string,
+  key: string
+): { value: T; scope: SettingScope } | undefined {
   const inspected = vscode.workspace.getConfiguration(namespace).inspect<T>(key);
-  return (
-    inspected?.workspaceFolderValue ?? inspected?.workspaceValue ?? inspected?.globalValue
-  );
+  if (!inspected) return undefined;
+  // Narrowest scope wins, and an explicit `false` is a value — hence the
+  // undefined checks rather than truthiness.
+  if (inspected.workspaceFolderValue !== undefined) {
+    return { value: inspected.workspaceFolderValue, scope: "workspace folder" };
+  }
+  if (inspected.workspaceValue !== undefined) {
+    return { value: inspected.workspaceValue, scope: "workspace" };
+  }
+  if (inspected.globalValue !== undefined) {
+    return { value: inspected.globalValue, scope: "user" };
+  }
+  return undefined;
+}
+
+/**
+ * A setting's value together with where it came from.
+ *
+ * Reporting only the value is what made a leftover user setting
+ * indistinguishable from a package default, and cost three rounds of debugging
+ * to find: flipping enableLiveVerification's default to false changed nothing
+ * for a profile that already had an explicit true, and nothing said so.
+ *
+ * Falls back to the pre-rebrand `secretguard.*` namespace, since VS Code offers
+ * no built-in aliasing; without it an upgrade would silently revert an existing
+ * install to defaults. Only *explicitly set* values are considered on either
+ * namespace, so a package default never shadows a real user value on the other.
+ */
+export function resolveSetting<T>(key: string, fallback: T): ResolvedSetting<T> {
+  for (const namespace of [SETTINGS_NAMESPACE, LEGACY_SETTINGS_NAMESPACE]) {
+    const found = explicitFrom<T>(namespace, key);
+    if (found) {
+      return { value: found.value, origin: { kind: "explicit", namespace, scope: found.scope } };
+    }
+  }
+  return {
+    value: vscode.workspace.getConfiguration(SETTINGS_NAMESPACE).get<T>(key, fallback),
+    origin: { kind: "default" },
+  };
+}
+
+export function setting<T>(key: string, fallback: T): T {
+  return resolveSetting(key, fallback).value;
+}
+
+/** Where a value came from, phrased for a log line. */
+export function describeOrigin(key: string, origin: SettingOrigin): string {
+  return origin.kind === "explicit"
+    ? `${origin.scope} setting ${origin.namespace}.${key}`
+    : `package default for ${SETTINGS_NAMESPACE}.${key}`;
 }
 
 /** True when a value is set only under the deprecated `secretguard.*` namespace. */
 export function usesLegacySetting(key: string): boolean {
-  return (
-    explicitValue(SETTINGS_NAMESPACE, key) === undefined &&
-    explicitValue(LEGACY_SETTINGS_NAMESPACE, key) !== undefined
-  );
+  const origin = resolveSetting<unknown>(key, undefined).origin;
+  return origin.kind === "explicit" && origin.namespace === LEGACY_SETTINGS_NAMESPACE;
 }

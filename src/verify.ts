@@ -181,11 +181,17 @@ export class VerificationCache {
     private readonly now: () => number = Date.now
   ) {}
 
-  async verify(finding: Finding, context: VerifyContext): Promise<VerificationResult | null> {
+  async verify(
+    finding: Finding,
+    context: VerifyContext,
+    onMiss?: (finding: Finding) => void
+  ): Promise<VerificationResult | null> {
     const key = this.key(finding);
     const hit = this.entries.get(key);
     if (hit && hit.expiresAt > this.now()) return hit.result;
 
+    // Only a miss reaches the provider, so only a miss is an outbound call.
+    onMiss?.(finding);
     const result = await verifyFinding(finding, context);
     this.entries.set(key, { result, expiresAt: this.now() + this.ttlMs });
     return result;
@@ -205,6 +211,15 @@ export interface VerifyFindingsOptions {
   /** Reuse outcomes across scans. Omit for a one-shot pass. */
   cache?: VerificationCache;
   concurrency?: number;
+  /**
+   * Called once per finding whose credential actually leaves this machine.
+   *
+   * Verification is the one thing here that sends a user's credential to a
+   * third party, and nothing recorded that it had happened — a dev host spent a
+   * whole session calling api.github.com with a fixture token unnoticed. Cache
+   * hits do not fire it, so the record cannot overstate what was sent.
+   */
+  onOutbound?: (finding: Finding) => void;
 }
 
 /**
@@ -228,10 +243,13 @@ export async function verifyFindings(
   // scanning one document pass a plain context instead.
   const contextFor = typeof context === "function" ? context : () => context;
 
-  const { cache } = options;
+  const { cache, onOutbound } = options;
   const check = cache
-    ? (f: Finding) => cache.verify(f, contextFor(f))
-    : (f: Finding) => verifyFinding(f, contextFor(f));
+    ? (f: Finding) => cache.verify(f, contextFor(f), onOutbound)
+    : (f: Finding) => {
+        onOutbound?.(f);
+        return verifyFinding(f, contextFor(f));
+      };
 
   let cursor = 0;
   const workers = Array.from(
