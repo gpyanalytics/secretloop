@@ -25,7 +25,22 @@ const DOC_SAMPLE = [
   /^(?:x{6,}|X{6,}|0{6,}|1{6,}|a{6,}|A{6,})$/,
   /YOUR[_-]?(?:API|SECRET|ACCESS|PRIVATE)?[_-]?(?:KEY|TOKEN|SECRET)/i,
   /\b(?:sample|dummy|placeholder|redacted|changeme|notreal|fakekey)\b/i,
+  // Stripe's published sample key. Unlike AWS's, its value carries no marker a
+  // pattern could catch, so it has to be listed literally. Shared rather than
+  // scoped to stripe-secret-key: the generic assignment rule matches the same
+  // span, so exempting one rule only changes which rule reports the sample.
+  /^(?:sk|rk)_(?:live|test)_4eC39HqLyjWDarjtT1zdp7dc$/,
 ];
+
+/**
+ * True for a value that is a published documentation sample rather than a
+ * credential. Exposed because the entropy pass needs it too: a sample dropped by
+ * every named rule still has the randomness of a real key, so without this it is
+ * simply reported one tier down instead of not at all.
+ */
+export function isDocumentationSample(value: string): boolean {
+  return DOC_SAMPLE.some((r) => r.test(value));
+}
 
 export const rules: SecretRule[] = [
   // ---------------------------------------------------------------- AWS

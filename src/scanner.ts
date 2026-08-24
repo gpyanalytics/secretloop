@@ -1,4 +1,4 @@
-import { rules, placeholderDenylist, SecretRule, Severity } from "./rules";
+import { rules, placeholderDenylist, isDocumentationSample, SecretRule, Severity } from "./rules";
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
 import { SecretLoopConfig, defaultConfig, fingerprint } from "./config";
 
@@ -124,6 +124,9 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   if (config.entropyPassEnabled && !excluded.has("generic-high-entropy")) {
     for (const hit of findHighEntropyStrings(text, config.entropyThreshold)) {
       if (isPlaceholder(hit.value)) continue;
+      // A published sample has the randomness of a real key, so the named rules
+      // dropping it only moves the report down a tier unless this does too.
+      if (isDocumentationSample(hit.value)) continue;
       if (allowValueRegexes.some((r) => r.test(hit.value))) continue;
       // Skip if this span overlaps a rule-based finding already reported.
       const overlaps = findings.some(

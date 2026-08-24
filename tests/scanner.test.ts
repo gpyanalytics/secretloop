@@ -4,6 +4,30 @@ import { test, suite, finish, assert } from "./harness";
 
 suite("scanner.ts");
 
+/**
+ * Stripe-shaped fixtures are assembled from a prefix and a body rather than
+ * written out whole.
+ *
+ * A complete sk_live_ string is indistinguishable from a live key to any
+ * scanner — GitHub's push protection blocked this file over exactly these
+ * fixtures — and that is the same argument SecretLoop makes about its own
+ * findings. Neither half matches the Stripe pattern alone; joined at run time
+ * they exercise the rule identically.
+ *
+ * Stripe's published sample below is the one value written in full, in a
+ * comment, because it is public by design and it is what the exemption is for.
+ */
+const stripeLive = (body: string) => `sk_live_${body}`;
+
+/** Not any published sample — an arbitrary body, so the rule must report it. */
+const UNKNOWN_KEY_BODY = "9QmZt4KpXvR2bNwL7cHdY3Fs";
+
+/** The sample's body. Joined with a prefix, this is the value being exempted. */
+const SAMPLE_BODY = "4eC39HqLyjWDarjtT1zdp7dc";
+
+/** One character off the sample, to prove the exemption is anchored to it. */
+const NEAR_SAMPLE_BODY = "4eC39HqLyjWDarjtT1zdp7dX";
+
 test("detects a GitHub token by format", () => {
   const findings = scanText('const token = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";', 4.3);
   const hit = findings.find((f) => f.ruleId === "github-token");
@@ -25,7 +49,26 @@ test("does NOT flag the AWS documentation sample key", () => {
 });
 
 test("detects a Stripe live secret key", () => {
-  const findings = scanText('stripe.apiKey = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"', 4.3);
+  const findings = scanText(`stripe.apiKey = "${stripeLive(UNKNOWN_KEY_BODY)}"`, 4.3);
+  assert.ok(findings.find((f) => f.ruleId === "stripe-secret-key"));
+});
+
+test("does NOT flag the Stripe documentation sample key", () => {
+  // sk_test_4eC39HqLyjWDarjtT1zdp7dc is Stripe's own published sample and
+  // appears in their docs, every quickstart and countless tutorials — the same
+  // category as AKIAIOSFODNN7EXAMPLE above.
+  for (const prefix of ["sk_test_", "sk_live_", "rk_test_", "rk_live_"]) {
+    const findings = scanText(`stripe.apiKey = "${prefix}${SAMPLE_BODY}"`, 4.3);
+    // Nothing at all, not merely no stripe-secret-key: the generic assignment
+    // rule matches the same span, so a rule-scoped exemption would only change
+    // which rule reported the sample.
+    assert.strictEqual(findings.length, 0, `${prefix} sample must not be reported by any rule`);
+  }
+});
+
+test("a key that merely resembles the Stripe sample is still flagged", () => {
+  // The exemption is for that exact value, not for anything starting sk_live_4.
+  const findings = scanText(`stripe.apiKey = "${stripeLive(NEAR_SAMPLE_BODY)}"`, 4.3);
   assert.ok(findings.find((f) => f.ruleId === "stripe-secret-key"));
 });
 
@@ -57,7 +100,7 @@ test("does not double-count overlapping rule + entropy matches", () => {
   // The entropy pass must not re-report a span a named rule already covered.
   // (Two *rules* may still both match one span — e.g. stripe-secret-key and the
   // generic assignment rule here — which is separate, intended behavior.)
-  const findings = scanText('stripe.apiKey = "sk_live_4eC39HqLyjWDarjtT1zdp7dc"', 3.0);
+  const findings = scanText(`stripe.apiKey = "${stripeLive(UNKNOWN_KEY_BODY)}"`, 3.0);
   assert.ok(findings.find((f) => f.ruleId === "stripe-secret-key"), "the format rule must fire");
   assert.strictEqual(
     findings.filter((f) => f.ruleId === "generic-high-entropy").length,
