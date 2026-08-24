@@ -19,7 +19,9 @@ tests/**
 # includes anything new by default.
 docs/**
 
-# Build configuration and repository tooling.
+# Build configuration and repository tooling. scripts/ holds the release gate
+# that packs and runs the npm tarball; it is never loaded by the extension.
+scripts/**
 tsconfig.json
 tsconfig.tests.json
 .npmignore

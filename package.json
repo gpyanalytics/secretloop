@@ -15,6 +15,9 @@
     "onStartupFinished"
   ],
   "main": "./out/extension.js",
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "contributes": {
     "commands": [
       {
@@ -107,7 +110,10 @@
     "publish:vsce": "vsce publish",
     "publish:ovsx": "ovsx publish",
     "bundle": "esbuild src/extension.ts src/cli.ts --bundle --outdir=out --external:vscode --format=cjs --platform=node --minify",
-    "vscode:prepublish": "npm run bundle"
+    "vscode:prepublish": "npm run bundle",
+    "prepack": "npm run bundle",
+    "smoke:tarball": "bash scripts/smoke-tarball.sh",
+    "prepublishOnly": "npm run smoke:tarball"
   },
   "devDependencies": {
     "@aws-sdk/client-iam": "^3.600.0",
