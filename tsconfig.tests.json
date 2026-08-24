@@ -1,0 +1,17 @@
+{
+  // Type-checks the test suite, which the main config deliberately excludes:
+  // src/ is compiled with rootDir "src", and tests live outside it.
+  //
+  // Wired into `npm test` because `ts-node --transpile-only` does not type-check
+  // at all. Test files with real type errors have twice passed a green run and
+  // been caught only by a manual tsc — call sites left on an old signature both
+  // times.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts", "tests/**/*.ts"],
+  "exclude": ["node_modules", ".vscode-test", "out"]
+}
