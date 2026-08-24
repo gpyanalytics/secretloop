@@ -143,9 +143,6 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   registerLegacyCommandAliases(context);
-
-
-  vscode.window.showInformationMessage("SecretLoop is active and watching for secrets.");
 }
 
 async function scanDocument(document: vscode.TextDocument) {
