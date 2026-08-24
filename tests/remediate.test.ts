@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
-import { setWorkspaceFolder } from "./stubs/vscode";
+import { setWorkspaceFolder, setApplyEditResult } from "./stubs/vscode";
 
 function finding(): Finding {
   return {
@@ -25,11 +25,23 @@ function finding(): Finding {
   };
 }
 
-/** The slice of TextDocument redactInPlace touches. */
-function document(): any {
+const TOKEN = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+
+/** Text in which finding()'s span, 14..54, really does hold the secret. */
+const SOURCE = `const token ="${TOKEN}";`;
+
+/**
+ * The slice of TextDocument the remediations touch.
+ *
+ * getText is part of it now: a finding carries offsets from the scan that
+ * produced it, and the only way to know they still mean anything is to look at
+ * the document they will be applied to.
+ */
+function document(text: string = SOURCE): any {
   return {
     uri: { fsPath: "/repo/src/app.ts", scheme: "file" },
     languageId: "typescript",
+    getText: () => text,
     positionAt: (offset: number) => ({ line: 0, character: offset }),
   };
 }
@@ -199,6 +211,103 @@ test("a folder that is not a git repo does not block extraction", async () => {
     setWorkspaceFolder(undefined);
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+suite("\nremediate.ts — an edit that did not happen is not a success");
+
+// A finding's offsets come from the scan that produced it. The document can
+// move underneath them: the 400ms scan debounce leaves a window where the
+// lightbulb still carries pre-edit offsets, and positionAt clamps rather than
+// throwing, so a stale span silently addresses the wrong characters.
+const SHIFTED = `// a line added above\n${SOURCE}`;
+
+test("redacting refuses when the span no longer holds the secret", async () => {
+  reset();
+  await redactInPlace(document(SHIFTED), finding());
+  assert.strictEqual(
+    called("workspace.applyEdit"),
+    false,
+    "a stale span addresses the wrong characters; nothing may be replaced"
+  );
+});
+
+test("a refused redaction does not report a redaction", async () => {
+  reset();
+  await redactInPlace(document(SHIFTED), finding());
+  const info = String(firstCall("window.showInformationMessage")?.[0] ?? "");
+  assert.doesNotMatch(info, /redacted/i, "the secret is still in the file");
+  const error = String(firstCall("window.showErrorMessage")?.[0] ?? "");
+  assert.match(error, /scan/i, "and the user is told to re-scan");
+});
+
+test("a stale span is refused before the clipboard is touched", async () => {
+  // Copy-then-redact copies first, so the secret would be on a syncing
+  // clipboard for a redaction that was never going to happen.
+  reset();
+  await redactInPlace(document(SHIFTED), finding(), { copyToClipboard: true });
+  assert.strictEqual(called("env.clipboard.writeText"), false);
+});
+
+test("an applyEdit that returns false is not reported as a redaction", async () => {
+  // VS Code declines an edit to a read-only file, and the return value is the
+  // only way to hear about it.
+  reset();
+  setApplyEditResult(false);
+  await redactInPlace(document(), finding());
+  const info = String(firstCall("window.showInformationMessage")?.[0] ?? "");
+  assert.doesNotMatch(info, /redacted/i);
+  assert.match(String(firstCall("window.showErrorMessage")?.[0] ?? ""), /not|could/i);
+});
+
+test("a failed copy-then-redact says the clipboard still holds the secret", async () => {
+  reset();
+  setApplyEditResult(false);
+  await redactInPlace(document(), finding(), { copyToClipboard: true });
+  assert.strictEqual(called("env.clipboard.writeText"), true, "the copy did happen");
+  assert.match(
+    String(firstCall("window.showErrorMessage")?.[0] ?? ""),
+    /clipboard/i,
+    "so the report must account for where the secret now is"
+  );
+});
+
+suite("\nremediate.ts — .env is written only once the source edit lands");
+
+test("a failed edit leaves nothing in .env", async () => {
+  // The old order wrote .env first, so a declined edit put the credential in a
+  // second file and announced "reference inserted".
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "seed.txt"), "x\n");
+    git("add", "seed.txt");
+    git("commit", "-qm", "seed");
+    reset();
+    setApplyEditResult(false);
+
+    await extractToEnv(document(), finding(), ".env");
+
+    const envPath = path.join(dir, ".env");
+    assert.ok(
+      !existsSync(envPath) || !readFileSync(envPath, "utf8").includes("ghp_"),
+      "a secret must not be duplicated into .env by an extraction that failed"
+    );
+    const info = String(firstCall("window.showInformationMessage")?.[0] ?? "");
+    assert.doesNotMatch(info, /moved to/i);
+  });
+});
+
+test("a stale span refuses extraction before any write", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "seed.txt"), "x\n");
+    git("add", "seed.txt");
+    git("commit", "-qm", "seed");
+    reset();
+
+    await extractToEnv(document(SHIFTED), finding(), ".env");
+
+    assert.strictEqual(called("workspace.applyEdit"), false);
+    assert.ok(!existsSync(path.join(dir, ".env")), "no .env is created");
+    assert.ok(!existsSync(path.join(dir, ".gitignore")), "and no .gitignore either");
+  });
 });
 
 finish();

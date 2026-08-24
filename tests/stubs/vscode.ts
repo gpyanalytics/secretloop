@@ -27,6 +27,20 @@ function record(api: string, ...args: unknown[]): void {
 export function reset(): void {
   calls.length = 0;
   outputLines.length = 0;
+  applyEditResult = true;
+}
+
+/**
+ * What workspace.applyEdit reports back.
+ *
+ * VS Code returns false for an edit it declined — a read-only file, or a
+ * document that moved under the edit. Defaults to true and is restored by
+ * reset(), so a test has to ask for the failure explicitly.
+ */
+let applyEditResult = true;
+
+export function setApplyEditResult(result: boolean): void {
+  applyEditResult = result;
 }
 
 /** True when the named API was called at least once. */
@@ -171,7 +185,7 @@ export const workspace = {
   }),
   applyEdit: async (edit: WorkspaceEdit): Promise<boolean> => {
     record("workspace.applyEdit", edit);
-    return true;
+    return applyEditResult;
   },
   get workspaceFolders() {
     return workspaceFolders;
