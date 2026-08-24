@@ -51,6 +51,13 @@ function makeFinding(ruleId: string, value: string): Finding {
 }
 
 async function main() {
+  // Fail-closed. An async file that never settles empties the event loop and
+  // Node exits 0, which the `npm test` && chain reads as a pass — that is how a
+  // hung verification test slipped through. The exit code starts non-zero and
+  // is only cleared once the summary below has actually printed, so a file that
+  // does not reach the end cannot report success.
+  process.exitCode = 1;
+
   console.log("verify.ts");
 
   await test("isVerifiable returns true only for supported rule ids", () => {
@@ -321,7 +328,7 @@ async function main() {
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);
-  if (failed > 0) process.exit(1);
+  process.exitCode = failed > 0 ? 1 : 0;
 }
 
 main();
