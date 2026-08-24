@@ -302,4 +302,34 @@ test("the text summary accounts for every finding", () => {
   assert.match(out, /1 dead/);
 });
 
+suite("\nreport.ts — merged rule ids");
+
+test("json carries the rules that yielded", () => {
+  const parsed = JSON.parse(
+    render([finding({ alsoMatched: ["generic-api-key-assignment"] })], "json", opts)
+  );
+  assert.deepStrictEqual(parsed.findings[0].alsoMatched, ["generic-api-key-assignment"]);
+});
+
+test("json reports null rather than omitting the field when nothing yielded", () => {
+  const parsed = JSON.parse(render([finding()], "json", opts));
+  assert.strictEqual(parsed.findings[0].alsoMatched, null);
+});
+
+test("sarif carries them in properties", () => {
+  const parsed = JSON.parse(
+    render([finding({ alsoMatched: ["generic-api-key-assignment"] })], "sarif", opts)
+  );
+  assert.deepStrictEqual(parsed.runs[0].results[0].properties.alsoMatched, [
+    "generic-api-key-assignment",
+  ]);
+});
+
+test("the text report stays quiet about them", () => {
+  // Corroboration is for a machine reading the output, not for someone
+  // triaging a list of secrets.
+  const out = render([finding({ alsoMatched: ["generic-api-key-assignment"] })], "text", opts);
+  assert.doesNotMatch(out, /alsoMatched|generic-api-key-assignment/);
+});
+
 finish();

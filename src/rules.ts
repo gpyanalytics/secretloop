@@ -25,6 +25,19 @@ export interface SecretRule {
    * alternation covers both.
    */
   fingerprintStrategy?: "value" | "context" | "keyword";
+  /**
+   * Matches by shape rather than by provider — `<keyword> = "<value>"` — so it
+   * overlaps other rules by construction. When it does, the named rule wins:
+   * that one identifies the provider, which is what unlocks verification,
+   * rotation and the provider-named consent prompt. A generic match knows only
+   * that something key-shaped was assigned.
+   *
+   * A flag rather than a per-rule specificity score: across the whole detection
+   * corpus every overlap involves this one rule and named rules never collide
+   * with each other, so scoring 103 rules would invent 102 numbers nobody could
+   * check to settle a conflict that only ever has one side.
+   */
+  generic?: boolean;
   severity: Severity;
 }
 
@@ -924,6 +937,7 @@ export const rules: SecretRule[] = [
   },
   {
     id: "generic-api-key-assignment",
+    generic: true,
     fingerprintStrategy: "keyword",
     description: "Generic API key / secret assignment",
     regex:
@@ -982,3 +996,6 @@ export const defaultExcludePaths = [
 ];
 
 export const rulesById = new Map(rules.map((r) => [r.id, r]));
+
+/** Rule ids that match by shape and therefore yield to a named rule on overlap. */
+export const genericRuleIds = new Set(rules.filter((r) => r.generic).map((r) => r.id));

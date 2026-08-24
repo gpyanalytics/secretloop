@@ -204,6 +204,8 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
         line: f.line,
         commit: f.commit ?? null,
         fingerprint: f.fingerprint ?? null,
+        // Rules that matched the same span and yielded to this one.
+        alsoMatched: f.alsoMatched ?? null,
         value: displayValue(f, options.redact),
       })),
     },
@@ -246,6 +248,7 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
           // Liveness lives here, not in partialFingerprints: that field is
           // alert identity, and anything unstable in it re-opens every alert.
           properties: {
+            alsoMatched: f.alsoMatched ?? null,
             verificationStatus: f.verifyStatus ?? "unchecked",
             verificationReason: f.verifyReason ?? null,
             verificationDetail: f.verifyDetail ?? null,

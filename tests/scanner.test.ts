@@ -123,6 +123,61 @@ test("does not flag ordinary low-entropy prose", () => {
   );
 });
 
+suite("\nscanner.ts — one secret, one finding");
+
+test("a named rule wins over the generic assignment rule", () => {
+  // Both matched the same span, so one secret produced two findings: two
+  // diagnostics on one range, two SARIF alerts, two baseline entries.
+  const findings = scanText('api_key = "hf_abcdefghijklmnopqrstuvwxyz0123456789ABCD"', 4.3);
+  assert.strictEqual(findings.length, 1, "one secret is one finding");
+  assert.strictEqual(findings[0].ruleId, "huggingface-token", "the rule that names the provider wins");
+});
+
+test("the losing rule is recorded, not discarded", () => {
+  // Two detectors agreeing is evidence. A silent drop leaves no way to tell
+  // merging from a rule that failed to fire.
+  const findings = scanText('api_key = "hf_abcdefghijklmnopqrstuvwxyz0123456789ABCD"', 4.3);
+  assert.deepStrictEqual(findings[0].alsoMatched, ["generic-api-key-assignment"]);
+});
+
+test("the generic rule survives alone when nothing named matches", () => {
+  const findings = scanText('api_key = "Jd9-Alpha-58kRyBnQ2"', 4.3);
+  assert.strictEqual(findings.length, 1);
+  assert.strictEqual(findings[0].ruleId, "generic-api-key-assignment");
+  assert.strictEqual(findings[0].alsoMatched, undefined, "nothing to record");
+});
+
+test("excluding the named rule leaves the generic finding intact", () => {
+  // Merging must not make a finding vanish that a user's config expected. An
+  // excluded rule never runs, so the generic one wins on its own.
+  const config = mergeConfig({ excludeRules: ["huggingface-token"] });
+  const findings = scanText('api_key = "hf_abcdefghijklmnopqrstuvwxyz0123456789ABCD"', { config });
+  assert.strictEqual(findings.length, 1);
+  assert.strictEqual(findings[0].ruleId, "generic-api-key-assignment");
+});
+
+test("a non-overlapping generic finding is untouched", () => {
+  const text = [
+    'api_key = "hf_abcdefghijklmnopqrstuvwxyz0123456789ABCD"',
+    'password = "Passw0rd-Delta-97xQ"',
+  ].join("\n");
+  const ids = scanText(text, 4.3).map((f) => f.ruleId).sort();
+  assert.deepStrictEqual(ids, ["generic-api-key-assignment", "huggingface-token"]);
+});
+
+test("merging does not change the surviving finding's fingerprint", () => {
+  // A baseline written before this change still matches after it: the survivor
+  // keeps path:ruleId:sha256(value), and merging alters none of the three.
+  const merged = scanText('api_key = "hf_abcdefghijklmnopqrstuvwxyz0123456789ABCD"', {
+    filePath: "src/app.ts",
+  })[0];
+  const alone = scanText('const t = "hf_abcdefghijklmnopqrstuvwxyz0123456789ABCD";', {
+    filePath: "src/app.ts",
+  })[0];
+  assert.strictEqual(merged.ruleId, alone.ruleId);
+  assert.strictEqual(merged.fingerprint, alone.fingerprint, "identity is unaffected by merging");
+});
+
 suite("\nscanner.ts — line numbers and identity");
 
 test("reports the correct 1-based line number", () => {

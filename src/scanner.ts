@@ -1,4 +1,11 @@
-import { rules, placeholderDenylist, isDocumentationSample, SecretRule, Severity } from "./rules";
+import {
+  rules,
+  placeholderDenylist,
+  isDocumentationSample,
+  genericRuleIds,
+  SecretRule,
+  Severity,
+} from "./rules";
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
 import { SecretLoopConfig, defaultConfig, createFingerprint, FingerprintStrategy } from "./config";
 
@@ -52,6 +59,13 @@ export interface Finding {
   file?: string;
   /** Commit SHA, when the finding came from a git history scan. */
   commit?: string;
+  /**
+   * Other rules that matched this same span and yielded to this one.
+   *
+   * Recorded rather than discarded: two detectors agreeing is evidence, and a
+   * silent drop leaves no way to tell merging from a rule that failed to fire.
+   */
+  alsoMatched?: string[];
   /** Stable identity for baselining. Present when `file` is known. */
   fingerprint?: string;
   /** How that identity was derived. See FingerprintStrategy. */
@@ -133,6 +147,10 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       );
     }
   }
+
+  const merged = mergeGenericMatches(findings);
+  findings.length = 0;
+  findings.push(...merged);
 
   if (config.entropyPassEnabled && !excluded.has("generic-high-entropy")) {
     for (const hit of findHighEntropyStrings(text, config.entropyThreshold)) {
@@ -345,6 +363,40 @@ function captureStart(m: IndexedMatch, value: string): number {
   if (captureIndices) return captureIndices[0];
   // `indexedRegex` guarantees `d`; this only covers a runtime that lacks it.
   return m.index + m[0].lastIndexOf(value);
+}
+
+/**
+ * Collapses a shape-matched finding into the named finding covering the same
+ * span, recording which rule yielded.
+ *
+ * Two rules matching one secret produced two diagnostics on one range, two
+ * SARIF alerts and two baseline entries. Only the generic rule ever yields —
+ * named rules that overlap each other are left alone, because that is a
+ * rule-design bug better fixed with an allowlist than buried under a tiebreak.
+ *
+ * The survivor keeps its own fingerprint, so a baseline written before this
+ * change still matches: identity is path:ruleId:value, none of which merging
+ * touches.
+ */
+function mergeGenericMatches(findings: Finding[]): Finding[] {
+  // Always a fresh array. Returning the same reference broke the caller, which
+  // empties `findings` before re-filling it from the result.
+  const generic = findings.filter((f) => genericRuleIds.has(f.ruleId));
+  if (generic.length === 0) return findings.slice();
+
+  const named = findings.filter((f) => !genericRuleIds.has(f.ruleId));
+  const absorbed = new Set<Finding>();
+
+  for (const shape of generic) {
+    for (const specific of named) {
+      if (shape.startIndex >= specific.endIndex || specific.startIndex >= shape.endIndex) continue;
+      const already = (specific.alsoMatched ??= []);
+      if (!already.includes(shape.ruleId)) already.push(shape.ruleId);
+      absorbed.add(shape);
+    }
+  }
+
+  return findings.filter((f) => !absorbed.has(f));
 }
 
 function buildFinding(input: {

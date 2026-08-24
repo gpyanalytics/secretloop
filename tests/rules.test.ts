@@ -77,4 +77,23 @@ test("no rule is pathologically slow on adversarial input", () => {
   }
 });
 
+test("no two named rules match the same span anywhere in the corpus", () => {
+  // Named-vs-named overlaps are deliberately left unmerged: a tiebreak would
+  // bury a rule-design bug that a red build surfaces. Today they are kept
+  // disjoint by rule-scoped allowlists and keyword prescreens.
+  const collisions: string[] = [];
+  for (const [ruleId, sample] of Object.entries(positiveSamples)) {
+    const found = scanText(sample, { filePath: `corpus/${ruleId}` });
+    for (let i = 0; i < found.length; i++) {
+      for (let j = i + 1; j < found.length; j++) {
+        const a = found[i];
+        const b = found[j];
+        if (a.startIndex >= b.endIndex || b.startIndex >= a.endIndex) continue;
+        collisions.push(`${ruleId}: ${a.ruleId} + ${b.ruleId}`);
+      }
+    }
+  }
+  assert.deepStrictEqual(collisions, [], "fix the overlap with an allowlist, do not add a tiebreak");
+});
+
 finish();
