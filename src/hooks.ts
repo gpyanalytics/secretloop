@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { isTracked, findGitDir } from "./walk";
-import { mkdirSync, copyFileSync, writeFileSync, existsSync } from "fs";
+import { mkdirSync, copyFileSync, writeFileSync, existsSync, renameSync, chmodSync } from "fs";
 
 const HOOK_MARKER = "# Installed by SecretLoop.";
 
@@ -53,28 +53,43 @@ export async function installPrecommitHook(
     // no existing hook
   }
 
+  const gitDirFsPath = gitDirPath(workspaceFolder.uri.fsPath);
+  const foreignPath = savedForeignHookPath(gitDirFsPath);
+  let chained = false;
+
   if (existing.length > 0 && !isOurHook(existing)) {
-    const choice = await vscode.window.showWarningMessage(
-      "A pre-commit hook already exists that wasn't installed by SecretLoop. Overwriting it will remove whatever it currently does.",
-      { modal: true },
-      "Append SecretLoop to it",
-      "Overwrite anyway"
-    );
-    if (choice === "Append SecretLoop to it") {
-      const appended = existing.trimEnd() + "\n\n" + hookBody() + "\n";
-      await vscode.workspace.fs.writeFile(hookPath, Buffer.from(appended, "utf8"));
-      await makeExecutable(hookPath);
-      vscode.window.showInformationMessage("SecretLoop: appended to existing pre-commit hook.");
+    // Appending was the old behaviour and it could not keep its promise: a
+    // foreign hook ending in `exit 0`, using `set -e`, or calling `exec` never
+    // reached the appended lines, and appending shell to a #!/usr/bin/env
+    // python3 hook produced a SyntaxError on every commit — destroying a working
+    // hook rather than merely failing to extend it.
+    if (existsSync(foreignPath)) {
+      // Something replaced our hook while a saved one was already held aside.
+      // Saving this one would overwrite the original, unrecoverably — and only a
+      // person can say which of the two they want.
+      vscode.window.showErrorMessage(
+        `SecretLoop: a hook is already saved at ${SAVED_FOREIGN_DISPLAY}, and the current ` +
+          `pre-commit hook is a different one. Installing now would discard one of them. ` +
+          `Keep whichever you want and remove the other, then install again.`
+      );
       return;
     }
-    if (choice !== "Overwrite anyway") return; // cancelled
+    mkdirSync(path.dirname(foreignPath), { recursive: true });
+    renameSync(hookPath.fsPath, foreignPath);
+    chmodSync(foreignPath, 0o755);
+    chained = true;
   }
 
-  installScannerCopy(gitDirPath(workspaceFolder.uri.fsPath), context.extensionPath, extensionVersion);
+  installScannerCopy(gitDirFsPath, context.extensionPath, extensionVersion);
   await vscode.workspace.fs.writeFile(hookPath, Buffer.from(hookBody() + "\n", "utf8"));
   await makeExecutable(hookPath);
   vscode.window.showInformationMessage(
-    "SecretLoop: pre-commit hook installed. Staged files will be scanned before every commit."
+    chained
+      ? `SecretLoop: pre-commit hook installed. Your existing hook was moved to ${SAVED_FOREIGN_DISPLAY} ` +
+          `and now runs first; if it passes, staged files are scanned. Uninstalling restores it.`
+      : existsSync(foreignPath)
+        ? `SecretLoop: pre-commit hook re-installed, still chaining to ${SAVED_FOREIGN_DISPLAY}.`
+        : "SecretLoop: pre-commit hook installed. Staged files will be scanned before every commit."
   );
   warnIfEnvFileTracked(workspaceFolder.uri.fsPath, envRelativePath);
 }
@@ -124,12 +139,36 @@ export async function uninstallPrecommitHook(): Promise<void> {
     return;
   }
 
+  // Restoring matters: this hook may have displaced one of theirs, and deleting
+  // ours would leave the repository with no pre-commit hook at all, having
+  // quietly eaten the original.
+  const foreignPath = savedForeignHookPath(gitDirPath(workspaceFolder.uri.fsPath));
+  if (existsSync(foreignPath)) {
+    renameSync(foreignPath, hookPath.fsPath);
+    chmodSync(hookPath.fsPath, 0o755);
+    vscode.window.showInformationMessage(
+      `SecretLoop: pre-commit hook removed, and your previous hook restored from ${SAVED_FOREIGN_DISPLAY}.`
+    );
+    return;
+  }
+
   await vscode.workspace.fs.delete(hookPath);
-  vscode.window.showInformationMessage("SecretLoop: pre-commit hook removed.");
+  vscode.window.showInformationMessage(
+    `SecretLoop: pre-commit hook removed. No saved hook was found at ${SAVED_FOREIGN_DISPLAY}, ` +
+      `so nothing was restored — a fresh clone is the usual reason, since .git is not cloned.`
+  );
 }
 
 /** Where the repository's own copy of the scanner lives, relative to its git dir. */
 const HOOK_SUPPORT_DIR = "secretloop";
+
+/** The hook we displaced, kept so uninstall can put it back. */
+const SAVED_FOREIGN_HOOK = "pre-commit.foreign";
+const SAVED_FOREIGN_DISPLAY = ".git/secretloop/pre-commit.foreign";
+
+function savedForeignHookPath(gitDir: string): string {
+  return path.join(gitDir, HOOK_SUPPORT_DIR, SAVED_FOREIGN_HOOK);
+}
 
 /**
  * The pre-commit script.
@@ -156,6 +195,17 @@ export function hookBody(): string {
     '[ -n "$GIT_DIR_PATH" ] || GIT_DIR_PATH=".git"',
     `SL_DIR="$GIT_DIR_PATH/${HOOK_SUPPORT_DIR}"`,
     'CLI="$SL_DIR/cli.js"',
+    'FOREIGN="$SL_DIR/pre-commit.foreign"',
+    "",
+    "# The hook this replaced, run first so its behaviour is unchanged: anything",
+    "# it did before we existed still happens before we scan, including rewriting",
+    "# and re-staging files. Running it as its own process is also what makes it",
+    "# unable to skip us — set -e, exit 0 and exec are scoped to it, not to this",
+    "# script — and what stops a non-shell hook being destroyed by appending.",
+    "# Checked with -x because git ignores a hook it cannot execute.",
+    'if [ -x "$FOREIGN" ]; then',
+    '  "$FOREIGN" "$@" || exit $?',
+    "fi",
     "",
     'if [ ! -f "$CLI" ]; then',
     '  echo "SecretLoop: scanner not found at $CLI; skipping the secret scan for this commit." >&2',

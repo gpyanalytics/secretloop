@@ -2,10 +2,10 @@
 // that reaches `vscode`.
 import "./stubs/install-vscode";
 import { called, calls, reset, setWorkspaceFolder } from "./stubs/vscode";
-import { installPrecommitHook, refreshHookVersionStamp, hookBody } from "../src/hooks";
+import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp, hookBody } from "../src/hooks";
 import * as assert from "node:assert";
 import { test, suite, finish } from "./harness";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, chmodSync, unlinkSync } from "fs";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, chmodSync, unlinkSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
@@ -16,7 +16,15 @@ function context(extensionPath: string): any {
   // Stand-in for the bundled CLI; the installer only copies it.
   writeFileSync(
     path.join(extensionPath, "out", "cli.js"),
-    '#!/usr/bin/env node\nconsole.log("[cli] scanned " + process.argv[2]);\nprocess.exit(Number(process.env.FAKE_CLI_EXIT || 0));\n'
+    [
+      "#!/usr/bin/env node",
+      'console.log("[cli] scanned " + process.argv[2]);',
+      "if (process.env.FAKE_CLI_DUMP) {",
+      '  const { execSync } = require("child_process");',
+      '  console.log(execSync("git diff --cached", { encoding: "utf8" }));',
+      "}",
+      "process.exit(Number(process.env.FAKE_CLI_EXIT || 0));",
+    ].join("\n")
   );
   return { extensionPath };
 }
@@ -236,6 +244,240 @@ test("the version stamp is only refreshed where our hook is installed", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+suite("\nhooks.ts — chaining to an existing hook");
+
+const FOREIGN = path.join(".git", "secretloop", "pre-commit.foreign");
+
+/** Writes a foreign pre-commit hook and returns the repo dir. */
+function writeForeignHook(dir: string, lines: string[]): void {
+  const p = path.join(dir, ".git", "hooks", "pre-commit");
+  writeFileSync(p, lines.join("\n") + "\n");
+  chmodSync(p, 0o755);
+}
+
+async function installOver(dir: string, foreign: string[]): Promise<string> {
+  writeForeignHook(dir, foreign);
+  const ext = mkdtempSync(path.join(tmpdir(), "secretloop-ext-"));
+  await installPrecommitHook(context(ext), ".env", "1.0.0");
+  return ext;
+}
+
+test("an existing foreign hook is preserved, not appended to", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
+    try {
+      assert.ok(existsSync(path.join(dir, FOREIGN)), "the foreign hook is saved aside");
+      assert.match(readFileSync(path.join(dir, FOREIGN), "utf8"), /foreign ran/);
+      const installed = readFileSync(path.join(dir, ".git", "hooks", "pre-commit"), "utf8");
+      assert.doesNotMatch(installed, /foreign ran/, "our hook is not the foreign one with lines bolted on");
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("the foreign hook runs first, then the scan", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
+    try {
+      const run = runHook(dir);
+      assert.strictEqual(run.status, 0);
+      assert.ok(
+        run.output.indexOf("foreign ran") < run.output.indexOf("[cli] scanned"),
+        "foreign-first preserves what the existing hook already did"
+      );
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a foreign hook ending in exit 0 no longer skips the scan", async () => {
+  // Appending put our lines after this and they never ran. Most hand-written
+  // hooks and husky end exactly this way.
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"', "exit 0"]);
+    try {
+      assert.match(runHook(dir).output, /\[cli\] scanned staged/);
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a foreign hook using set -e cannot skip the scan", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", "set -e", 'echo "foreign ran"', "true"]);
+    try {
+      assert.match(runHook(dir).output, /\[cli\] scanned staged/);
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a foreign hook using exec cannot skip the scan", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'exec echo "foreign ran"']);
+    try {
+      assert.match(runHook(dir).output, /\[cli\] scanned staged/);
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a non-shell foreign hook is not destroyed", async () => {
+  // Appending shell to a #!/usr/bin/env python3 hook produced a SyntaxError on
+  // every commit — taking a working hook and breaking it. pre-commit, the
+  // Python framework, installs exactly that.
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/usr/bin/env python3", 'print("foreign python ran")']);
+    try {
+      const run = runHook(dir);
+      assert.match(run.output, /foreign python ran/, "it still runs as python");
+      assert.doesNotMatch(run.output, /SyntaxError/);
+      assert.match(run.output, /\[cli\] scanned staged/);
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a failing foreign hook blocks the commit and the scan does not run", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", "set -e", "false"]);
+    try {
+      const run = runHook(dir);
+      assert.notStrictEqual(run.status, 0, "its failure still blocks, as before");
+      assert.doesNotMatch(run.output, /\[cli\] scanned/, "no point scanning a commit that is not happening");
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("the scan sees content a foreign formatter rewrote and re-staged", async () => {
+  // The observable consequence of foreign-first: if a formatter rewrites a file
+  // containing a secret, we must scan the reformatted content, not the original.
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
+    git("add", "app.js");
+    git("commit", "-qm", "seed");
+    const ext = await installOver(dir, [
+      "#!/bin/sh",
+      'printf "const token = \\"REWRITTEN_BY_FORMATTER\\";\\n" > app.js',
+      "git add app.js",
+    ]);
+    try {
+      writeFileSync(path.join(dir, "app.js"), "const token = \"original\";\n");
+      git("add", "app.js");
+      const run = runHook(dir, { FAKE_CLI_DUMP: "1" });
+      assert.match(
+        run.output,
+        /REWRITTEN_BY_FORMATTER/,
+        "the scan must see the formatter's output, not the content staged before it ran"
+      );
+      assert.doesNotMatch(run.output, /const token = "original"/);
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+suite("\nhooks.ts — uninstall and re-install");
+
+test("uninstalling restores the foreign hook", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
+    try {
+      assert.ok(existsSync(path.join(dir, FOREIGN)), "precondition: a chain exists to undo");
+      await uninstallPrecommitHook();
+      const restored = readFileSync(path.join(dir, ".git", "hooks", "pre-commit"), "utf8");
+      assert.match(restored, /foreign ran/, "their hook comes back");
+      assert.ok(!existsSync(path.join(dir, FOREIGN)), "and is no longer held aside");
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("the restored foreign hook is still executable", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
+    try {
+      assert.ok(existsSync(path.join(dir, FOREIGN)), "precondition: a chain exists to undo");
+      await uninstallPrecommitHook();
+      const mode = statSync(path.join(dir, ".git", "hooks", "pre-commit")).mode;
+      assert.ok((mode & 0o111) !== 0, "a restored hook git cannot execute is not restored");
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("uninstalling with the saved hook gone does not fail, and says so", async () => {
+  // A fresh clone is the common cause: .git is not cloned.
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
+    try {
+      unlinkSync(path.join(dir, FOREIGN));
+      reset();
+      await uninstallPrecommitHook();
+      assert.ok(!existsSync(path.join(dir, ".git", "hooks", "pre-commit")), "ours is still removed");
+      const said = calls
+        .filter((c) => c.api.startsWith("window.show"))
+        .map((c) => String(c.args[0]))
+        .join(" ");
+      assert.match(said, /not restored|nothing was restored|could not/i);
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("re-installing over our own chain does not nest it", async () => {
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
+    try {
+      await installPrecommitHook(context(ext), ".env", "1.0.0");
+      const saved = readFileSync(path.join(dir, FOREIGN), "utf8");
+      assert.match(saved, /foreign ran/, "the saved hook is still theirs");
+      assert.doesNotMatch(saved, /rev-parse --git-dir/, "not our own chain hook saved as foreign");
+      const run = runHook(dir);
+      assert.strictEqual(
+        (run.output.match(/\[cli\] scanned/g) ?? []).length,
+        1,
+        "the scan runs once, not once per install"
+      );
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
+});
+
+test("a foreign hook that would overwrite an existing saved one is refused", async () => {
+  // Another tool replaced our hook while a saved foreign hook was already
+  // there. Saving the new one would destroy the original, unrecoverably.
+  await withRepo(async (dir) => {
+    const ext = await installOver(dir, ["#!/bin/sh", 'echo "the original"']);
+    try {
+      writeForeignHook(dir, ["#!/bin/sh", 'echo "a different tool"']);
+      reset();
+      await installPrecommitHook(context(ext), ".env", "1.0.0");
+      assert.match(readFileSync(path.join(dir, FOREIGN), "utf8"), /the original/, "untouched");
+      assert.match(
+        readFileSync(path.join(dir, ".git", "hooks", "pre-commit"), "utf8"),
+        /a different tool/,
+        "and the other tool's hook is untouched too"
+      );
+      assert.strictEqual(called("window.showErrorMessage"), true, "refused, with an explanation");
+    } finally {
+      rmSync(ext, { recursive: true, force: true });
+    }
+  });
 });
 
 finish();
