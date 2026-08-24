@@ -275,7 +275,16 @@ async function verifyGitHubToken(value: string, ctx: VerifyContext): Promise<Ver
     requestInit(ctx, { headers: { Authorization: `token ${value}`, "User-Agent": "SecretLoop-VSCode" } })
   );
   if (res.status === 200) {
-    const scopes = res.headers.get("x-oauth-scopes") ?? "unknown";
+    // Three cases, and the difference matters to whoever reads the line. A
+    // classic PAT always sends the header: populated when scopes are ticked,
+    // present-but-empty when none are — `?? "unknown"` only catches null, so
+    // that case used to trail off mid-sentence at "Scopes: ". Fine-grained PATs
+    // and GitHub App tokens omit the header entirely; they *have* permissions,
+    // GitHub just does not report them on this endpoint, so "unknown" claimed
+    // something false directly underneath CONFIRMED LIVE.
+    const header = res.headers.get("x-oauth-scopes");
+    const scopes =
+      header === null ? "not reported for fine-grained or app tokens" : header.trim() || "none";
     return live(`Active GitHub token. Scopes: ${scopes}`);
   }
   if (res.status === 401) return dead("GitHub token is invalid or already revoked.");

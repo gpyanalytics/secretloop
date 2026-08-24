@@ -56,6 +56,46 @@ test("GitHub: 200 response marks token verified with scopes", async () => {
   assert.match(result!.detail, /repo, read:org/);
 });
 
+test("GitHub: a scopeless classic PAT says 'none', not a dangling colon", async () => {
+  // GitHub sends X-OAuth-Scopes present-but-empty for a classic PAT with no
+  // scopes ticked. `?? "unknown"` only catches null, so the detail line ended
+  // mid-sentence at "Scopes: " — directly under CONFIRMED LIVE.
+  const result = await verifyFinding(makeFinding("github-token", "ghp_fake"), {
+    fullText: "",
+    fetchImpl: mockFetch({ status: 200, headers: { "x-oauth-scopes": "" } }),
+  });
+  assert.ok(result);
+  assert.strictEqual(result!.status, "live");
+  assert.match(result!.detail, /Scopes: none/);
+});
+
+test("GitHub: an absent scopes header does not claim the scopes are unknown", async () => {
+  // Fine-grained PATs and GitHub App tokens omit the header entirely. They do
+  // have permissions; GitHub just does not report them on this endpoint, so
+  // "unknown" states something false rather than merely unhelpful — and it read
+  // as a contradiction sitting under CONFIRMED LIVE.
+  const result = await verifyFinding(makeFinding("github-fine-grained-pat", "github_pat_fake"), {
+    fullText: "",
+    fetchImpl: mockFetch({ status: 200 }),
+  });
+  assert.ok(result);
+  assert.strictEqual(result!.status, "live");
+  assert.doesNotMatch(result!.detail, /unknown/i, "the permissions are not unknown to GitHub");
+  assert.match(result!.detail, /not reported/);
+});
+
+test("GitHub: no live detail ever ends on a dangling separator", async () => {
+  // The shape of the bug, not just its three known instances: whatever the
+  // header holds, the sentence has to finish.
+  for (const headers of [{ "x-oauth-scopes": "" }, { "x-oauth-scopes": "repo" }, undefined]) {
+    const result = await verifyFinding(makeFinding("github-token", "ghp_fake"), {
+      fullText: "",
+      fetchImpl: mockFetch({ status: 200, headers }),
+    });
+    assert.doesNotMatch(result!.detail, /[:,-]\s*$/, `dangling end for ${JSON.stringify(headers)}`);
+  }
+});
+
 test("GitHub: 401 response marks the token dead", async () => {
   const finding = makeFinding("github-token", "ghp_fake");
   const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 401 }) });
