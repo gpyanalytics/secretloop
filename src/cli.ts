@@ -9,7 +9,8 @@ import {
   BASELINE_VERSION,
   SecretLoopConfig,
 } from "./config";
-import { listFiles, readTextFile, getStagedFiles, findRepoRoot } from "./walk";
+import { listFiles, getStagedFiles, findRepoRoot } from "./walk";
+import { scanFiles } from "./workspace";
 import { scanHistory, isGitRepo } from "./history";
 import { render, OutputFormat, sortFindings, UNKNOWN_REASONS } from "./report";
 import { verifyFindings } from "./verify";
@@ -268,15 +269,13 @@ function scanFileList(
   files: string[],
   config: SecretLoopConfig
 ): { findings: Finding[]; texts: Map<string, string> } {
-  const findings: Finding[] = [];
-  const texts = new Map<string, string>();
-  for (const rel of files) {
-    const text = readTextFile(root, rel, config);
-    if (text === null) continue;
-    texts.set(rel, text);
-    findings.push(...scanText(text, { config, filePath: rel }));
-  }
-  return { findings, texts };
+  // Same enumeration and same guards the editor uses, so the two cannot report
+  // different files for the same project.
+  const scanned = scanFiles(root, files, config);
+  return {
+    findings: scanned.flatMap((s) => s.findings),
+    texts: new Map(scanned.map((s) => [s.path, s.text])),
+  };
 }
 
 /**

@@ -20,6 +20,8 @@ import {
 } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
 import { setting, resolveSetting, describeOrigin, SETTINGS_NAMESPACE } from "./settings";
+import { ScannedFile, scanFiles, scanWorkspaceFiles, verifyScannedFiles } from "./workspace";
+import * as path from "path";
 
 
 const diagnosticCollection = vscode.languages.createDiagnosticCollection("secretloop");
@@ -449,68 +451,73 @@ class SecretCodeActionProvider implements vscode.CodeActionProvider {
 }
 
 async function scanWorkspace() {
-  const files = await vscode.workspace.findFiles("**/*", "**/{node_modules,dist,out,.git,build}/**");
-  let liveCount = 0;
-  let otherCount = 0;
+  const root = requireWorkspaceRoot();
+  if (!root) return;
 
-  for (const uri of files) {
-    try {
-      const doc = await vscode.workspace.openTextDocument(uri);
-      await scanDocument(doc);
-      const findings = findingsByDocument.get(doc.uri.toString()) ?? [];
-      liveCount += findings.filter((f) => f.confidence === "verified-live").length;
-      otherCount += findings.filter((f) => f.confidence !== "verified-live").length;
-    } catch {
-      // binary or unreadable; skip
-    }
-  }
+  const config = configForFolder(root, setting<number>("entropyThreshold", 4.3));
+  const buffers = openBuffers(root);
+  const scanned = scanWorkspaceFiles(root, config, { textFor: (p) => buffers.get(p) });
+  log(`SecretLoop: workspace scan covered ${scanned.length} file(s) under ${root}.`);
 
-  const total = liveCount + otherCount;
+  await verifyScan(scanned, "the workspace scan");
+  for (const file of scanned) renderScannedFile(root, file);
+
+  const findings = scanned.flatMap((s) => s.findings);
+  const live = findings.filter((f) => f.confidence === "verified-live").length;
+  const other = findings.length - live;
   vscode.window.showInformationMessage(
-    total > 0
-      ? `SecretLoop: ${liveCount} verified LIVE secret(s), ${otherCount} unverified/heuristic finding(s) across the workspace.`
-      : "SecretLoop: no secrets found in workspace scan."
+    findings.length > 0
+      ? `SecretLoop: ${live} verified LIVE secret(s), ${other} unverified/heuristic finding(s) across ${scanned.length} file(s).`
+      : `SecretLoop: no secrets found across ${scanned.length} file(s).`
   );
 }
 
 async function warnOnStagedSecrets() {
   if (!setting<boolean>("blockCommitOnSecret", true)) return;
 
+  const root = requireWorkspaceRoot();
+  if (!root) return;
+
   const gitExtension = vscode.extensions.getExtension("vscode.git")?.exports;
   if (!gitExtension) {
     vscode.window.showWarningMessage("SecretLoop: Git extension not available.");
     return;
   }
-  const api = gitExtension.getAPI(1);
-  let liveCount = 0;
-  let otherCount = 0;
 
-  for (const repo of api.repositories) {
+  // Same guards as everywhere else. This used to open each staged document
+  // directly, skipping the size and binary checks the CLI's `staged` command
+  // applies — the same divergence scanWorkspace had.
+  const staged: string[] = [];
+  for (const repo of gitExtension.getAPI(1).repositories) {
     for (const change of repo.state.indexChanges) {
-      try {
-        const doc = await vscode.workspace.openTextDocument(change.uri);
-        await scanDocument(doc);
-        const findings = findingsByDocument.get(doc.uri.toString()) ?? [];
-        liveCount += findings.filter((f) => f.confidence === "verified-live").length;
-        otherCount += findings.filter((f) => f.confidence !== "verified-live").length;
-      } catch {
-        // skip unreadable/binary
-      }
+      staged.push(path.relative(root, change.uri.fsPath).split(path.sep).join("/"));
     }
   }
 
-  if (liveCount > 0) {
+  const config = configForFolder(root, setting<number>("entropyThreshold", 4.3));
+  const buffers = openBuffers(root);
+  const scanned = scanFiles(root, staged, config, { textFor: (p) => buffers.get(p) });
+  log(`SecretLoop: staged scan covered ${scanned.length} of ${staged.length} staged file(s).`);
+
+  await verifyScan(scanned, "the staged scan");
+  for (const file of scanned) renderScannedFile(root, file);
+
+  const findings = scanned.flatMap((s) => s.findings);
+  const live = findings.filter((f) => f.confidence === "verified-live").length;
+  const other = findings.length - live;
+
+  if (live > 0) {
     vscode.window
       .showErrorMessage(
-        `SecretLoop: ${liveCount} LIVE secret(s) staged for commit. Strongly recommend fixing before pushing.`,
+        `SecretLoop: ${live} LIVE secret(s) staged for commit. Strongly recommend fixing before pushing.`,
         "Scan Workspace"
       )
       .then((choice) => {
         if (choice === "Scan Workspace") vscode.commands.executeCommand("secretloop.scanWorkspace");
       });
-  } else if (otherCount > 0) {
+  } else if (other > 0) {
     vscode.window.showWarningMessage(
-      `SecretLoop: ${otherCount} unverified possible secret(s) staged. Review before committing.`
+      `SecretLoop: ${other} unverified possible secret(s) staged. Review before committing.`
     );
   }
 }
@@ -531,13 +538,18 @@ export function deactivate() {
 function workspaceConfig(document: vscode.TextDocument, threshold: number): SecretLoopConfig {
   const folder = vscode.workspace.getWorkspaceFolder(document.uri);
   if (!folder) return mergeConfig({ entropyThreshold: threshold });
+  return configForFolder(folder.uri.fsPath, threshold);
+}
+
+/** The same resolution, for the commands that work on a folder rather than a document. */
+function configForFolder(folderPath: string, threshold: number): SecretLoopConfig {
   try {
-    const notice = legacyConfigNotice(folder.uri.fsPath);
-    if (notice && !legacyConfigWarned.has(folder.uri.fsPath)) {
-      legacyConfigWarned.add(folder.uri.fsPath);
+    const notice = legacyConfigNotice(folderPath);
+    if (notice && !legacyConfigWarned.has(folderPath)) {
+      legacyConfigWarned.add(folderPath);
       vscode.window.showWarningMessage(`SecretLoop: ${notice}`);
     }
-    const loaded = loadConfig(folder.uri.fsPath);
+    const loaded = loadConfig(folderPath);
     // A project that hasn't set a threshold defers to the user's editor setting.
     if (loaded.entropyThreshold === defaultConfig.entropyThreshold) {
       loaded.entropyThreshold = threshold;
@@ -546,6 +558,76 @@ function workspaceConfig(document: vscode.TextDocument, threshold: number): Secr
   } catch (err) {
     vscode.window.showWarningMessage(`SecretLoop: ${(err as Error).message}`);
     return mergeConfig({ entropyThreshold: threshold });
+  }
+}
+
+/** Unsaved editor buffers, keyed by the path a scan will look them up under. */
+function openBuffers(root: string): Map<string, string> {
+  const buffers = new Map<string, string>();
+  for (const doc of vscode.workspace.textDocuments) {
+    if (doc.uri.scheme !== "file" || !doc.uri.fsPath.startsWith(root)) continue;
+    buffers.set(path.relative(root, doc.uri.fsPath).split(path.sep).join("/"), doc.getText());
+  }
+  return buffers;
+}
+
+/** Line starts for a scanned text, so offsets become positions without a TextDocument. */
+function positionsFor(text: string): (offset: number) => vscode.Position {
+  const starts = [0];
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) starts.push(i + 1);
+  return (offset: number) => {
+    let lo = 0;
+    let hi = starts.length - 1;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      if (starts[mid] <= offset) lo = mid;
+      else hi = mid - 1;
+    }
+    return new vscode.Position(lo, offset - starts[lo]);
+  };
+}
+
+/** Publishes diagnostics for a file that was scanned without being opened. */
+function renderScannedFile(root: string, scanned: ScannedFile): void {
+  const at = positionsFor(scanned.text);
+  const uri = vscode.Uri.file(path.join(root, scanned.path));
+  diagnosticCollection.set(
+    uri,
+    scanned.findings.map((f) => {
+      const diag = new vscode.Diagnostic(
+        new vscode.Range(at(f.startIndex), at(f.endIndex)),
+        diagnosticMessage(f),
+        severityForTier(f.confidence)
+      );
+      diag.code = f.ruleId;
+      diag.source = "SecretLoop";
+      return diag;
+    })
+  );
+}
+
+/**
+ * Verifies a completed scan in one pass and records what was transmitted.
+ *
+ * Shared by the workspace and staged commands: both are batch scans, and both
+ * want the outbound count to be the total for the whole scan rather than a
+ * running per-file figure.
+ */
+async function verifyScan(scanned: ScannedFile[], label: string): Promise<void> {
+  const verification = resolveSetting<boolean>("enableLiveVerification", false);
+  if (!verification.value) return;
+
+  const checkable = scanned.flatMap((s) => s.findings).filter((f) => isVerifiable(f.ruleId));
+  if (checkable.length === 0) return;
+
+  log(
+    `SecretLoop: live verification is on (${describeOrigin("enableLiveVerification", verification.origin)}); ` +
+      `checking ${checkable.length} finding(s) across ${label}.`
+  );
+  const sent = await verifyScannedFiles(scanned, fetch, { cache: verificationCache });
+  if (sent.length > 0) {
+    const providers = [...new Set(sent.map((f) => verificationProvider(f.ruleId) ?? f.ruleId))].sort();
+    log(`SecretLoop: sent ${sent.length} credential(s) to ${providers.join(", ")} across ${label}.`);
   }
 }
 
