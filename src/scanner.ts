@@ -1,6 +1,6 @@
 import { rules, placeholderDenylist, isDocumentationSample, SecretRule, Severity } from "./rules";
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
-import { SecretLoopConfig, defaultConfig, fingerprint } from "./config";
+import { SecretLoopConfig, defaultConfig, createFingerprint, FingerprintStrategy } from "./config";
 
 export type ConfidenceTier = "verified-live" | "format-match" | "entropy-heuristic";
 
@@ -54,6 +54,16 @@ export interface Finding {
   commit?: string;
   /** Stable identity for baselining. Present when `file` is known. */
   fingerprint?: string;
+  /** How that identity was derived. See FingerprintStrategy. */
+  fingerprintStrategy?: FingerprintStrategy;
+  /**
+   * Span of the whole regex match, as opposed to startIndex/endIndex which span
+   * only the captured secret. The match is the semantic unit a context
+   * fingerprint is built from: for these rules it pins scheme, user, host and
+   * path while excluding anything else on the line.
+   */
+  matchStart?: number;
+  matchEnd?: number;
 }
 
 export interface ScanOptions {
@@ -116,6 +126,9 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
           confidence: "format-match",
           severity: rule.severity,
           options,
+          matchStart: m.index,
+          matchEnd: m.index + m[0].length,
+          fingerprintStrategy: strategyFor(rule, m, startIndex),
         })
       );
     }
@@ -152,7 +165,144 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
     }
   }
 
-  return findings.sort((a, b) => a.startIndex - b.startIndex);
+  const sorted = findings.sort((a, b) => a.startIndex - b.startIndex);
+  if (options.filePath) assignFingerprints(sorted, text, options.filePath);
+  return sorted;
+}
+
+/**
+ * Which fingerprint strategy a match should use.
+ *
+ * Most rules declare it outright. generic-api-key-assignment cannot: its
+ * alternation over api_key|…|passwd|password is a single non-capturing group,
+ * so the rule matches both provider tokens and human passwords. Splitting it in
+ * two would change rule IDs, invalidating every baseline entry and every
+ * excludeRules entry in every user config — for information already sitting in
+ * the match. The `d` flag gives the captured value's offset, and everything
+ * before it in the match is the keyword.
+ */
+function strategyFor(rule: SecretRule, m: RegExpExecArray, valueStart: number): FingerprintStrategy {
+  if (rule.fingerprintStrategy !== "keyword") return rule.fingerprintStrategy ?? "value";
+  const keyword = m[0].slice(0, valueStart - m.index).match(/^[A-Za-z_.\-]+/)?.[0] ?? "";
+  return /passw(or)?d/i.test(keyword) ? "context" : "value";
+}
+
+/**
+ * Text of a region with every known secret in it replaced.
+ *
+ * Redacting only the finding being fingerprinted would leave any other
+ * credential in the region in plaintext — and the fingerprint is committed. A
+ * line like `DB=postgres://svc:pw@h/db  # legacy: ghp_…` would put a live
+ * GitHub token straight into the baseline: a fingerprinting fix with a worse
+ * leak than the bug it fixes.
+ *
+ * Exported so a test can assert directly on what gets hashed.
+ */
+export function secretFreeContext(
+  text: string,
+  start: number,
+  end: number,
+  findings: Finding[]
+): string {
+  const spans = findings
+    .filter((f) => f.startIndex < end && f.endIndex > start)
+    .map((f) => [Math.max(f.startIndex, start), Math.min(f.endIndex, end)] as const)
+    .sort((a, b) => b[0] - a[0]); // right to left, so earlier offsets stay valid
+
+  let region = text.slice(start, end);
+  for (const [from, to] of spans) {
+    region = region.slice(0, from - start) + "[REDACTED]" + region.slice(to - start);
+  }
+  // Unrelated formatting must not change identity.
+  return region.replace(/\s+/g, " ").trim();
+}
+
+/** The line containing an offset, as a [start, end) span. */
+function lineSpan(text: string, index: number): readonly [number, number] {
+  const start = text.lastIndexOf("\n", index - 1) + 1;
+  const nl = text.indexOf("\n", index);
+  return [start, nl === -1 ? text.length : nl];
+}
+
+/**
+ * Assigns every finding its baseline identity.
+ *
+ * Context fingerprints escalate only on collision, deterministically: the match
+ * first, then the whole line, then an ordinal among findings that remain
+ * indistinguishable. `password = "…"` redacts to the same text wherever it
+ * appears, so without the last tier two passwords in one file would share a
+ * fingerprint and baselining one would silence the other.
+ */
+function assignFingerprints(findings: Finding[], text: string, filePath: string): void {
+  const assign = (f: Finding, context?: string) => {
+    f.fingerprint = createFingerprint({
+      filePath,
+      ruleId: f.ruleId,
+      strategy: f.fingerprintStrategy ?? "value",
+      value: f.value,
+      context,
+    });
+  };
+
+  for (const f of findings) {
+    if ((f.fingerprintStrategy ?? "value") !== "context") {
+      assign(f);
+      continue;
+    }
+    const start = f.matchStart ?? f.startIndex;
+    const end = f.matchEnd ?? f.endIndex;
+    assign(f, secretFreeContext(text, start, end, findings));
+  }
+
+  escalateCollisions(findings, text, filePath, (f) => {
+    const [start, end] = lineSpan(text, f.startIndex);
+    return secretFreeContext(text, start, end, findings);
+  });
+  // Last tier, and a known limitation rather than an oversight.
+  //
+  // For generic-api-key-assignment the line IS the match, and redaction erases
+  // the only thing telling two of them apart: `password = "[REDACTED]"` is
+  // identical however many times it appears. With the value excluded by
+  // construction and the line number excluded by design, an ordinal among
+  // otherwise-identical peers is the only distinguishing material left.
+  //
+  // The cost: deleting the first of two identical password lines shifts the
+  // second's ordinal, so a previously accepted finding is reported again. That
+  // is a re-triage, not a leak — the alternative was letting one baseline entry
+  // silence a different password in the same file.
+  escalateCollisions(findings, text, filePath, (f, ordinal) => {
+    const [start, end] = lineSpan(text, f.startIndex);
+    return `${secretFreeContext(text, start, end, findings)}#${ordinal}`;
+  });
+}
+
+/** Re-derives context-strategy fingerprints that are still not unique. */
+function escalateCollisions(
+  findings: Finding[],
+  text: string,
+  filePath: string,
+  contextOf: (finding: Finding, ordinal: number) => string
+): void {
+  const byFingerprint = new Map<string, Finding[]>();
+  for (const f of findings) {
+    if ((f.fingerprintStrategy ?? "value") !== "context" || !f.fingerprint) continue;
+    const bucket = byFingerprint.get(f.fingerprint);
+    if (bucket) bucket.push(f);
+    else byFingerprint.set(f.fingerprint, [f]);
+  }
+
+  for (const clashing of byFingerprint.values()) {
+    if (clashing.length < 2) continue;
+    clashing.forEach((f, ordinal) => {
+      f.fingerprint = createFingerprint({
+        filePath,
+        ruleId: f.ruleId,
+        strategy: "context",
+        value: f.value,
+        context: contextOf(f, ordinal),
+      });
+    });
+  }
 }
 
 /**
@@ -206,6 +356,9 @@ function buildFinding(input: {
   confidence: ConfidenceTier;
   severity: Severity;
   options: ScanOptions;
+  matchStart?: number;
+  matchEnd?: number;
+  fingerprintStrategy?: FingerprintStrategy;
 }): Finding {
   const { options } = input;
   return {
@@ -219,9 +372,12 @@ function buildFinding(input: {
     line: input.line,
     file: options.filePath,
     commit: options.commit,
-    fingerprint: options.filePath
-      ? fingerprint(options.filePath, input.ruleId, input.value)
-      : undefined,
+    matchStart: input.matchStart,
+    matchEnd: input.matchEnd,
+    fingerprintStrategy: input.fingerprintStrategy ?? "value",
+    // Assigned in a second pass: a context fingerprint must redact every
+    // finding in its region, which is not known until the scan is complete.
+    fingerprint: undefined,
   };
 }
 

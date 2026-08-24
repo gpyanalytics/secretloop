@@ -2,7 +2,13 @@
 import { writeFileSync } from "fs";
 import * as path from "path";
 import { Finding, UnknownReason, scanText } from "./scanner";
-import { loadConfig, loadBaseline, legacyConfigNotice, SecretLoopConfig } from "./config";
+import {
+  loadConfig,
+  loadBaseline,
+  legacyConfigNotice,
+  BASELINE_VERSION,
+  SecretLoopConfig,
+} from "./config";
 import { listFiles, readTextFile, getStagedFiles, findRepoRoot } from "./walk";
 import { scanHistory, isGitRepo } from "./history";
 import { render, OutputFormat, sortFindings, UNKNOWN_REASONS } from "./report";
@@ -122,7 +128,7 @@ The secretguard command still works as a deprecated alias for secretloop.
 
 export function applyBaseline(findings: Finding[], baselineFile?: string): Finding[] {
   if (!baselineFile) return findings;
-  const accepted = loadBaseline(baselineFile);
+  const accepted = loadBaseline(baselineFile).fingerprints;
   return findings.filter((f) => !f.fingerprint || !accepted.has(f.fingerprint));
 }
 
@@ -341,6 +347,13 @@ async function main(): Promise<void> {
     texts = result.texts;
   }
 
+  if (args.baseline) {
+    const loaded = loadBaseline(args.baseline);
+    // An outdated baseline matches nothing. Saying so is the difference between
+    // "the tool broke" and "regenerate this file".
+    if (loaded.outdated) process.stderr.write(`secretloop: ${loaded.notice}\n`);
+  }
+
   const triaged = triageFindings(findings, args);
   findings = triaged.reported;
   if (triaged.toVerify.length > 0) {
@@ -354,11 +367,11 @@ async function main(): Promise<void> {
   }
 
   if (args.writeBaseline) {
-    const existing = args.baseline ? loadBaseline(args.baseline) : new Set<string>();
+    const existing = args.baseline ? loadBaseline(args.baseline).fingerprints : new Set<string>();
     const fingerprints = mergeBaseline(findings, existing);
     writeFileSync(
       args.writeBaseline,
-      JSON.stringify({ version: 1, fingerprints }, null, 2) + "\n",
+      JSON.stringify({ version: BASELINE_VERSION, fingerprints }, null, 2) + "\n",
       "utf8"
     );
     process.stdout.write(

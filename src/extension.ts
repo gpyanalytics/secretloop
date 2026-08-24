@@ -1,6 +1,13 @@
 import * as vscode from "vscode";
 import { scanText, Finding, ConfidenceTier } from "./scanner";
-import { loadConfig, mergeConfig, defaultConfig, legacyConfigNotice, SecretLoopConfig } from "./config";
+import {
+  loadConfig,
+  mergeConfig,
+  defaultConfig,
+  legacyConfigNotice,
+  BASELINE_VERSION,
+  SecretLoopConfig,
+} from "./config";
 import { redactInPlace, extractToEnv } from "./remediate";
 import { isVerifiable, verifyFindings, verificationProvider, VerificationCache } from "./verify";
 import {
@@ -632,7 +639,7 @@ async function writeBaseline(): Promise<void> {
   }
 
   const target = vscode.Uri.joinPath(vscode.Uri.file(root), ".secretloop-baseline.json");
-  const body = JSON.stringify({ version: 1, fingerprints: [...fingerprints] }, null, 2) + "\n";
+  const body = JSON.stringify({ version: BASELINE_VERSION, fingerprints: [...fingerprints] }, null, 2) + "\n";
   await vscode.workspace.fs.writeFile(target, Buffer.from(body, "utf8"));
   vscode.window.showInformationMessage(
     `SecretLoop: baselined ${fingerprints.size} existing finding(s). New secrets will still be reported.`

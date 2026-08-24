@@ -16,6 +16,15 @@ export interface SecretRule {
   entropy?: number;
   /** Rule-scoped false-positive patterns. A value matching any of these is dropped. */
   allowlist?: RegExp[];
+  /**
+   * How this rule's findings are identified in a baseline. Omitted means
+   * "value" — hash the captured secret, which is safe for a provider-generated
+   * token. "context" is for captures that can be a human-chosen password, where
+   * a truncated hash in a committed file is a wordlist away from the plaintext.
+   * "keyword" defers the choice to the matched keyword, for a rule whose single
+   * alternation covers both.
+   */
+  fingerprintStrategy?: "value" | "context" | "keyword";
   severity: Severity;
 }
 
@@ -610,6 +619,7 @@ export const rules: SecretRule[] = [
   // ------------------------------------------------------------ Databases / data
   {
     id: "db-connection-string",
+    fingerprintStrategy: "context",
     description: "Database connection string with embedded credentials",
     regex:
       /(?:postgres|postgresql|mysql|mariadb|mongodb(?:\+srv)?|redis|rediss|amqp|amqps|clickhouse|cassandra):\/\/[^:\s"'/]+:([^@\s"']{3,})@[^\s"']+/gi,
@@ -620,6 +630,7 @@ export const rules: SecretRule[] = [
   },
   {
     id: "http-basic-auth-url",
+    fingerprintStrategy: "context",
     description: "URL with embedded HTTP basic-auth credentials",
     regex: /https?:\/\/[^:\s"'/]+:([^@\s"'/]{6,})@[^\s"']+/gi,
     fullMatch: false,
@@ -630,6 +641,7 @@ export const rules: SecretRule[] = [
   },
   {
     id: "snowflake-credentials",
+    fingerprintStrategy: "context",
     description: "Snowflake account password",
     regex: /(?:snowflake[_.-]?password)["']?\s*[:=]\s*["']([^"'\s]{8,})["']/gi,
     fullMatch: false,
@@ -912,6 +924,7 @@ export const rules: SecretRule[] = [
   },
   {
     id: "generic-api-key-assignment",
+    fingerprintStrategy: "keyword",
     description: "Generic API key / secret assignment",
     regex:
       /(?:api[_.-]?key|apikey|secret[_.-]?key|access[_.-]?token|auth[_.-]?token|client[_.-]?secret|private[_.-]?key|passwd|password)["']?\s*[:=]\s*["']([A-Za-z0-9_\-/+=.]{16,})["']/gi,
