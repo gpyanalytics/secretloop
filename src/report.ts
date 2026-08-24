@@ -101,9 +101,13 @@ function renderText(findings: Finding[], options: ReportOptions): string {
   // The shape of the result belongs before the detail. On a real repository the
   // trailing summary lands after hundreds of lines, so a reader learns what
   // they are looking at only by scrolling back up.
+  // One string, used at both ends. Header and footer are read together — in a
+  // terminal, and side by side in any recording — so they must not describe the
+  // same four numbers with different words. "needing" also reads correctly for
+  // a count of one, which "needs"/"need" cannot both do.
   const counts =
-    `${findings.length} finding(s): ${live.length} live, ${needsLook.length} need a look, ` +
-    `${unchecked.length} unverified, ${dead.length} dead.`;
+    `${findings.length} finding(s): ${live.length} confirmed live, ` +
+    `${needsLook.length} needing a look, ${unchecked.length} unverified, ${dead.length} dead.`;
   const lines: string[] = [options.scope ? `Scanned ${options.scope}. ${counts}` : counts, ""];
 
   if (live.length > 0) {
@@ -149,10 +153,7 @@ function renderText(findings: Finding[], options: ReportOptions): string {
     lines.push("");
   }
 
-  lines.push(
-    `${findings.length} finding(s): ${live.length} confirmed live, ` +
-      `${needsLook.length} needs a look, ${unchecked.length} unverified, ${dead.length} dead.`
-  );
+  lines.push(counts);
   return lines.join("\n");
 }
 

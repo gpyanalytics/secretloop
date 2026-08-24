@@ -30,6 +30,42 @@ handoff between them:
    as a lightbulb in your editor with *redact*, *extract to `.env`*, and, where
    the provider exposes an API for it, *rotate*.
 
+## Quickstart
+
+Scan a repository's whole history without installing anything:
+
+```bash
+npx secretloop history --verify
+```
+
+`--verify` makes a read-only call to each provider to prove whether a credential
+still works, so you get a list of things to rotate today rather than a list of
+maybes. Drop it to stay entirely offline.
+
+```bash
+npx secretloop scan                  # the working tree
+npx secretloop staged                # what you are about to commit
+npx secretloop scan --format sarif -o results.sarif   # for CI
+```
+
+Install it properly if you want it in CI or a pre-commit hook:
+
+```bash
+npm install -g secretloop
+```
+
+For the editor, install **SecretLoop** from the VS Code Marketplace, or from a
+`.vsix`:
+
+```bash
+code --install-extension secretloop-0.1.0.vsix
+```
+
+The extension scans as you type and puts *redact*, *extract to `.env`* and
+*rotate* on the lightbulb. Live verification is off until you turn it on — it
+sends the credential to its provider, and a repository you just cloned may hold
+someone else's.
+
 ## Where this sits against the existing tools
 
 The pragmatic 2026 stack is gitleaks (fast pre-commit blocking) + TruffleHog
@@ -259,9 +295,14 @@ staged files scanned automatically before every commit. The hook runs
 `secretloop staged` — format + entropy detection, no network calls, so a
 commit is never blocked on a provider being reachable. Add `--verify` to the
 hook yourself if you want liveness checks at commit time and can accept the
-latency. If a pre-commit hook already exists that SecretLoop didn't install,
-you'll be asked whether to append to it or overwrite it — it won't silently
-clobber your existing hook.
+latency.
+
+If a pre-commit hook already exists, SecretLoop chains to it rather than
+replacing it: yours moves to `.git/secretloop/pre-commit.foreign` and runs
+first, and only if it passes are staged files scanned. Uninstalling restores it.
+Running it as its own process is what makes this safe — `set -e`, `exit 0` and
+`exec` stay scoped to your hook instead of skipping the scan, and a
+`#!/usr/bin/env python3` hook keeps running as Python.
 
 Bypass for a single commit with `git commit --no-verify`. Remove the hook
 with **SecretLoop: Uninstall Pre-commit Hook**.
@@ -272,7 +313,7 @@ with **SecretLoop: Uninstall Pre-commit Hook**.
 npm install && npm test
 ```
 
-Six suites, no network and no real credentials:
+Seventeen test files, no network and no real credentials:
 
 - **`rules.test.ts`** — the suite that matters most. Every shipped rule must
   match its own fixture (a rule that never fires is worse than no rule, because
@@ -280,9 +321,10 @@ Six suites, no network and no real credentials:
   lookalikes (git SHAs, lockfile hashes, UUIDs, `process.env` references, AWS's
   documentation key), and must not exhibit catastrophic backtracking.
 - **`scanner.test.ts`** — confidence tiers, line numbers, fingerprint stability,
-  `gitleaks:allow`), and config-driven exclusion.
-- **`config.test.ts`** — glob semantics (`*` must not cross `/`), exclude
-  `.secretloop.json` fallback.
+  offset correctness, inline suppression (`secretloop:allow` and `gitleaks:allow`),
+  duplicate merging, and config-driven exclusion.
+- **`config.test.ts`** — glob semantics (`*` must not cross `/`), exclude-path
+  merging, fingerprint normalisation, and loading `.secretloop.json`.
 - **`history.test.ts`** — patch parsing against fixture diffs: hunk line
   numbers, multi-line PEM assembly, deduplication across commits, and *not*
   reporting removed lines.
@@ -384,19 +426,21 @@ Shipped since the first scaffold: git history scanning, SARIF/JSON output,
 baselines, `.secretloop.json` config, inline suppression, the standalone CLI,
 and the pre-commit hook installer.
 
-Still open, roughly in order of leverage:
+The full plan lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). The short version:
 
-- **Detector coverage** — 103 rules against gitleaks' ~160. This is the honest
-  remaining gap and the highest-value contribution.
-- **Custom rule packs** loadable from `.secretloop.json` so teams can add
-  internal credential formats without forking.
-- **CI log scanning** — secrets leak through `echo` in pipelines, and almost
-  nothing scans build output.
-- **Bulk "extract all"** for files with several secrets.
-- **Secrets-manager targets** (1Password CLI, Vault) as a redaction destination
-  instead of `.env`.
-- **Honeytokens** — decoy credentials that alert on use. Currently
-  GitGuardian-enterprise-only; low implementation cost relative to its value.
+- **Detector parity is not the goal.** 103 rules against gitleaks' ~160 and
+  TruffleHog's 800+, and closing that gap is explicitly out of scope — nobody
+  switches scanners for parity. Coverage gets added where a real user hits a
+  real gap, not to move a number.
+- **What is the goal** is the loop the name refers to: a finding that knows
+  whether it is live, and carries its own remediation.
+- **Next** is putting it in developers' hands and learning what actually hurts
+  after a credential leaks — before building more of it.
+
+Contributions that add a rule you personally needed are welcome. See
+[Extending detection rules](#extending-detection-rules) above; a rule needs a
+positive fixture, a negative one, and an entry in the corpus test.
+
 
 ---
 

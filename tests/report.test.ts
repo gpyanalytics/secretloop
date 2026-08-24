@@ -299,7 +299,7 @@ test("the text summary accounts for every finding", () => {
   );
   assert.match(out, /4 finding\(s\)/);
   assert.match(out, /1 confirmed live/);
-  assert.match(out, /1 needs a look/);
+  assert.match(out, /1 needing a look/);
   assert.match(out, /1 dead/);
 });
 
@@ -350,15 +350,20 @@ test("the text report opens with the summary, not with findings", () => {
   );
   const first = out.split("\n")[0];
   assert.match(first, /4 finding\(s\)/, `first line was: ${first}`);
-  assert.match(first, /1 live/);
-  assert.match(first, /1 need/);
+  assert.match(first, /1 confirmed live/);
+  assert.match(first, /1 needing a look/);
   assert.match(first, /1 unverified/);
   assert.match(first, /1 dead/);
 });
 
-test("the trailing summary is kept", () => {
+test("the trailing summary is kept, and reads identically to the header", () => {
   const out = render([finding({ verifyStatus: "live" })], "text", opts);
-  assert.match(out.trimEnd().split("\n").pop()!, /finding\(s\)/, "still useful after reading");
+  const lines = out.trimEnd().split("\n");
+  const footer = lines.pop()!;
+  assert.match(footer, /finding\(s\)/, "still useful after reading");
+  // Both appear together on screen; describing the same numbers two ways reads
+  // as two different results.
+  assert.ok(lines[0].endsWith(footer), `header ${JSON.stringify(lines[0])} vs footer ${JSON.stringify(footer)}`);
 });
 
 test("the header names what was scanned when the caller knows", () => {
