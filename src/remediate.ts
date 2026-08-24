@@ -16,19 +16,40 @@ export function suggestEnvVarName(finding: Finding, existingNames: Set<string>):
   return candidate;
 }
 
-/** Replaces the secret in the document with a redaction placeholder. Copies the original to clipboard first. */
+export interface RedactOptions {
+  /**
+   * Put the original value on the system clipboard before replacing it.
+   *
+   * Off by default, and deliberately not a setting. The system clipboard is
+   * readable by every running application and syncs across devices on macOS and
+   * Windows, so copying a live credential there is a real exposure — but it is
+   * also genuinely useful when you are moving the value to a password manager.
+   * That makes it a per-secret decision, not a per-user preference, so the
+   * choice lives in the quick-fix menu where the context is.
+   */
+  copyToClipboard?: boolean;
+}
+
+/** Replaces the secret in the document with a redaction placeholder. */
 export async function redactInPlace(
   document: vscode.TextDocument,
-  finding: Finding
+  finding: Finding,
+  options: RedactOptions = {}
 ): Promise<void> {
-  await vscode.env.clipboard.writeText(finding.value);
+  const copied = options.copyToClipboard === true;
+  // Before the edit: afterwards the document holds the placeholder, not the value.
+  if (copied) await vscode.env.clipboard.writeText(finding.value);
+
   const startPos = document.positionAt(finding.startIndex);
   const endPos = document.positionAt(finding.endIndex);
   const edit = new vscode.WorkspaceEdit();
   edit.replace(document.uri, new vscode.Range(startPos, endPos), "[REDACTED_BY_SECRETLOOP]");
   await vscode.workspace.applyEdit(edit);
+
   vscode.window.showInformationMessage(
-    "Secret redacted and copied to clipboard. Paste it somewhere safe (like a password manager) if you still need it."
+    copied
+      ? "Secret redacted and copied to the clipboard. Paste it somewhere safe (like a password manager) now — anything running on this machine can read the clipboard."
+      : "Secret redacted. Undo restores it if you still need the value."
   );
 }
 

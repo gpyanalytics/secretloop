@@ -69,6 +69,14 @@ export function activate(context: vscode.ExtensionContext) {
       await redactInPlace(doc, finding);
       scanDocument(doc);
     }),
+    vscode.commands.registerCommand(
+      "secretloop.copyAndRedact",
+      async (docUri: vscode.Uri, finding: Finding) => {
+        const doc = await vscode.workspace.openTextDocument(docUri);
+        await redactInPlace(doc, finding, { copyToClipboard: true });
+        scanDocument(doc);
+      }
+    ),
     vscode.commands.registerCommand("secretloop.extractToEnv", async (docUri: vscode.Uri, finding: Finding) => {
       const doc = await vscode.workspace.openTextDocument(docUri);
       const envPath = setting<string>("envFilePath", ".env");
@@ -87,6 +95,8 @@ export function activate(context: vscode.ExtensionContext) {
       if (outcome.success) {
         vscode.window.showInformationMessage(`SecretLoop: ${outcome.message}`);
         const doc = await vscode.workspace.openTextDocument(docUri);
+        // Never copies: the credential was just revoked, so putting it on a
+        // syncing clipboard is all cost and no use.
         await redactInPlace(doc, finding);
         scanDocument(doc);
       } else {
@@ -245,6 +255,20 @@ class SecretCodeActionProvider implements vscode.CodeActionProvider {
       const redactAction = new vscode.CodeAction("SecretLoop: Redact this secret", vscode.CodeActionKind.QuickFix);
       redactAction.command = { command: "secretloop.redact", title: "Redact", arguments: [document.uri, finding] };
       actions.push(redactAction);
+
+      // Named for its risk, and offered second. The clipboard is readable by
+      // every running application and syncs across devices, so this is a
+      // deliberate choice for one secret rather than a standing preference.
+      const copyRedactAction = new vscode.CodeAction(
+        "SecretLoop: Copy to clipboard, then redact",
+        vscode.CodeActionKind.QuickFix
+      );
+      copyRedactAction.command = {
+        command: "secretloop.copyAndRedact",
+        title: "Copy and redact",
+        arguments: [document.uri, finding],
+      };
+      actions.push(copyRedactAction);
 
       const extractAction = new vscode.CodeAction(
         "SecretLoop: Move to .env and reference it",
@@ -463,6 +487,7 @@ async function writeBaseline(): Promise<void> {
  */
 const ALIASED_COMMANDS = [
   "redact",
+  "copyAndRedact",
   "extractToEnv",
   "rotate",
   "scanWorkspace",
