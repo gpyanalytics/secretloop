@@ -7,6 +7,11 @@ export interface ReportOptions {
   redact: boolean;
   /** Repo-relative root used for display paths. */
   root: string;
+  /**
+   * What was scanned, for the opening line — "31 commits", "412 files".
+   * Omitted when the caller has nothing meaningful to say.
+   */
+  scope?: string;
 }
 
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
@@ -93,7 +98,13 @@ function renderText(findings: Finding[], options: ReportOptions): string {
   const unchecked = findings.filter((f) => f.verifyStatus === undefined);
   const dead = findings.filter((f) => f.verifyStatus === "dead");
 
-  const lines: string[] = [];
+  // The shape of the result belongs before the detail. On a real repository the
+  // trailing summary lands after hundreds of lines, so a reader learns what
+  // they are looking at only by scrolling back up.
+  const counts =
+    `${findings.length} finding(s): ${live.length} live, ${needsLook.length} need a look, ` +
+    `${unchecked.length} unverified, ${dead.length} dead.`;
+  const lines: string[] = [options.scope ? `Scanned ${options.scope}. ${counts}` : counts, ""];
 
   if (live.length > 0) {
     lines.push(`CONFIRMED LIVE (${live.length}) — these credentials currently work. Rotate them.`);

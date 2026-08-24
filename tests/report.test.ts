@@ -333,4 +333,55 @@ test("the text report stays quiet about them", () => {
   assert.doesNotMatch(out, /alsoMatched|generic-api-key-assignment/);
 });
 
+suite("\nreport.ts — the shape of the result comes first");
+
+test("the text report opens with the summary, not with findings", () => {
+  // On a real repo the trailing summary sits after hundreds of lines, so the
+  // reader learns what they are looking at only by scrolling back up.
+  const out = render(
+    [
+      finding({ ruleId: "a", verifyStatus: "live" }),
+      finding({ ruleId: "b", verifyStatus: "unknown", verifyReason: "network" }),
+      finding({ ruleId: "c" }),
+      finding({ ruleId: "d", verifyStatus: "dead" }),
+    ],
+    "text",
+    opts
+  );
+  const first = out.split("\n")[0];
+  assert.match(first, /4 finding\(s\)/, `first line was: ${first}`);
+  assert.match(first, /1 live/);
+  assert.match(first, /1 need/);
+  assert.match(first, /1 unverified/);
+  assert.match(first, /1 dead/);
+});
+
+test("the trailing summary is kept", () => {
+  const out = render([finding({ verifyStatus: "live" })], "text", opts);
+  assert.match(out.trimEnd().split("\n").pop()!, /finding\(s\)/, "still useful after reading");
+});
+
+test("the header names what was scanned when the caller knows", () => {
+  const out = render([finding()], "text", { ...opts, scope: "31 commits" });
+  assert.match(out.split("\n")[0], /Scanned 31 commits/);
+});
+
+test("without a scope the header is just the counts", () => {
+  const out = render([finding()], "text", opts);
+  assert.doesNotMatch(out.split("\n")[0], /Scanned/);
+});
+
+test("an empty result set is still a single clean line", () => {
+  assert.strictEqual(render([], "text", opts), "SecretLoop: no secrets found.");
+});
+
+test("json and sarif are untouched by the header", () => {
+  const json = JSON.parse(render([finding()], "json", { ...opts, scope: "31 commits" }));
+  assert.strictEqual(json.tool, "secretloop");
+  assert.strictEqual(json.findings.length, 1);
+  const sarif = JSON.parse(render([finding()], "sarif", { ...opts, scope: "31 commits" }));
+  assert.strictEqual(sarif.version, "2.1.0");
+  assert.strictEqual(sarif.runs[0].results.length, 1);
+});
+
 finish();

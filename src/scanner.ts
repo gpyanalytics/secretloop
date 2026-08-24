@@ -441,11 +441,26 @@ function passesFilters(value: string, rule: SecretRule, allowValues: RegExp[]): 
   return true;
 }
 
+/**
+ * A template or shell expansion: `${gen(20)}`, `${DB_PASSWORD}`, `$API_KEY`.
+ *
+ * A placeholder by construction — it is the code that produces a value, not the
+ * value. Anchored to the start so a password that merely contains a dollar sign
+ * still reports.
+ */
+const EXPANSION = /^\$\{|^\$[A-Za-z_]/;
+
 function isPlaceholder(value: string): boolean {
   const lower = value.toLowerCase();
   if (placeholderDenylist.has(lower)) return true;
   // Repeated character strings (e.g. "aaaaaaaaaaaa") are never real secrets.
   if (/^(.)\1+$/.test(value)) return true;
+  // Shared rather than rule-scoped: generic-api-key-assignment already carried
+  // this guard in its own allowlist, so the class was recognised but fixed in
+  // one place. The three rules whose captures accept arbitrary text — snowflake,
+  // db-connection-string, http-basic-auth-url — reported `${gen(20)}` as a
+  // credential. Constrained-alphabet captures exclude $ { } and never could.
+  if (EXPANSION.test(value)) return true;
   return false;
 }
 

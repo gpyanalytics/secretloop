@@ -304,6 +304,9 @@ async function main(): Promise<void> {
 
   let findings: Finding[];
   let texts = new Map<string, string>();
+  // What the header says was covered. "55 findings" means something different
+  // over 31 commits than over 4 staged files.
+  let scope: string | undefined;
 
   if (args.command === "history") {
     if (!isGitRepo(root)) {
@@ -311,17 +314,21 @@ async function main(): Promise<void> {
       process.exitCode = 2;
       return;
     }
+    let commitsScanned = 0;
     findings = await scanHistory({
       config,
       repoRoot: root,
       maxCommits: args.maxCommits,
       revRange: args.revRange,
+      onProgress: (commits) => (commitsScanned = commits),
     });
+    scope = `${commitsScanned} commit(s)`;
   } else {
     const files = args.command === "staged" ? getStagedFiles(root) : listFiles(root, config);
     const result = scanFileList(root, files, config);
     findings = result.findings;
     texts = result.texts;
+    scope = `${result.texts.size} ${args.command === "staged" ? "staged " : ""}file(s)`;
   }
 
   if (args.baseline) {
@@ -358,7 +365,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  const report = render(sortFindings(findings), args.format, { redact: args.redact, root });
+  const report = render(sortFindings(findings), args.format, { redact: args.redact, root, scope });
   if (args.output) writeFileSync(args.output, report + "\n", "utf8");
   else process.stdout.write(report + "\n");
 

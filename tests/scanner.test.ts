@@ -178,6 +178,36 @@ test("merging does not change the surviving finding's fingerprint", () => {
   assert.strictEqual(merged.fingerprint, alone.fingerprint, "identity is unaffected by merging");
 });
 
+test("a template expression is never a credential, whatever the rule", () => {
+  // ${...} is a placeholder by construction. generic-api-key-assignment already
+  // guarded against it in its own allowlist; the three rules whose captures
+  // accept arbitrary text did not, so the same class slipped through them.
+  const cases: Array<[string, string]> = [
+    ["snowflake-credentials", 'snowflake_password = "${gen(20)}"'],
+    ["db-connection-string", "DB=postgres://app:${dbPassword}@host:5432/prod"],
+    ["http-basic-auth-url", 'fetch("https://svc:${apiSecret}@api.internal/v1")'],
+  ];
+  for (const [ruleId, text] of cases) {
+    const findings = scanText(text, 4.3);
+    assert.strictEqual(
+      findings.filter((f) => f.ruleId === ruleId).length,
+      0,
+      `${ruleId} reported ${JSON.stringify(findings.map((f) => f.value))}`
+    );
+  }
+});
+
+test("shell-style expansions are placeholders too", () => {
+  assert.strictEqual(scanText('snowflake_password = "$DB_PASSWORD"', 4.3).length, 0);
+  assert.strictEqual(scanText("DB=postgres://app:${DB_PW}@h/db", 4.3).length, 0);
+});
+
+test("a value merely containing a dollar sign is still a secret", () => {
+  // The guard is anchored: a password with $ inside it must still report.
+  const findings = scanText('snowflake_password = "Xk7$Foxtrot$92mQz"', 4.3);
+  assert.ok(findings.find((f) => f.ruleId === "snowflake-credentials"));
+});
+
 suite("\nscanner.ts — line numbers and identity");
 
 test("reports the correct 1-based line number", () => {
