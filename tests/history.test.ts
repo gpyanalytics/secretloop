@@ -1,6 +1,10 @@
-import { parseLogPatch } from "../src/history";
+import { parseLogPatch, scanHistory, describeGitFailure } from "../src/history";
 import { defaultConfig, mergeConfig } from "../src/config";
 import { test, suite, finish, assert } from "./harness";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { spawnSync } from "child_process";
+import * as path from "path";
 
 suite("history.ts");
 
@@ -126,6 +130,166 @@ test("counts commits scanned via the progress callback", () => {
 
 test("empty patch yields no findings", () => {
   assert.strictEqual(parseLogPatch("", defaultConfig).length, 0);
+});
+
+suite("\nhistory.ts — streaming a real repository");
+
+function withRepo(fn: (dir: string, git: (...a: string[]) => void) => Promise<void>): Promise<void> {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-hist-"));
+  const git = (...args: string[]) => {
+    const res = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+    if (res.status !== 0) throw new Error(`git ${args.join(" ")}: ${res.stderr}`);
+  };
+  git("init", "-q");
+  git("config", "user.email", "t@example.com");
+  git("config", "user.name", "t");
+  return fn(dir, git).finally(() => rmSync(dir, { recursive: true, force: true }));
+}
+
+const TOKEN = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+
+test("finds a secret that was committed and later deleted", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), `const t = "${TOKEN}";\n`);
+    git("add", "app.js");
+    git("commit", "-qm", "add token");
+    rmSync(path.join(dir, "app.js"));
+    git("add", "-A");
+    git("commit", "-qm", "remove it");
+
+    const findings = await scanHistory({ config: mergeConfig({}), repoRoot: dir });
+    assert.ok(
+      findings.some((f) => f.ruleId === "github-token"),
+      "a clean working tree says nothing about what is in the object store"
+    );
+  });
+});
+
+test("progress is reported while the scan runs, not after", async () => {
+  await withRepo(async (dir, git) => {
+    for (let i = 0; i < 5; i++) {
+      writeFileSync(path.join(dir, `f${i}.js`), `const v = ${i};\n`);
+      git("add", "-A");
+      git("commit", "-qm", `commit ${i}`);
+    }
+    const seen: number[] = [];
+    await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      onProgress: (commits) => seen.push(commits),
+    });
+    assert.ok(seen.length >= 5, `expected progress per commit, saw ${seen.length}`);
+    assert.deepStrictEqual(seen, [...seen].sort((a, b) => a - b), "and monotonically");
+  });
+});
+
+test("the scan is asynchronous", async () => {
+  // It ran through spawnSync, blocking the extension host for the whole scan
+  // while a withProgress notification sat there never updating.
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), "const v = 1;\n");
+    git("add", "-A");
+    git("commit", "-qm", "seed");
+    const pending = scanHistory({ config: mergeConfig({}), repoRoot: dir });
+    assert.ok(pending instanceof Promise, "a synchronous scan cannot be cancelled or yield");
+    await pending;
+  });
+});
+
+test("an already-aborted scan consumes nothing", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), `const t = "${TOKEN}";\n`);
+    git("add", "app.js");
+    git("commit", "-qm", "add token");
+
+    const controller = new AbortController();
+    controller.abort();
+    let commits = 0;
+    const findings = await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      signal: controller.signal,
+      onProgress: (n) => (commits = n),
+    });
+    assert.strictEqual(commits, 0, "an aborted scan must not read the history anyway");
+    assert.deepStrictEqual(findings, []);
+  });
+});
+
+test("cancelling mid-scan stops it well short of the end", async () => {
+  // Merely stopping consumption leaves git log -p reading pack files on a
+  // monorepo long after the user believes they stopped it, so cancel kills the
+  // process — which shows up as the scan never reaching the last commit.
+  await withRepo(async (dir, git) => {
+    for (let i = 0; i < 40; i++) {
+      writeFileSync(path.join(dir, `f${i}.js`), `const v = ${i};\n`.repeat(200));
+      git("add", "-A");
+      git("commit", "-qm", `commit ${i}`);
+    }
+    const controller = new AbortController();
+    let reached = 0;
+    await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      signal: controller.signal,
+      onProgress: (commits) => {
+        reached = commits;
+        if (commits >= 2) controller.abort();
+      },
+    });
+    assert.ok(reached < 40, `expected to stop early, reached ${reached} of 40`);
+  });
+});
+
+test("a failure with no stderr names what happened", () => {
+  // Exceeding maxBuffer returned status null, SIGTERM and an EMPTY stderr, so
+  // the message was literally "git log failed: unknown error" for the most
+  // likely large-repo failure there is.
+  const killed = describeGitFailure(null, "SIGTERM", "");
+  assert.doesNotMatch(killed, /unknown error/);
+  assert.match(killed, /SIGTERM/, "name the signal that actually ended it");
+
+  const exited = describeGitFailure(129, null, "");
+  assert.doesNotMatch(exited, /unknown error/);
+  assert.match(exited, /129/, "name the status it actually exited with");
+});
+
+test("a failure with stderr reports what git said", () => {
+  const message = describeGitFailure(128, null, "fatal: bad revision 'nope..alsonope'\n");
+  assert.match(message, /bad revision/);
+});
+
+test("a scan of a directory that is not a repository rejects", async () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-nogit-hist-"));
+  try {
+    let rejected = false;
+    try {
+      await scanHistory({ config: mergeConfig({}), repoRoot: dir });
+    } catch {
+      rejected = true;
+    }
+    assert.strictEqual(rejected, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("maxCommits still bounds the scan", async () => {
+  await withRepo(async (dir, git) => {
+    for (let i = 0; i < 4; i++) {
+      writeFileSync(path.join(dir, `f${i}.js`), `const v = ${i};\n`);
+      git("add", "-A");
+      git("commit", "-qm", `commit ${i}`);
+    }
+    let commits = 0;
+    await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      maxCommits: 2,
+      onProgress: (n) => (commits = n),
+    });
+    assert.strictEqual(commits, 2);
+  });
 });
 
 finish();

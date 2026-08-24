@@ -333,7 +333,7 @@ async function main(): Promise<void> {
       process.exitCode = 2;
       return;
     }
-    findings = scanHistory({
+    findings = await scanHistory({
       config,
       repoRoot: root,
       maxCommits: args.maxCommits,

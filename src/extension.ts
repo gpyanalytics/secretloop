@@ -822,16 +822,31 @@ async function scanGitHistory(): Promise<void> {
   }
 
   await vscode.window.withProgress(
-    { location: vscode.ProgressLocation.Notification, title: "SecretLoop: scanning git history", cancellable: false },
-    async (progress) => {
+    {
+      location: vscode.ProgressLocation.Notification,
+      title: "SecretLoop: scanning git history",
+      // Only possible now the scan is genuinely async. A full-history scan on a
+      // large repository is exactly what someone wants to stop.
+      cancellable: true,
+    },
+    async (progress, token) => {
+      const abort = new AbortController();
+      token.onCancellationRequested(() => abort.abort());
       const config = loadConfig(root);
       let findings: Finding[] = [];
       try {
-        findings = scanHistory({
+        // Throttled: a 20k-commit repository would otherwise drive 20k UI
+        // updates, which is worse than useless.
+        let lastReported = 0;
+        findings = await scanHistory({
           config,
           repoRoot: root,
-          onProgress: (commits, found) =>
-            progress.report({ message: `${commits} commits scanned, ${found} finding(s)` }),
+          signal: abort.signal,
+          onProgress: (commits, found) => {
+            if (commits - lastReported < 100) return;
+            lastReported = commits;
+            progress.report({ message: `${commits} commits scanned, ${found} finding(s)` });
+          },
         });
       } catch (err) {
         vscode.window.showErrorMessage(`SecretLoop: ${(err as Error).message}`);
