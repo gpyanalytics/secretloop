@@ -64,18 +64,18 @@ export type MigrationOutcome =
  * rotate that IAM key. Leaving it readable as a fallback was the alternative,
  * and it would mean the insecure location keeps working forever.
  *
- * STILL UNCONFIRMED AGAINST A RUNNING HOST, THOUGH NOW SELF-DIAGNOSING.
- * This reads the old values through getConfiguration().inspect() after their
- * manifest entries were removed. The API documents no registration requirement
- * — only that the name denote a leaf — and VS Code does retain unregistered
- * keys in settings.json, but that has not been observed here.
+ * CONFIRMED against a running extension host. A value planted under
+ * secretloop.awsAdminAccessKeyId — a key removed from the manifest in 9f0d478 —
+ * was read through inspect() and migrated, with a registered key probed
+ * alongside as a control. Reading a key after its manifest entry is gone works;
+ * the API's only requirement is that the name denote a leaf.
  *
- * A host pass reaching the "absent" branch does NOT settle it: `inspected` lists
- * the keys that were tried, unconditionally, so it reads identically whether
- * inspect() saw unset scopes or returned nothing at all. `descriptors` is the
- * discriminator — false for every key means unregistered keys are not
- * inspectable, and this migration is dead code for exactly the users it exists
- * for.
+ * Getting there took three wrong readings, which is why `descriptors` stays.
+ * `inspected` lists the keys that were tried, unconditionally, so on its own it
+ * reads identically whether inspect() saw unset scopes or could not look at
+ * all. `descriptors` is the discriminator, and keeping it means a future change
+ * that breaks readability shows up as a named failure instead of a confident
+ * "no credential found".
  */
 export async function migrateAwsAdminCredentials(
   secrets: vscode.SecretStorage,

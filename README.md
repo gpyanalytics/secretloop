@@ -345,25 +345,17 @@ hover for the quick-fix lightbulb to redact or extract it.
   copy. It does nothing about Settings Sync history, a committed
   `.vscode/settings.json`, or a dotfiles repository.
 
-  > **Still unconfirmed against a running host — but now self-diagnosing.** That
-  > migration reads the old values through `getConfiguration().inspect()` after
-  > their manifest entries were removed. The API documents no registration
-  > requirement, and VS Code retains unregistered keys in `settings.json`, but
-  > that has not been observed here.
+  > **Confirmed against a running extension host.** That migration reads the old
+  > values through `getConfiguration().inspect()` after their manifest entries
+  > were removed, and a value planted under `secretloop.awsAdminAccessKeyId` was
+  > read and migrated, with a registered key probed alongside as a control.
+  > Reading a key whose manifest entry is gone works.
   >
-  > A run reaching the "no AWS admin credential found" line does *not* settle
-  > it: that line lists the keys SecretLoop tried, which reads identically
-  > whether `inspect()` saw unset scopes or returned nothing at all. What
-  > settles it is the marker beside each key in **View > Output > SecretLoop**:
-  >
-  > ```
-  > Inspected: secretloop.awsAdminAccessKeyId, ...              <- inspectable, just unset
-  > Inspected: secretloop.awsAdminAccessKeyId (NO DESCRIPTOR)   <- not inspectable
-  > ```
-  >
-  > `(NO DESCRIPTOR)` on every key would mean unregistered keys cannot be read
-  > back, and this migration is dead code for exactly the users it exists for.
-  > Worth checking before publishing.
+  > SecretLoop still records, in **View > Output > SecretLoop**, whether every
+  > key it inspected was actually readable — so "no AWS admin credential in
+  > settings" always states the basis for that claim, and a future change that
+  > breaks readability surfaces as a named failure rather than a clean-looking
+  > result from a check that could not look.
 
 ## Extending detection rules
 

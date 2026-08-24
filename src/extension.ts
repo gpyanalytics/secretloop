@@ -680,10 +680,10 @@ function legacyCredentialStore(): LegacyCredentialStore {
 /**
  * Moves any AWS admin credential still in settings into the OS keychain.
  *
- * See migrateAwsAdminCredentials in rotate.ts for the caveat this depends on:
- * reading an unregistered key through inspect() is documented to work but has
- * not been confirmed against a running extension host. Both outcomes are logged
- * so a manual check can tell "found nothing" from "there was nothing".
+ * Confirmed against a running extension host: a value planted under
+ * secretloop.awsAdminAccessKeyId, a key removed from the manifest, was read and
+ * migrated. Both outcomes stay logged anyway, so "found nothing" can never
+ * quietly become "could not look".
  */
 async function runAwsCredentialMigration(context: vscode.ExtensionContext): Promise<void> {
   let outcome: MigrationOutcome;
@@ -700,12 +700,23 @@ async function runAwsCredentialMigration(context: vscode.ExtensionContext): Prom
   }
 
   if (outcome.status === "absent") {
-    const detail = outcome.descriptors
-      ? outcome.inspected
-          .map((k) => `${k}${outcome.descriptors![k] ? "" : " (NO DESCRIPTOR)"}`)
-          .join(", ")
-      : outcome.inspected.join(", ");
-    log(`SecretLoop: no AWS admin credential found in settings. Inspected: ${detail}.`);
+    // "Found nothing" is a verdict, and a verdict is only worth what the check
+    // behind it was. Saying how many keys were actually readable is what stops
+    // this becoming a confident report from something that could not look —
+    // the same shape as a 403 read as a revocation.
+    const unreadable = outcome.inspected.filter((k) => outcome.descriptors?.[k] === false);
+    if (unreadable.length > 0) {
+      log(
+        `SecretLoop: could not read ${unreadable.length} of ${outcome.inspected.length} settings ` +
+          `keys (${unreadable.join(", ")}), so "no credential found" does not hold for those. ` +
+          `A plaintext credential could be sitting in one of them unseen.`
+      );
+    } else {
+      log(
+        `SecretLoop: no AWS admin credential in settings. All ${outcome.inspected.length} keys ` +
+          `were readable and unset: ${outcome.inspected.join(", ")}.`
+      );
+    }
     return;
   }
 
