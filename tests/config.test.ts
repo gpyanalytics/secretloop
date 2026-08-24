@@ -5,6 +5,7 @@ import {
   fingerprint,
   defaultConfig,
   resolveConfigFile,
+  loadConfig,
   CONFIG_FILENAME,
 } from "../src/config";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -75,6 +76,49 @@ test("no config file yields no notice and no error", () => {
   withTempRepo({}, (dir) => {
     assert.strictEqual(resolveConfigFile(dir), null);
   });
+});
+
+suite("\nconfig.ts — allowValues are regexes, and are checked once");
+
+test("an invalid allowValues pattern is rejected at load", () => {
+  // scanner.ts compiles these with `new RegExp` on every scan, and the editor
+  // scans after every 400ms of typing. Unchecked, one bad pattern in a project
+  // config is an unhandled rejection per keystroke with no diagnostics and no
+  // visible symptom.
+  assert.throws(
+    () => mergeConfig({ allowValues: ["[unclosed"] }),
+    (err: Error) => {
+      assert.match(err.message, /allowValues/, "the message should name the field");
+      assert.match(err.message, /\[unclosed/, "and quote the pattern that failed");
+      return true;
+    }
+  );
+});
+
+test("loadConfig names the file a bad pattern came from", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-cfg-"));
+  try {
+    writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify({ allowValues: ["a(b"] }), "utf8");
+    assert.throws(
+      () => loadConfig(dir),
+      (err: Error) => {
+        assert.match(err.message, /\.secretloop\.json/);
+        assert.match(err.message, /allowValues/);
+        // Valid JSON that means something impossible is not a parse failure,
+        // and saying so sends people looking for a syntax error they will not
+        // find.
+        assert.doesNotMatch(err.message, /could not parse/i);
+        return true;
+      }
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("valid patterns still load", () => {
+  const config = mergeConfig({ allowValues: ["^EXAMPLE_", "test-[0-9]+$"] });
+  assert.deepStrictEqual(config.allowValues, ["^EXAMPLE_", "test-[0-9]+$"]);
 });
 
 finish();

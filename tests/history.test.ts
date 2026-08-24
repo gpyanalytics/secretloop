@@ -292,4 +292,57 @@ test("maxCommits still bounds the scan", async () => {
   });
 });
 
+suite("\nhistory.ts — a throw while reading git output");
+
+test("a parser failure rejects the promise instead of killing the process", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), `const t = "${TOKEN}";\n`);
+    git("add", "app.js");
+    git("commit", "-qm", "add token");
+
+    // scanText compiles config.allowValues on every call, so an invalid pattern
+    // throws from inside the stdout "data" handler. Nothing about this test is
+    // specific to that route: an exception thrown while consuming a child
+    // process's stdout escapes the Promise executor entirely, so it becomes an
+    // uncaught exception and the promise never settles. Any future throw in the
+    // parser does the same thing.
+    const broken = { ...mergeConfig({}), allowValues: ["[unclosed"] };
+
+    await assert.rejects(
+      () => scanHistory({ config: broken, repoRoot: dir }),
+      (err: Error) => {
+        assert.match(err.message, /history scan/i, "the error should name what failed");
+        assert.match(err.message, /unterminated character class/i, "and carry the underlying cause");
+        return true;
+      }
+    );
+  });
+});
+
+test("the git process is killed when the parser throws", async () => {
+  await withRepo(async (dir, git) => {
+    for (let i = 0; i < 3; i++) {
+      writeFileSync(path.join(dir, `f${i}.js`), `const t = "${TOKEN}${i}";\n`);
+      git("add", "-A");
+      git("commit", "-qm", `commit ${i}`);
+    }
+    const broken = { ...mergeConfig({}), allowValues: ["[unclosed"] };
+    const before = childCount();
+    await scanHistory({ config: broken, repoRoot: dir }).catch(() => undefined);
+    // A rejected scan that leaves git reading pack files is the leak the signal
+    // handling exists to prevent; the same must hold when the parser is what
+    // failed.
+    await new Promise((r) => setTimeout(r, 200));
+    assert.ok(
+      childCount() <= before,
+      "git should not still be running after the scan rejected"
+    );
+  });
+});
+
+function childCount(): number {
+  const res = spawnSync("bash", ["-c", "pgrep -f 'git log -p' | wc -l"], { encoding: "utf8" });
+  return Number(res.stdout.trim()) || 0;
+}
+
 finish();

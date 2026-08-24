@@ -90,6 +90,7 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
 
     const child = spawn("git", args, { cwd: repoRoot });
     let cancelled = false;
+    let failed = false;
     let carry = "";
     let stderr = "";
 
@@ -100,13 +101,40 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
     options.signal?.addEventListener("abort", abort, { once: true });
     const detach = () => options.signal?.removeEventListener("abort", abort);
 
+    /**
+     * A throw from the parser, turned into a rejection.
+     *
+     * Parsing runs inside stream and process event handlers, which are outside
+     * the Promise executor's synchronous body — so an exception there is an
+     * uncaught exception, not a rejection. The process died printing a raw V8
+     * trace through the minified bundle, the promise never settled, and git
+     * kept reading pack files. That is the same failure the 512MB maxBuffer
+     * produced, in a new place: an error naming neither git nor history.
+     *
+     * Killing matters as much as rejecting. A caller that has already been
+     * handed an error will not be waiting to clean up after a child process.
+     */
+    const fail = (err: unknown) => {
+      if (failed) return;
+      failed = true;
+      detach();
+      child.kill("SIGTERM");
+      const message = err instanceof Error ? err.message : String(err);
+      reject(new Error(`history scan failed while reading git output: ${message}`));
+    };
+
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      // Split on newlines as chunks arrive, carrying the partial last line
-      // forward. Nothing larger than one chunk is ever held in memory.
-      const lines = (carry + chunk).split("\n");
-      carry = lines.pop() ?? "";
-      for (const line of lines) parser.push(line);
+      if (failed) return;
+      try {
+        // Split on newlines as chunks arrive, carrying the partial last line
+        // forward. Nothing larger than one chunk is ever held in memory.
+        const lines = (carry + chunk).split("\n");
+        carry = lines.pop() ?? "";
+        for (const line of lines) parser.push(line);
+      } catch (err) {
+        fail(err);
+      }
     });
 
     child.stderr.setEncoding("utf8");
@@ -120,13 +148,22 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
     });
 
     child.on("close", (code, signal) => {
+      if (failed) return;
       detach();
-      // A cancelled scan resolves with what it managed to read. It is a partial
-      // answer the user asked for, not a failure.
-      if (cancelled) return resolve(parser.finish());
-      if (code !== 0) return reject(new Error(describeGitFailure(code, signal, stderr)));
-      if (carry.length > 0) parser.push(carry);
-      resolve(parser.finish());
+      try {
+        // A cancelled scan resolves with what it managed to read. It is a
+        // partial answer the user asked for, not a failure.
+        if (cancelled) return resolve(parser.finish());
+        if (code !== 0) return reject(new Error(describeGitFailure(code, signal, stderr)));
+        if (carry.length > 0) parser.push(carry);
+        resolve(parser.finish());
+      } catch (err) {
+        // The trailing flush parses too, and on a repository small enough to
+        // arrive in one chunk it parses everything — which is where this first
+        // crashed. Guarding only the data handler would have left the common
+        // case uncovered.
+        fail(err);
+      }
     });
   });
 }

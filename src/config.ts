@@ -48,11 +48,23 @@ export function resolveConfigFile(repoRoot: string): ResolvedConfigFile | null {
 export function loadConfig(repoRoot: string): SecretLoopConfig {
   const found = resolveConfigFile(repoRoot);
   if (!found) return { ...defaultConfig };
+  const name = path.basename(found.path);
+
+  let raw: Partial<SecretLoopConfig>;
   try {
-    const raw = JSON.parse(readFileSync(found.path, "utf8")) as Partial<SecretLoopConfig>;
+    raw = JSON.parse(readFileSync(found.path, "utf8")) as Partial<SecretLoopConfig>;
+  } catch (err) {
+    throw new Error(`Could not parse ${name}: ${(err as Error).message}`);
+  }
+
+  // Separated from the parse above so the message fits the fault. A file that
+  // is valid JSON and asks for something impossible is not a parse failure, and
+  // saying "could not parse" sends someone hunting for a syntax error that is
+  // not there.
+  try {
     return mergeConfig(raw);
   } catch (err) {
-    throw new Error(`Could not parse ${path.basename(found.path)}: ${(err as Error).message}`);
+    throw new Error(`${name}: ${(err as Error).message}`);
   }
 }
 
@@ -64,10 +76,38 @@ export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
     // replacing it — nobody wants to re-list node_modules to add one path.
     excludePaths: [...defaultConfig.excludePaths, ...(raw.excludePaths ?? [])],
     excludeRules: raw.excludeRules ?? [],
-    allowValues: raw.allowValues ?? [],
+    allowValues: checkAllowValues(raw.allowValues ?? []),
     maxFileSizeBytes: raw.maxFileSizeBytes ?? defaultConfig.maxFileSizeBytes,
     entropyPassEnabled: raw.entropyPassEnabled ?? defaultConfig.entropyPassEnabled,
   };
+}
+
+/**
+ * Rejects an allowValues pattern that is not a usable regular expression.
+ *
+ * Checked once here rather than wherever it is used. scanText compiles all of
+ * them with `new RegExp` on every single scan, and the editor scans a document
+ * on open and after every 400ms of typing — so one bad pattern in a project
+ * config was a throw per keystroke from inside an event handler: an unhandled
+ * rejection, no diagnostics, and nothing on screen to say why. The CLI failed
+ * on it too, with a message that named neither the file nor the field.
+ *
+ * Throwing is right where returning a filtered list is not. Silently dropping a
+ * pattern would widen what gets reported, and an allowlist that quietly stops
+ * allowing is how a scanner earns a reputation for noise.
+ */
+function checkAllowValues(patterns: string[]): string[] {
+  for (const pattern of patterns) {
+    try {
+      new RegExp(pattern);
+    } catch (err) {
+      throw new Error(
+        `allowValues entry ${JSON.stringify(pattern)} is not a valid regular expression: ` +
+          `${(err as Error).message}`
+      );
+    }
+  }
+  return patterns;
 }
 
 /**
