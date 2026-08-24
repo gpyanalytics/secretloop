@@ -83,6 +83,12 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
 
   Cache hits are not counted as sends, so that number never overstates what was
   transmitted.
+
+  Answering **Never** is permanent, so **SecretLoop: Reset Prompt Preferences**
+  in the Command Palette undoes it. It clears that answer and this session's
+  prompt state, and nothing else — not stored credentials, not baselines, and
+  not `secretloop.enableLiveVerification`, which is a setting you change in the
+  Settings UI rather than a prompt preference.
 - **Confidence-tiered findings**, not one flat severity level:
   - 🟡 **Format match** — matches a known credential format, liveness not
     checked. **This is the default tier**: with verification off, every

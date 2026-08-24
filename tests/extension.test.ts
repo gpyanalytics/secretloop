@@ -4,6 +4,7 @@ import "./stubs/install-vscode";
 import {
   decideVerificationPrompt,
   claimsStartupNotice,
+  describePromptReset,
   PromptState,
 } from "../src/extension";
 import { Finding } from "../src/scanner";
@@ -105,6 +106,44 @@ test("absent does not claim the startup notice", () => {
 
 test("already-stored does not claim the startup notice", () => {
   assert.strictEqual(claimsStartupNotice({ status: "already-stored" }), false);
+});
+
+suite("\nextension.ts — resetting prompt preferences");
+
+test("clearing a permanent decline says what was undone", () => {
+  // Someone who clicked Never had no way back: nothing could clear globalState.
+  const outcome = describePromptReset({ hadPermanentDecline: true, verificationEnabled: false });
+  assert.strictEqual(outcome.clearedPermanent, true);
+  assert.match(outcome.message, /never/i, "name the answer being undone");
+  assert.match(outcome.message, /offer|prompt|ask/i);
+});
+
+test("with nothing to clear it says so rather than implying it undid something", () => {
+  const outcome = describePromptReset({ hadPermanentDecline: false, verificationEnabled: false });
+  assert.strictEqual(outcome.clearedPermanent, false);
+  assert.match(outcome.message, /nothing|no .*(preference|decline)|was not/i);
+});
+
+test("when verification is already on, it says no prompt will appear", () => {
+  // Resetting prompt state cannot produce a prompt there is nothing to ask for,
+  // and silently doing nothing visible would read as the command failing.
+  const outcome = describePromptReset({ hadPermanentDecline: true, verificationEnabled: true });
+  assert.match(outcome.message, /already (on|enabled)/i);
+});
+
+test("the message never claims to have touched credentials or baselines", () => {
+  // A command that resets more than its name implies is its own hazard.
+  for (const verificationEnabled of [true, false]) {
+    for (const hadPermanentDecline of [true, false]) {
+      const { message } = describePromptReset({ hadPermanentDecline, verificationEnabled });
+      // Word boundaries matter: a bare /secret/ matches "SecretLoop" itself.
+      assert.doesNotMatch(
+        message,
+        /\bcredentials?\b|\bkeychain\b|\bsecrets?\b|\bbaselines?\b|\bfingerprints?\b/i,
+        message
+      );
+    }
+  }
 });
 
 finish();

@@ -48,6 +48,10 @@
       {
         "command": "secretloop.clearAwsAdminCredentials",
         "title": "SecretLoop: Clear Stored AWS Admin Credentials"
+      },
+      {
+        "command": "secretloop.resetPromptPreferences",
+        "title": "SecretLoop: Reset Prompt Preferences"
       }
     ],
     "configuration": {

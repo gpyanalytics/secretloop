@@ -161,6 +161,25 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("secretloop.setAwsAdminCredentials", () =>
       promptForAwsAdminCredentials(context)
     ),
+    vscode.commands.registerCommand("secretloop.resetPromptPreferences", async () => {
+      // Scoped to prompt state only: the persisted decline and this session's
+      // flags. Stored credentials, baselines and the enableLiveVerification
+      // setting are deliberately untouched — the last is a real choice the user
+      // made and is visible in the Settings UI, not a prompt preference.
+      const hadPermanentDecline =
+        context.globalState.get<boolean>(VERIFICATION_PROMPT_DECLINED_KEY) === true;
+      await context.globalState.update(VERIFICATION_PROMPT_DECLINED_KEY, undefined);
+      verificationDeclinedThisSession = false;
+      verificationPromptShown = false;
+      startupNoticeShown = false;
+
+      const outcome = describePromptReset({
+        hadPermanentDecline,
+        verificationEnabled: setting<boolean>("enableLiveVerification", false),
+      });
+      log(`SecretLoop: prompt preferences reset (cleared permanent decline: ${outcome.clearedPermanent}).`);
+      vscode.window.showInformationMessage(outcome.message);
+    }),
     vscode.commands.registerCommand("secretloop.clearAwsAdminCredentials", async () => {
       await context.secrets.delete(AWS_ADMIN_ACCESS_KEY_ID);
       await context.secrets.delete(AWS_ADMIN_SECRET_ACCESS_KEY);
@@ -625,6 +644,37 @@ async function runAwsCredentialMigration(context: vscode.ExtensionContext): Prom
       `Treat the old value as exposed and rotate that IAM key: a credential that has been in settings.json may already be in ` +
       `Settings Sync, a committed .vscode/settings.json, or a dotfiles repository, and clearing it removes only today's copy.`
   );
+}
+
+export interface PromptResetOutcome {
+  /** True when a persisted "Never" was actually cleared. */
+  clearedPermanent: boolean;
+  message: string;
+}
+
+/**
+ * What resetting prompt preferences did, phrased for the user.
+ *
+ * Deliberately says nothing about credentials, baselines or stored secrets,
+ * because it touches none of them — a command that resets more than its name
+ * implies is its own hazard, and a message implying more than it did is the
+ * same hazard with extra steps.
+ */
+export function describePromptReset(input: {
+  hadPermanentDecline: boolean;
+  verificationEnabled: boolean;
+}): PromptResetOutcome {
+  const cleared = input.hadPermanentDecline
+    ? `Cleared your "Never" answer, so SecretLoop can offer live verification again.`
+    : `There was no "Never" answer to clear; nothing was suppressing the offer.`;
+
+  // Resetting cannot produce a prompt there is nothing to ask for, and a
+  // command that appears to do nothing reads as a broken one.
+  const caveat = input.verificationEnabled
+    ? " Live verification is already on, so no offer will appear until you turn it off."
+    : "";
+
+  return { clearedPermanent: input.hadPermanentDecline, message: `SecretLoop: ${cleared}${caveat}` };
 }
 
 /**
