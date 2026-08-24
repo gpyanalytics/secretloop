@@ -1,22 +1,23 @@
-# npm-side packaging. This mirrors what the package.json "files" field used to
-# declare; it had to move here because vsce refuses to run when a .vscodeignore
-# and a "files" field both exist.
+# npm-side packaging.
 #
-# .npmignore also takes precedence over .gitignore for npm packing, which
-# matters here: out/ is gitignored, so without this file npm would publish the
-# CLI package with no build output at all and a dead `bin` entry.
+# This has to be a .npmignore rather than a "files" field in package.json:
+# vsce hard-exits when it finds both a .vscodeignore and a non-empty "files"
+# array ("VSCE does not support combining both strategies"), and .vscodeignore
+# is what shapes the VSIX. One repository publishes both artifacts, so the npm
+# side is stuck with the ignore file.
+#
+# It is written as deny-everything-then-name-what-ships, because a plain
+# denylist ships anything new by default. That is not hypothetical: adding
+# tsconfig.tests.json quietly started publishing it, and nothing would have
+# said so.
+#
+# npm always includes package.json, README and LICENSE regardless of these
+# rules, so they are not listed.
+#
+# The npm package is the CLI. out/extension.js is the VS Code bundle and has no
+# use here — it is 620KB a CLI user would download and never load.
 
-src/**
-tests/**
-.github/**
-.vscode/**
-.vscode-test/**
-tsconfig.json
-.vscodeignore
-.secretloop.example.json
-out/**/*.map
-*.vsix
-*.py
-coverage/**
-.DS_Store
-**/.DS_Store
+/*
+!/out
+/out/*
+!/out/cli.js

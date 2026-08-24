@@ -109,11 +109,9 @@
     "bundle": "esbuild src/extension.ts src/cli.ts --bundle --outdir=out --external:vscode --format=cjs --platform=node --minify",
     "vscode:prepublish": "npm run bundle"
   },
-  "dependencies": {
-    "@aws-sdk/client-iam": "^3.600.0",
-    "@aws-sdk/client-sts": "^3.600.0"
-  },
   "devDependencies": {
+    "@aws-sdk/client-iam": "^3.600.0",
+    "@aws-sdk/client-sts": "^3.600.0",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.0.0",
