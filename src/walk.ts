@@ -61,6 +61,36 @@ export function readTextFile(root: string, relPath: string, config: SecretLoopCo
   }
 }
 
+/**
+ * Whether git already tracks a path. `unknown` when git could not answer at all
+ * — not installed, not a repository — which must never be treated as either
+ * answer.
+ */
+export type TrackedState = "tracked" | "untracked" | "unknown";
+
+/**
+ * Answers whether git tracks `relPath`, resolved relative to `root`.
+ *
+ * Uses plain `git ls-files` rather than `--error-unmatch`: the latter exits 1
+ * for an untracked path *and* for a path git could not evaluate, so telling
+ * those apart would mean parsing stderr. Here the mapping is unambiguous —
+ * exit 0 with output means tracked, exit 0 without means untracked, and any
+ * other exit means git could not answer.
+ *
+ * The pathspec is `:(literal)` because the caller's path comes from a user
+ * setting. Without it, asking about `env[X].env` glob-matches a tracked
+ * `envX.env` and reports a file as tracked that is not there.
+ */
+export function isTracked(root: string, relPath: string): TrackedState {
+  const pathspec = relPath.split(path.sep).join("/");
+  const res = spawnSync("git", ["ls-files", "--", `:(literal)${pathspec}`], {
+    cwd: root,
+    encoding: "utf8",
+  });
+  if (res.error || res.status !== 0) return "unknown";
+  return res.stdout.trim().length > 0 ? "tracked" : "untracked";
+}
+
 export function getStagedFiles(root: string): string[] {
   const res = spawnSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACM"], {
     cwd: root,

@@ -10,6 +10,7 @@
  * installed the VSIX.
  */
 import type * as vscode from "vscode";
+import { readFileSync, writeFileSync, statSync, unlinkSync } from "fs";
 
 export interface StubCall {
   api: string;
@@ -45,6 +46,13 @@ export const env = {
   },
 };
 
+/** Set by a test to whatever the code under test should see as the open folder. */
+export let workspaceFolders: Array<{ uri: { fsPath: string } }> | undefined;
+
+export function setWorkspaceFolder(fsPath: string | undefined): void {
+  workspaceFolders = fsPath === undefined ? undefined : [{ uri: { fsPath } }];
+}
+
 export const window = {
   showInformationMessage: async <T extends string>(
     message: string,
@@ -60,6 +68,18 @@ export const window = {
     record("window.showErrorMessage", message, ...items);
     return undefined;
   },
+  showWarningMessage: async <T extends string>(
+    message: string,
+    ...items: T[]
+  ): Promise<T | undefined> => {
+    record("window.showWarningMessage", message, ...items);
+    return undefined;
+  },
+};
+
+/** Only the `file` factory is used, and only its fsPath is read back. */
+export const Uri = {
+  file: (fsPath: string) => ({ fsPath, scheme: "file", toString: () => `file://${fsPath}` }),
 };
 
 export class Range {
@@ -79,6 +99,31 @@ export const workspace = {
   applyEdit: async (edit: WorkspaceEdit): Promise<boolean> => {
     record("workspace.applyEdit", edit);
     return true;
+  },
+  get workspaceFolders() {
+    return workspaceFolders;
+  },
+  getWorkspaceFolder: (_uri: unknown) => workspaceFolders?.[0],
+  // Backed by the real filesystem: these are genuine file operations and
+  // faking them would only test the fake.
+  fs: {
+    readFile: async (uri: { fsPath: string }): Promise<Uint8Array> => {
+      record("workspace.fs.readFile", uri.fsPath);
+      return readFileSync(uri.fsPath);
+    },
+    writeFile: async (uri: { fsPath: string }, content: Uint8Array): Promise<void> => {
+      record("workspace.fs.writeFile", uri.fsPath, Buffer.from(content).toString("utf8"));
+      writeFileSync(uri.fsPath, content);
+    },
+    stat: async (uri: { fsPath: string }): Promise<{ type: number }> => {
+      record("workspace.fs.stat", uri.fsPath);
+      statSync(uri.fsPath); // throws exactly as vscode.workspace.fs.stat does
+      return { type: 1 };
+    },
+    delete: async (uri: { fsPath: string }): Promise<void> => {
+      record("workspace.fs.delete", uri.fsPath);
+      unlinkSync(uri.fsPath);
+    },
   },
 };
 

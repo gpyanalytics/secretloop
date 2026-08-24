@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as path from "path";
 import { Finding } from "./scanner";
+import { isTracked } from "./walk";
 
 /** Derives a reasonable env var name from the rule/description, e.g. "AWS_ACCESS_KEY". */
 export function suggestEnvVarName(finding: Finding, existingNames: Set<string>): string {
@@ -62,6 +63,23 @@ export async function extractToEnv(
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(document.uri);
   if (!workspaceFolder) {
     vscode.window.showErrorMessage("SecretLoop: no workspace folder open, can't create .env file.");
+    return;
+  }
+
+  // Before any write. A .gitignore entry has no effect on a file git already
+  // tracks, so extracting into one would move the secret out of a file the
+  // developer is looking at and into one they now believe is safe — staged for
+  // the next commit, with a success notification on screen.
+  //
+  // Refusing costs nothing here precisely because nothing has been written yet,
+  // and the remedy is one command. "unknown" — no git, no repository — is not a
+  // reason to refuse: a check that could not run has proven nothing.
+  if (isTracked(workspaceFolder.uri.fsPath, envRelativePath) === "tracked") {
+    vscode.window.showErrorMessage(
+      `SecretLoop: ${envRelativePath} is tracked by git, so putting a secret in it would commit the secret. ` +
+        `Adding it to .gitignore does not help — that has no effect on a file git already tracks. ` +
+        `Run \`git rm --cached ${envRelativePath}\` and commit that first, then extract again.`
+    );
     return;
   }
 

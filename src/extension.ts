@@ -105,7 +105,9 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("secretloop.scanWorkspace", scanWorkspace),
     vscode.commands.registerCommand("secretloop.scanStagedFiles", warnOnStagedSecrets),
-    vscode.commands.registerCommand("secretloop.installPrecommitHook", () => installPrecommitHook(context)),
+    vscode.commands.registerCommand("secretloop.installPrecommitHook", () =>
+      installPrecommitHook(context, setting<string>("envFilePath", ".env"))
+    ),
     vscode.commands.registerCommand("secretloop.uninstallPrecommitHook", uninstallPrecommitHook),
     vscode.commands.registerCommand("secretloop.scanHistory", scanGitHistory),
     vscode.commands.registerCommand("secretloop.writeBaseline", writeBaseline)

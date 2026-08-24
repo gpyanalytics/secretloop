@@ -2,9 +2,14 @@
 // that reaches `vscode`.
 import "./stubs/install-vscode";
 import { calls, called, firstCall, reset } from "./stubs/vscode";
-import { redactInPlace } from "../src/remediate";
+import { redactInPlace, extractToEnv } from "../src/remediate";
 import { Finding } from "../src/scanner";
 import * as assert from "node:assert";
+import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "fs";
+import { tmpdir } from "os";
+import { spawnSync } from "child_process";
+import * as path from "path";
+import { setWorkspaceFolder } from "./stubs/vscode";
 
 // harness.ts takes `() => void` and would count an async body as passing while
 // swallowing its failure, so this file carries its own awaiting harness — the
@@ -110,6 +115,111 @@ async function main() {
     await redactInPlace(document(), finding(), { copyToClipboard: true });
     const message = String(firstCall("window.showInformationMessage")?.[0] ?? "");
     assert.match(message, /clipboard/i);
+  });
+
+  console.log("\nremediate.ts — extracting into a tracked .env");
+
+  /** A throwaway git repo, with the stub reporting it as the open folder. */
+  async function withRepo(fn: (dir: string, git: (...a: string[]) => void) => Promise<void>) {
+    const dir = mkdtempSync(path.join(tmpdir(), "secretloop-remediate-test-"));
+    const git = (...args: string[]) => {
+      const res = spawnSync("git", args, { cwd: dir, encoding: "utf8" });
+      if (res.status !== 0) throw new Error(`git ${args.join(" ")}: ${res.stderr}`);
+    };
+    try {
+      git("init", "-q");
+      git("config", "user.email", "test@example.com");
+      git("config", "user.name", "test");
+      setWorkspaceFolder(dir);
+      await fn(dir, git);
+    } finally {
+      setWorkspaceFolder(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  await test("extracting into a git-tracked .env is refused", async () => {
+    // gitignore does not untrack, so writing the secret here would commit it —
+    // out of a file the developer is looking at, into one they believe is safe.
+    await withRepo(async (dir, git) => {
+      writeFileSync(path.join(dir, ".env"), "EXISTING=1\n");
+      git("add", ".env");
+      git("commit", "-qm", "track env");
+      reset();
+
+      await extractToEnv(document(), finding(), ".env");
+
+      assert.ok(
+        !readFileSync(path.join(dir, ".env"), "utf8").includes("ghp_"),
+        "the secret must not reach a tracked file"
+      );
+      assert.strictEqual(called("workspace.applyEdit"), false, "and the source must be untouched");
+      const message = String(firstCall("window.showErrorMessage")?.[0] ?? "");
+      assert.match(message, /tracked/i);
+      assert.match(message, /git rm --cached/, "the message must carry the exact remedy");
+    });
+  });
+
+  await test("the refusal happens before anything is written", async () => {
+    // The check costs nothing precisely because no write has happened yet, so
+    // there is no partial state to unwind.
+    await withRepo(async (dir, git) => {
+      writeFileSync(path.join(dir, ".env"), "EXISTING=1\n");
+      git("add", ".env");
+      git("commit", "-qm", "track env");
+      reset();
+
+      await extractToEnv(document(), finding(), ".env");
+
+      assert.strictEqual(called("workspace.fs.writeFile"), false, "no file may be written");
+      assert.strictEqual(readFileSync(path.join(dir, ".env"), "utf8"), "EXISTING=1\n");
+      assert.ok(!existsSync(path.join(dir, ".gitignore")), "and no .gitignore is created");
+    });
+  });
+
+  await test("extracting into an untracked .env proceeds", async () => {
+    await withRepo(async (dir, git) => {
+      writeFileSync(path.join(dir, "seed.txt"), "x\n");
+      git("add", "seed.txt");
+      git("commit", "-qm", "seed");
+      reset();
+
+      await extractToEnv(document(), finding(), ".env");
+
+      assert.match(readFileSync(path.join(dir, ".env"), "utf8"), /ghp_/, "the secret moves to .env");
+      assert.strictEqual(called("workspace.applyEdit"), true, "and the source reference is replaced");
+    });
+  });
+
+  await test("a tracked .env in a subdirectory is refused too", async () => {
+    // envFilePath is a setting; config/.env must resolve the same way.
+    await withRepo(async (dir, git) => {
+      mkdirSync(path.join(dir, "config"));
+      writeFileSync(path.join(dir, "config", ".env"), "EXISTING=1\n");
+      git("add", "config/.env");
+      git("commit", "-qm", "track nested env");
+      reset();
+
+      await extractToEnv(document(), finding(), "config/.env");
+
+      assert.ok(!readFileSync(path.join(dir, "config", ".env"), "utf8").includes("ghp_"));
+      assert.match(String(firstCall("window.showErrorMessage")?.[0] ?? ""), /config\/\.env/);
+    });
+  });
+
+  await test("a folder that is not a git repo does not block extraction", async () => {
+    // Unknown must not block, exactly as unknown is not "dead" in liveness.
+    const dir = mkdtempSync(path.join(tmpdir(), "secretloop-nogit-remediate-"));
+    try {
+      setWorkspaceFolder(dir);
+      reset();
+      await extractToEnv(document(), finding(), ".env");
+      assert.strictEqual(called("workspace.applyEdit"), true, "an unanswerable check must not refuse");
+      assert.strictEqual(called("window.showErrorMessage"), false);
+    } finally {
+      setWorkspaceFolder(undefined);
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   console.log(`\n${passed} passed, ${failed} failed\n`);

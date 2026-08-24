@@ -156,7 +156,7 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
-    "test": "ts-node --transpile-only tests/rules.test.ts && ts-node --transpile-only tests/scanner.test.ts && ts-node --transpile-only tests/config.test.ts && ts-node --transpile-only tests/history.test.ts && ts-node --transpile-only tests/report.test.ts && ts-node --transpile-only tests/verify.test.ts && ts-node --transpile-only tests/cli.test.ts && ts-node --transpile-only tests/stubs.test.ts && ts-node --transpile-only tests/remediate.test.ts",
+    "test": "ts-node --transpile-only tests/rules.test.ts && ts-node --transpile-only tests/scanner.test.ts && ts-node --transpile-only tests/config.test.ts && ts-node --transpile-only tests/history.test.ts && ts-node --transpile-only tests/report.test.ts && ts-node --transpile-only tests/verify.test.ts && ts-node --transpile-only tests/cli.test.ts && ts-node --transpile-only tests/stubs.test.ts && ts-node --transpile-only tests/remediate.test.ts && ts-node --transpile-only tests/walk.test.ts && ts-node --transpile-only tests/hooks.test.ts",
     "scan": "ts-node --transpile-only src/cli.ts",
     "package": "vsce package",
     "publish:vsce": "vsce publish",

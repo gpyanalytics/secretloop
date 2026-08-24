@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
 import * as path from "path";
+import { isTracked } from "./walk";
 
 const HOOK_MARKER = "# Installed by SecretLoop.";
 
@@ -15,7 +16,17 @@ function isOurHook(existing: string): boolean {
   return existing.includes(HOOK_MARKER) || existing.includes(LEGACY_HOOK_MARKER);
 }
 
-export async function installPrecommitHook(context: vscode.ExtensionContext): Promise<void> {
+/**
+ * Installs the pre-commit hook.
+ *
+ * `envRelativePath` is passed in rather than read from settings here, so this
+ * module stays independent of the settings namespace — and so a test can drive
+ * it without stubbing the configuration API.
+ */
+export async function installPrecommitHook(
+  context: vscode.ExtensionContext,
+  envRelativePath: string
+): Promise<void> {
   const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
   if (!workspaceFolder) {
     vscode.window.showErrorMessage("SecretLoop: open a workspace folder first.");
@@ -61,6 +72,26 @@ export async function installPrecommitHook(context: vscode.ExtensionContext): Pr
   await makeExecutable(hookPath);
   vscode.window.showInformationMessage(
     "SecretLoop: pre-commit hook installed. Staged files will be scanned before every commit."
+  );
+  warnIfEnvFileTracked(workspaceFolder.uri.fsPath, envRelativePath);
+}
+
+/**
+ * A tracked env file is a gap this hook cannot close, so say so while the user
+ * is thinking about commit-time protection.
+ *
+ * The hook scans the staged diff. A tracked env file that gets modified is
+ * caught — but one whose secret is already committed and unchanged never
+ * appears in that diff, so the repository looks clean at every future commit.
+ * Only a warning: installing a hook is not the moment a secret gets exposed,
+ * and the hook is worth having either way.
+ */
+function warnIfEnvFileTracked(root: string, envRelativePath: string): void {
+  if (isTracked(root, envRelativePath) !== "tracked") return;
+  vscode.window.showWarningMessage(
+    `SecretLoop: ${envRelativePath} is tracked by git. The hook scans staged changes, so a secret ` +
+      `already committed there will never show up in one. Run \`git rm --cached ${envRelativePath}\` ` +
+      `and commit that, then rotate anything it held.`
   );
 }
 
