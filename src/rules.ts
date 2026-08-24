@@ -947,7 +947,11 @@ export const rules: SecretRule[] = [
     entropy: 3.5,
     allowlist: [
       /^(?:process\.env|os\.environ|ENV|System\.getenv)/,
-      /^\$\{?[A-Za-z_]/,
+      // No /^\$\{?[A-Za-z_]/ here: that guard was generalised into
+      // isPlaceholder, which runs for every rule before any allowlist. It is not
+      // missing — it covers this rule and the three whose captures accept
+      // arbitrary text, which is where the same false positive was still
+      // getting through.
       /^(?:true|false|null|undefined|none)$/i,
       ...DOC_SAMPLE,
     ],
