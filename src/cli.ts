@@ -266,19 +266,28 @@ function warnIfLegacyInvocation(): void {
   }
 }
 
+/**
+ * Sets process.exitCode and returns rather than calling process.exit().
+ *
+ * On a pipe, Node's stdout is asynchronous: process.exit() ends the process
+ * with bytes still queued, so `secretloop scan --format sarif | tee` could lose
+ * the tail of the report. Letting the event loop drain naturally is the only
+ * way the whole report reliably arrives.
+ */
 async function main(): Promise<void> {
   warnIfLegacyInvocation();
 
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "help") {
     process.stdout.write(HELP);
-    process.exit(0);
+    return;
   }
 
   const usageError = validateArgs(args);
   if (usageError) {
     process.stderr.write(`secretloop: ${usageError}\n`);
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
 
   const root = findRepoRoot(args.root);
@@ -292,7 +301,8 @@ async function main(): Promise<void> {
   if (args.command === "history") {
     if (!isGitRepo(root)) {
       process.stderr.write("secretloop: history scan requires a git repository.\n");
-      process.exit(2);
+      process.exitCode = 2;
+      return;
     }
     findings = scanHistory({
       config,
@@ -323,7 +333,7 @@ async function main(): Promise<void> {
       `secretloop: wrote ${fingerprints.length} fingerprint(s) to ${args.writeBaseline}.\n` +
         `Future scans will ignore these; new findings still fail.\n`
     );
-    process.exit(0);
+    return;
   }
 
   const report = render(sortFindings(findings), args.format, { redact: args.redact, root });
@@ -337,14 +347,14 @@ async function main(): Promise<void> {
     );
   }
 
-  process.exit(shouldFail(findings, args.failOn) ? 1 : 0);
+  process.exitCode = shouldFail(findings, args.failOn) ? 1 : 0;
 }
 
 // Only run the CLI when invoked as a program. Without this guard, importing
-// this module for a unit test would scan the cwd and call process.exit.
+// this module for a unit test would scan the cwd and set the process exit code.
 if (require.main === module) {
   main().catch((err) => {
     process.stderr.write(`secretloop: ${err?.message ?? err}\n`);
-    process.exit(2);
+    process.exitCode = 2;
   });
 }
