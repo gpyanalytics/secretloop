@@ -288,7 +288,7 @@ Six suites, no network and no real credentials:
   reporting removed lines.
 - **`report.test.ts`** — redaction (no raw secret in any output format), SARIF
   2.1.0 validity, verified-live findings sorting first, and a regression test
-  pinning the retained `secretguardFingerprint` key.
+  pinning the versioned `secretloopFingerprint/v2` key.
 - **`verify.test.ts`** — provider response parsing against mocked `fetch`,
   including the safety-critical case: a network failure returns *unknown*, never
   *not a secret*, so a flaky connection can't downgrade a live credential.

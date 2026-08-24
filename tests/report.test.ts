@@ -100,13 +100,14 @@ test("sarif reports the tool as SecretLoop", () => {
   assert.strictEqual(parsed.runs[0].tool.driver.name, "SecretLoop");
 });
 
-test("sarif keeps the pre-rebrand partialFingerprints key", () => {
-  // GitHub code scanning keys alert identity off this field. Renaming it would
-  // resurface every previously triaged alert as new, so it stays put.
+test("sarif names its fingerprint key for this product, and versions it", () => {
+  // The name is a one-way door once alerts exist under it. It must not carry
+  // the name of a product that never shipped, and the version suffix is what
+  // lets a future algorithm change publish alongside rather than replace.
   const parsed = JSON.parse(render([finding()], "sarif", opts));
   assert.deepStrictEqual(
     Object.keys(parsed.runs[0].results[0].partialFingerprints),
-    ["secretguardFingerprint"]
+    ["secretloopFingerprint/v2"]
   );
 });
 
@@ -207,7 +208,7 @@ test("sarif keeps partialFingerprints reserved for alert identity", () => {
     render([finding({ verifyStatus: "unknown", verifyReason: "network" })], "sarif", opts)
   );
   assert.deepStrictEqual(Object.keys(parsed.runs[0].results[0].partialFingerprints), [
-    "secretguardFingerprint",
+    "secretloopFingerprint/v2",
   ]);
 });
 

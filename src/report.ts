@@ -253,12 +253,23 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
             verificationReason: f.verifyReason ?? null,
             verificationDetail: f.verifyDetail ?? null,
           },
-          // Deliberately still `secretguardFingerprint` after the SecretLoop
-          // rebrand. GitHub code scanning keys alert identity off this field:
-          // renaming it would make every previously-triaged alert reappear as
-          // new on the next upload. The value is unchanged, so dedup keeps
-          // working across the rename.
-          partialFingerprints: f.fingerprint ? { secretguardFingerprint: f.fingerprint } : undefined,
+          // GitHub code scanning keys alert identity off this field, so the name
+          // is a one-way door: once alerts exist under it, changing it
+          // resurfaces every previously triaged one. Nothing has been published,
+          // so this is the last moment it is free to fix — and it was
+          // `secretguardFingerprint`, a permanent public reference to a product
+          // that never shipped.
+          //
+          // The `/v2` suffix is SARIF's convention for exactly this problem
+          // (GitHub's own is `primaryLocationLineHash/v1`). partialFingerprints
+          // is a map, so a future change to how these are derived can publish
+          // `/v3` alongside `/v2` and code scanning will match on either,
+          // instead of reopening this same door. The number tracks the
+          // fingerprint algorithm, which is why it starts at 2: the baseline
+          // format it comes from is already v2.
+          partialFingerprints: f.fingerprint
+            ? { "secretloopFingerprint/v2": f.fingerprint }
+            : undefined,
           locations: [
             {
               physicalLocation: {
