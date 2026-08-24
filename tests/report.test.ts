@@ -389,4 +389,15 @@ test("json and sarif are untouched by the header", () => {
   assert.strictEqual(sarif.runs[0].results.length, 1);
 });
 
+suite("report.ts — a scan that found nothing still says what it looked at");
+
+test("the scope survives the zero-finding path", () => {
+  // The one case where the scope IS the message. Dropping it here is what let
+  // `--path /does/not/exist` print a clean bill of health: nothing enumerated,
+  // nothing scanned, "no secrets found."
+  const out = render([], "text", { ...opts, scope: "412 file(s)" });
+  assert.match(out, /412 file\(s\)/, "a clean scan must still report what it covered");
+  assert.match(out, /no secrets found/i);
+});
+
 finish();

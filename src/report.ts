@@ -91,7 +91,14 @@ function displayValue(f: Finding, redact: boolean): string {
 }
 
 function renderText(findings: Finding[], options: ReportOptions): string {
-  if (findings.length === 0) return "SecretLoop: no secrets found.";
+  if (findings.length === 0) {
+    // The scope matters most in exactly this branch, and this is where it used
+    // to be dropped. "no secrets found" over an enumeration that produced
+    // nothing is the difference between looking and not looking, printed as if
+    // it were the same sentence. A caller with nothing to say about scope still
+    // gets the bare line.
+    return options.scope ? `Scanned ${options.scope}. No secrets found.` : "SecretLoop: no secrets found.";
+  }
 
   const live = findings.filter((f) => f.verifyStatus === "live");
   const needsLook = findings.filter((f) => f.verifyStatus === "unknown");

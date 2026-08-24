@@ -5,6 +5,8 @@ import {
   evaluateGate,
   triageFindings,
   validateArgs,
+  validateRoot,
+  describeScope,
   HELP,
 } from "../src/cli";
 import { Finding } from "../src/scanner";
@@ -234,6 +236,53 @@ test("queued findings are the same objects that get reported", () => {
   // the verification results never reach the report.
   const plan = triageFindings([finding()], parseArgs(["scan", "--verify"]));
   assert.strictEqual(plan.toVerify[0], plan.reported[0]);
+});
+
+suite("cli.ts — a root that cannot be scanned is an error, not a clean result");
+
+test("a --path that does not exist is rejected", () => {
+  const missing = path.join(tmpdir(), "secretloop-not-here-" + process.pid);
+  const error = validateRoot(missing);
+  assert.ok(error, "expected a nonexistent --path to be rejected");
+  assert.match(error!, /does not exist/i);
+});
+
+test("a --path that is a file rather than a directory is rejected", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-root-"));
+  try {
+    const file = path.join(dir, "notes.txt");
+    writeFileSync(file, "hello", "utf8");
+    const error = validateRoot(file);
+    assert.ok(error, "expected a file --path to be rejected");
+    assert.match(error!, /not a directory/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a real directory is accepted", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-root-"));
+  try {
+    assert.strictEqual(validateRoot(dir), null);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+suite("cli.ts — describing what a scan covered");
+
+test("an empty enumeration says so rather than reading as clean", () => {
+  // "Scanned 0 file(s)." is technically true and reads as a pass. An excluded-
+  // everything config and an empty rev-range both land here, and neither is a
+  // clean result.
+  const described = describeScope(0, "file");
+  assert.match(described, /0 file\(s\)/);
+  assert.match(described, /nothing was scanned/i);
+});
+
+test("a normal count is left alone", () => {
+  assert.strictEqual(describeScope(412, "file"), "412 file(s)");
+  assert.strictEqual(describeScope(1, "commit"), "1 commit(s)");
 });
 
 finish();

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { writeFileSync } from "fs";
+import { writeFileSync, statSync } from "fs";
 import * as path from "path";
 import { Finding, UnknownReason, scanText } from "./scanner";
 import {
@@ -202,6 +202,46 @@ export function validateArgs(args: Args): string | null {
   return null;
 }
 
+/**
+ * Whether the directory a scan was pointed at can be scanned at all.
+ *
+ * Every layer below this one fails soft, and the failures compose into a lie:
+ * `git rev-parse` in a directory that isn't there errors, so findRepoRoot hands
+ * back the bad path unchanged; `git ls-files` fails, so listFiles falls through
+ * to a walk; readdirSync throws, so the walk returns nothing. Three reasonable
+ * fallbacks, and `--path ./scr` exits 0 saying no secrets were found.
+ *
+ * Fail soft on a file you cannot read. Fail loudly on a root you were handed,
+ * because a mistyped path is the caller's mistake and only the caller can fix
+ * it.
+ */
+export function validateRoot(root: string): string | null {
+  let stat;
+  try {
+    stat = statSync(root);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") return `${root} does not exist.`;
+    if (code === "EACCES") return `${root} is not readable.`;
+    return `${root} could not be read: ${(err as Error).message}`;
+  }
+  if (!stat.isDirectory()) return `${root} is not a directory.`;
+  return null;
+}
+
+/**
+ * What the report says was covered.
+ *
+ * Zero is called out rather than left to read as a pass. An excludePaths entry
+ * that swallowed the tree, an empty rev-range and a repository with no commits
+ * all arrive here, and "Scanned 0 file(s)." is a true sentence that a reader
+ * skims as a clean bill of health.
+ */
+export function describeScope(count: number, noun: string): string {
+  if (count === 0) return `0 ${noun}(s) — nothing was scanned, so this is not a clean result`;
+  return `${count} ${noun}(s)`;
+}
+
 export interface GateOutcome {
   fail: boolean;
   /** Why the build failed, when the reason is not simply a live credential. */
@@ -299,6 +339,15 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Before findRepoRoot, which cannot tell a missing directory from one that
+  // simply is not a git repository — it returns the path it was given for both.
+  const rootError = validateRoot(args.root);
+  if (rootError) {
+    process.stderr.write(`secretloop: ${rootError}\n`);
+    process.exitCode = 2;
+    return;
+  }
+
   const root = findRepoRoot(args.root);
   const config = loadConfig(root);
 
@@ -322,13 +371,13 @@ async function main(): Promise<void> {
       revRange: args.revRange,
       onProgress: (commits) => (commitsScanned = commits),
     });
-    scope = `${commitsScanned} commit(s)`;
+    scope = describeScope(commitsScanned, "commit");
   } else {
     const files = args.command === "staged" ? getStagedFiles(root) : listFiles(root, config);
     const result = scanFileList(root, files, config);
     findings = result.findings;
     texts = result.texts;
-    scope = `${result.texts.size} ${args.command === "staged" ? "staged " : ""}file(s)`;
+    scope = describeScope(result.texts.size, args.command === "staged" ? "staged file" : "file");
   }
 
   if (args.baseline) {
