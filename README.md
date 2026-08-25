@@ -32,6 +32,8 @@ handoff between them:
 
 ## Quickstart
 
+Needs Node 18 or newer — the liveness checks use the runtime's built-in `fetch`.
+
 Scan a repository's whole history without installing anything:
 
 ```bash
