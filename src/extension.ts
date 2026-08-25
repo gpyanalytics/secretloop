@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { scanText, Finding, ConfidenceTier } from "./scanner";
+import { scanText, Finding } from "./scanner";
 import {
   loadConfig,
   mergeConfig,
@@ -19,6 +19,7 @@ import {
 } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
 import { setting, resolveSetting, describeOrigin, SETTINGS_NAMESPACE } from "./settings";
+import { UNKNOWN_REASONS } from "./report";
 import { ScannedFile, scanFiles, scanWorkspaceFiles, verifyScannedFiles } from "./workspace";
 import * as path from "path";
 
@@ -356,7 +357,7 @@ async function offerVerification(document: vscode.TextDocument, findings: Findin
 function renderDiagnostics(document: vscode.TextDocument, findings: Finding[]) {
   const diagnostics: vscode.Diagnostic[] = findings.map((f) => {
     const range = new vscode.Range(document.positionAt(f.startIndex), document.positionAt(f.endIndex));
-    const diag = new vscode.Diagnostic(range, diagnosticMessage(f), severityForTier(f.confidence));
+    const diag = new vscode.Diagnostic(range, diagnosticMessage(f), severityForTier(f));
     diag.code = f.ruleId;
     diag.source = "SecretLoop";
     return diag;
@@ -364,7 +365,29 @@ function renderDiagnostics(document: vscode.TextDocument, findings: Finding[]) {
   diagnosticCollection.set(document.uri, diagnostics);
 }
 
-function diagnosticMessage(f: Finding): string {
+export function diagnosticMessage(f: Finding): string {
+  // The verdict outranks the confidence tier. `confidence` only ever records
+  // LIVE — verifyFindings upgrades it on nothing else — so reading it alone
+  // rendered dead, all five unknowns and never-checked as one sentence.
+  if (f.verifyStatus === "dead") {
+    return (
+      `Confirmed dead: ${f.description}. The provider says this credential no longer works, ` +
+      `but it is still in your source. Remove it.`
+    );
+  }
+  if (f.verifyStatus === "unknown") {
+    // Labels come from report.ts so the editor and the report cannot drift into
+    // describing the same reason two ways.
+    const { label, remedy } = UNKNOWN_REASONS[f.verifyReason ?? "no-verifier"];
+    // verify.ts writes `detail` for exactly this line — it is the remedy in the
+    // provider's own words. The report's generic remedy stands in only for a
+    // finding that reached here without one, which no verifier produces; it is
+    // a lowercase fragment written to follow an em-dash in a list, so standing
+    // alone it has to be made to read as a sentence.
+    const why = f.verifyDetail ?? `${remedy.charAt(0).toUpperCase()}${remedy.slice(1)}.`;
+    return `Possible secret: ${f.description} — liveness unknown: ${label}. ${why}`;
+  }
+
   switch (f.confidence) {
     case "verified-live":
       return `LIVE secret confirmed: ${f.description}. This credential is currently active.`;
@@ -375,8 +398,19 @@ function diagnosticMessage(f: Finding): string {
   }
 }
 
-function severityForTier(tier: ConfidenceTier): vscode.DiagnosticSeverity {
-  switch (tier) {
+export function severityForTier(f: Finding): vscode.DiagnosticSeverity {
+  // Quieter than unchecked, and deliberately not silent: not an emergency, but
+  // still a credential sitting in the source. Matches the report's SARIF note.
+  if (f.verifyStatus === "dead") return vscode.DiagnosticSeverity.Information;
+  // A 403 means the provider evaluated the credential and declined, which leans
+  // live and which no retry resolves. report.ts's sarifLevel already raises this
+  // one case to error whatever the rule's severity; the editor now agrees rather
+  // than showing it as indistinguishable from a never-checked format match.
+  if (f.verifyStatus === "unknown" && f.verifyReason === "provider-refused") {
+    return vscode.DiagnosticSeverity.Error;
+  }
+
+  switch (f.confidence) {
     case "verified-live":
       return vscode.DiagnosticSeverity.Error;
     case "format-match":
@@ -386,7 +420,41 @@ function severityForTier(tier: ConfidenceTier): vscode.DiagnosticSeverity {
   }
 }
 
-class SecretCodeActionProvider implements vscode.CodeActionProvider {
+/**
+ * Whether the rotate/revoke quick-fix is offered for a finding.
+ *
+ * A refused check earns it as much as a confirmed live one: 403 is the case
+ * that leans live and that no retry resolves, so someone has to open the
+ * provider console. Redact and extract-to-`.env` only move the string out of
+ * the file; neither revokes anything.
+ *
+ * The isVerifiable conjunct stays — an unknown with no verifier behind it has
+ * no provider path to offer.
+ */
+export function offersRotation(f: Finding): boolean {
+  if (!isVerifiable(f.ruleId)) return false;
+  return (
+    f.confidence === "verified-live" ||
+    (f.verifyStatus === "unknown" && f.verifyReason === "provider-refused")
+  );
+}
+
+/**
+ * The label on the rotate/revoke quick-fix.
+ *
+ * offersRotation fires on a refused check as well as a confirmed live one, and
+ * the two do not warrant the same sentence. A lightbulb reading "this LIVE
+ * credential" over a 403 is the boolean's old mistake in a new place: the label
+ * would be stating the verdict the check explicitly failed to reach.
+ */
+export function rotateActionTitle(f: Finding): string {
+  if (f.confidence === "verified-live") {
+    return "SecretLoop: Rotate / revoke this LIVE credential";
+  }
+  return "SecretLoop: Inspect / revoke this possibly-active credential";
+}
+
+export class SecretCodeActionProvider implements vscode.CodeActionProvider {
   provideCodeActions(document: vscode.TextDocument, range: vscode.Range): vscode.CodeAction[] {
     const findings = findingsByDocument.get(document.uri.toString()) ?? [];
     const actions: vscode.CodeAction[] = [];
@@ -398,9 +466,9 @@ class SecretCodeActionProvider implements vscode.CodeActionProvider {
       );
       if (!findingRange.intersection(range)) continue;
 
-      if (finding.confidence === "verified-live" && isVerifiable(finding.ruleId)) {
+      if (offersRotation(finding)) {
         const rotateAction = new vscode.CodeAction(
-          "SecretLoop: Rotate / revoke this LIVE credential",
+          rotateActionTitle(finding),
           vscode.CodeActionKind.QuickFix
         );
         rotateAction.isPreferred = true;
@@ -459,13 +527,32 @@ async function scanWorkspace() {
   for (const file of scanned) renderScannedFile(root, file);
 
   const findings = scanned.flatMap((s) => s.findings);
-  const live = findings.filter((f) => f.confidence === "verified-live").length;
-  const other = findings.length - live;
-  vscode.window.showInformationMessage(
-    findings.length > 0
-      ? `SecretLoop: ${live} verified LIVE secret(s), ${other} unverified/heuristic finding(s) across ${scanned.length} file(s).`
-      : `SecretLoop: no secrets found across ${scanned.length} file(s).`
+  vscode.window.showInformationMessage(workspaceScanSummary(findings, scanned.length));
+}
+
+/**
+ * The four buckets the text report leads with, in its order and its words.
+ *
+ * Two buckets could not carry the verdict: a confirmed-dead credential and a
+ * refused check were both counted as "unverified", which is the one thing
+ * neither of them is.
+ */
+function livenessCounts(findings: Finding[]): string {
+  const live = findings.filter((f) => f.verifyStatus === "live").length;
+  const needsLook = findings.filter((f) => f.verifyStatus === "unknown").length;
+  const unchecked = findings.filter((f) => f.verifyStatus === undefined).length;
+  const dead = findings.filter((f) => f.verifyStatus === "dead").length;
+  return (
+    `${findings.length} finding(s): ${live} confirmed live, ${needsLook} needing a look, ` +
+    `${unchecked} unverified, ${dead} dead`
   );
+}
+
+/** The workspace-scan summary line, separated from showing it so it can be read back. */
+export function workspaceScanSummary(findings: Finding[], fileCount: number): string {
+  return findings.length > 0
+    ? `SecretLoop: scanned ${fileCount} file(s). ${livenessCounts(findings)}.`
+    : `SecretLoop: no secrets found across ${fileCount} file(s).`;
 }
 
 async function warnOnStagedSecrets() {
@@ -499,23 +586,43 @@ async function warnOnStagedSecrets() {
   for (const file of scanned) renderScannedFile(root, file);
 
   const findings = scanned.flatMap((s) => s.findings);
-  const live = findings.filter((f) => f.confidence === "verified-live").length;
-  const other = findings.length - live;
+  const notice = stagedScanNotice(findings);
 
-  if (live > 0) {
+  if (notice.level === "error") {
     vscode.window
-      .showErrorMessage(
-        `SecretLoop: ${live} LIVE secret(s) staged for commit. Strongly recommend fixing before pushing.`,
-        "Scan Workspace"
-      )
+      .showErrorMessage(notice.message, "Scan Workspace")
       .then((choice) => {
         if (choice === "Scan Workspace") vscode.commands.executeCommand("secretloop.scanWorkspace");
       });
-  } else if (other > 0) {
-    vscode.window.showWarningMessage(
-      `SecretLoop: ${other} unverified possible secret(s) staged. Review before committing.`
-    );
+  } else if (notice.level === "warning") {
+    vscode.window.showWarningMessage(notice.message);
   }
+}
+
+/**
+ * What the staged scan tells the user, and how loudly. Which channel it goes to
+ * is part of the verdict, not a detail of showing it, so both travel together.
+ */
+export type StagedScanNotice =
+  | { level: "error" | "warning"; message: string }
+  | { level: "none" };
+
+export function stagedScanNotice(findings: Finding[]): StagedScanNotice {
+  if (findings.length === 0) return { level: "none" };
+
+  // The channel still escalates on a confirmed live credential and nothing
+  // else. What changed is what the quieter message is allowed to claim.
+  const live = findings.filter((f) => f.verifyStatus === "live").length;
+  if (live > 0) {
+    return {
+      level: "error",
+      message: `SecretLoop: ${live} LIVE secret(s) staged for commit. Strongly recommend fixing before pushing.`,
+    };
+  }
+  return {
+    level: "warning",
+    message: `SecretLoop: staged for commit — ${livenessCounts(findings)}. Review before committing.`,
+  };
 }
 
 export function deactivate() {
@@ -588,7 +695,7 @@ function renderScannedFile(root: string, scanned: ScannedFile): void {
       const diag = new vscode.Diagnostic(
         new vscode.Range(at(f.startIndex), at(f.endIndex)),
         diagnosticMessage(f),
-        severityForTier(f.confidence)
+        severityForTier(f)
       );
       diag.code = f.ruleId;
       diag.source = "SecretLoop";

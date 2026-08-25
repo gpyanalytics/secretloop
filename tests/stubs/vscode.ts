@@ -132,6 +132,21 @@ export const languages = {
   },
 };
 
+/**
+ * Diagnostic severities, as plain numbers.
+ *
+ * The numbers are the payload — VS Code reads the value, not the name — so each
+ * one is pinned against the real enum member at the bottom of this file rather
+ * than merely declared. A stub that renumbered or swapped two of them would let
+ * a test assert the wrong severity and still go green.
+ */
+export const DiagnosticSeverity = {
+  Error: 0,
+  Warning: 1,
+  Information: 2,
+  Hint: 3,
+} as const;
+
 /** The lines an OutputChannel was given, so a test can read what was logged. */
 export const outputLines: string[] = [];
 
@@ -235,6 +250,15 @@ export const conformsToRealApi = {
   workspaceEditReplace: new WorkspaceEdit().replace satisfies OmitLast<
     typeof vscode.WorkspaceEdit.prototype.replace
   >,
+  // Per member, not against the enum as a whole: every value is a valid
+  // DiagnosticSeverity, so a whole-object check would accept two of them
+  // swapped. These fail if any value drifts from the one VS Code assigns.
+  diagnosticSeverity: {
+    Error: DiagnosticSeverity.Error satisfies vscode.DiagnosticSeverity.Error,
+    Warning: DiagnosticSeverity.Warning satisfies vscode.DiagnosticSeverity.Warning,
+    Information: DiagnosticSeverity.Information satisfies vscode.DiagnosticSeverity.Information,
+    Hint: DiagnosticSeverity.Hint satisfies vscode.DiagnosticSeverity.Hint,
+  },
 };
 
 /** The real `replace` takes an optional trailing metadata argument we ignore. */
