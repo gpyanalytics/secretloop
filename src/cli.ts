@@ -51,6 +51,9 @@ const FORMATS: readonly OutputFormat[] = ["text", "json", "sarif"];
 /** The modes --fail-on accepts. Anything else lands on evaluateGate's default. */
 const FAIL_ON_MODES: readonly Args["failOn"][] = ["any", "verified", "critical", "high", "never"];
 
+/** The commands the CLI answers to. */
+const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "help"];
+
 export function parseArgs(argv: string[]): Args {
   const args: Args = {
     command: "scan",
@@ -62,14 +65,16 @@ export function parseArgs(argv: string[]): Args {
   };
   const errors: string[] = [];
 
-  const positional = argv.filter((a) => !a.startsWith("-"));
-  if (positional.length > 0 && ["scan", "staged", "history", "help"].includes(positional[0])) {
-    args.command = positional[0] as Args["command"];
-  }
+  // Tokens the loop did not consume as a flag's value. The command comes from
+  // here rather than from a filter over argv, because `argv.filter(a =>
+  // !a.startsWith("-"))` cannot tell a command from a value: for
+  // `secretloop --format json` it yields "json", and for `--baseline history`
+  // it yielded "history", which switched the run to a git-history scan because
+  // of what a file happened to be called.
+  const loose: string[] = [];
   // Help wins over everything below, including the complaints. Someone reaching
   // for --help is not asking to be told their other arguments are wrong.
   const wantsHelp = argv.includes("--help") || argv.includes("-h");
-  if (wantsHelp) args.command = "help";
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -79,10 +84,10 @@ export function parseArgs(argv: string[]): Args {
      * Both failure modes used to be silent. `next()` was `argv[++i]` with no
      * bounds check, so a flag at the end of argv got undefined — `--output`
      * wrote no file, `--write-baseline` wrote no baseline, `--path` handed
-     * path.resolve undefined and threw a TypeError naming "paths[0]" rather
-     * than the flag. And a flag followed by another flag swallowed it:
-     * `--format --verify` set the format to "--verify" and left verification
-     * off, on a run whose whole point was to verify.
+     * path.resolve undefined and threw from inside a TypeError that named
+     * "paths[0]" rather than the flag. And a flag followed by another flag
+     * swallowed it: `--format --verify` set the format to "--verify" and left
+     * verification off, on a run whose whole point was to verify.
      *
      * A flag-shaped token is reported but NOT consumed, so it still parses as
      * itself on the next iteration and `--verify` above still takes effect.
@@ -113,6 +118,10 @@ export function parseArgs(argv: string[]): Args {
       }
       case "--verify":
         args.verify = true;
+        break;
+      case "--help":
+      case "-h":
+        // Answered above. Listed so it is not reported as an unknown option.
         break;
       case "--no-redact":
         args.redact = false;
@@ -170,8 +179,33 @@ export function parseArgs(argv: string[]): Args {
         }
         break;
       }
+      default:
+        // The switch had no default, so anything it did not recognise was
+        // dropped: `--fail-onn critical` left the gate at its default and
+        // `--outputt results.json` reported to stdout while the file the user
+        // named was never created. A check quietly not applied is worse than
+        // one nobody asked for.
+        if (a.startsWith("-")) errors.push(`unknown option ${a}.`);
+        else loose.push(a);
+        break;
     }
   }
+
+  // Only the first loose token is judged. A run with an unknown option usually
+  // strands that option's value here too, and two messages for one mistake is
+  // one more than anyone needs.
+  const command = loose[0];
+  if (command !== undefined) {
+    if ((COMMANDS as readonly string[]).includes(command)) {
+      args.command = command as Args["command"];
+    } else {
+      // `secretloop hisotry` used to scan the working tree and report
+      // "Scanned 54 file(s)" while the history it was asked about went
+      // unlooked-at.
+      errors.push(`unknown command ${command}. Use one of: ${COMMANDS.join(", ")}.`);
+    }
+  }
+  if (wantsHelp) args.command = "help";
 
   if (errors.length > 0 && !wantsHelp) args.errors = errors;
   return args;

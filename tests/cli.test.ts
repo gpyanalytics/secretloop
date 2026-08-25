@@ -469,4 +469,69 @@ test("a parse error is reported ahead of the combination rules", () => {
   assert.ok(error!.includes("--format"), `the parse error should win — got: ${error}`);
 });
 
+suite("\ncli.ts — #9: a token SecretLoop does not recognise");
+
+test("an unknown option is rejected, naming the token", () => {
+  // The switch has no default case, so today every one of these is dropped and
+  // the user gets a scan that quietly ignored what they asked for.
+  for (const argv of [
+    ["scan", "--fail-onn", "critical"],
+    ["scan", "--verifyy"],
+    ["scan", "--outputt", "results.json"],
+  ]) {
+    const errors = errorsFor(argv);
+    assert.ok(errors.length > 0, `${argv.join(" ")} must be rejected`);
+    assert.ok(
+      errors.some((e) => e.includes(argv[1])),
+      `must name ${argv[1]} — got: ${errors.join(" | ")}`
+    );
+    assert.match(errors[0], /unknown option/i, errors[0]);
+  }
+});
+
+test("an unknown command is rejected, naming it", () => {
+  // `secretloop hisotry` scans the working tree and reports "Scanned 54
+  // file(s)" while the history it was asked about goes unlooked-at.
+  for (const word of ["hisotry", "scna", "stagd"]) {
+    const message = oneError([word]);
+    assert.ok(message.includes(word), message);
+    assert.match(message, /unknown command/i, message);
+  }
+});
+
+test("the four real commands stay clean", () => {
+  // No-change guard.
+  for (const word of ["scan", "staged", "history", "help"]) {
+    assert.deepStrictEqual(errorsFor([word]), [], word);
+    assert.strictEqual(parseArgs([word]).command, word);
+  }
+});
+
+test("a flag's value is never mistaken for an unknown command", () => {
+  // The landmine. The positional pre-pass is argv.filter(a => !a.startsWith("-")),
+  // which cannot tell a command from a value: for `secretloop --format json`,
+  // positional[0] is "json". Unknown-token detection has to work from the tokens
+  // the main loop did not consume as values, never from that filter.
+  assert.deepStrictEqual(errorsFor(["--format", "json"]), [], "json is a format, not a command");
+  assert.deepStrictEqual(errorsFor(["--baseline", "b.json"]), [], "b.json is a file, not a command");
+  assert.deepStrictEqual(
+    errorsFor(["history", "--rev-range", "origin/main..HEAD"]),
+    [],
+    "a rev range is not a command"
+  );
+  // And the command each of those actually resolves to is unchanged.
+  assert.strictEqual(parseArgs(["--format", "json"]).command, "scan");
+  assert.strictEqual(parseArgs(["--format", "json"]).format, "json");
+});
+
+test("asking for help anywhere in argv is help, with nothing to complain about", () => {
+  // No-change guard. Someone reaching for --help is not asking to be told their
+  // other arguments are wrong.
+  for (const argv of [["-h"], ["--help"], ["scan", "--format", "-h"], ["hisotry", "--help"]]) {
+    assert.strictEqual(parseArgs(argv).command, "help", argv.join(" "));
+    assert.deepStrictEqual(errorsFor(argv), [], argv.join(" "));
+  }
+});
+
+
 finish();
