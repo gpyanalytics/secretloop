@@ -142,11 +142,11 @@
   ],
   "license": "MIT",
   "bin": {
-    "secretloop": "./out/cli.js"
+    "secretloop": "out/cli.js"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/gpyanalytics/secretloop.git"
+    "url": "git+https://github.com/gpyanalytics/secretloop.git"
   },
   "bugs": {
     "url": "https://github.com/gpyanalytics/secretloop/issues"
