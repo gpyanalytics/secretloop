@@ -125,7 +125,7 @@
     "esbuild": "^0.28.2",
     "ovsx": "^0.10.0",
     "ts-node": "^10.9.0",
-    "typescript": "^5.4.0"
+    "typescript": "^7.0.2"
   },
   "keywords": [
     "secretloop",
