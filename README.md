@@ -132,8 +132,9 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
     checked. **This is the default tier**: with verification off, every
     format-matched credential lands here, as a warning-level diagnostic.
   - 🔴 **Verified live** — confirmed active against the provider. Only reachable
-    once verification is enabled (or `--verify` is passed). The only tier that
-    surfaces as an error-level diagnostic.
+    once verification is enabled (or `--verify` is passed). Surfaces as an
+    error-level diagnostic — as does a check the provider refused with a 403,
+    which leans live and which no retry resolves.
   - ⚪ **Entropy heuristic** — high-entropy string with no known format. Shown
     as a hint, never as an error.
   - ⚫ **Confirmed dead** — checked, and the provider says it no longer works.
@@ -243,14 +244,17 @@ All of these are in the Command Palette under **SecretLoop**:
 
 ## Remediation
 
-- **One-click redact**: replaces the secret with a placeholder and copies the
-  original to your clipboard first, so nothing is silently lost.
+- **One-click redact**: replaces the secret with a placeholder. Copying it out
+  first is a separate quick-fix, *Copy to clipboard, then redact*, offered
+  second and named for its risk — anything running on the machine can read the
+  clipboard, and it syncs across devices.
 - **One-click extract-to-.env**: moves the secret into a `.env` file, replaces
   the code with a language-aware reference (`process.env.X`, `os.environ["X"]`,
   `os.Getenv("X")`, etc.), and adds `.env` to `.gitignore` if missing.
-- **Staged-file warnings** distinguish confirmed-live secrets (blocking-level
-  warning) from unverified/heuristic ones (informational), so commit-time
-  friction is proportional to actual risk.
+- **Staged-file warnings** escalate only for a confirmed-live secret; anything
+  else is one warning counting what the checks established — live, needing a
+  look, unverified, dead — so commit-time friction is proportional to actual
+  risk.
 
 ### What this deliberately does not do
 
