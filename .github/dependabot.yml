@@ -1,0 +1,16 @@
+# Weekly npm updates.
+#
+# No `dependency-type` filter on purpose. package.json declares zero runtime
+# dependencies — both AWS SDKs were moved to devDependencies when the CLI was
+# packaged for npm, and the published package reports "deps: none" — but
+# package-lock.json still lists them under the root package's `dependencies`,
+# because it has not been regenerated since that move. Filtering on a
+# classification the two files disagree about would silently skip whichever set
+# is wrong that week, so this watches everything and lets the reviewer decide.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
