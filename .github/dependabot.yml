@@ -1,12 +1,19 @@
-# Weekly npm updates.
+# Weekly npm updates, watching both dependency types — package.json declares no
+# runtime dependencies today, but a filter that assumes that would silently stop
+# watching the moment one is added.
 #
-# No `dependency-type` filter on purpose. package.json declares zero runtime
-# dependencies — both AWS SDKs were moved to devDependencies when the CLI was
-# packaged for npm, and the published package reports "deps: none" — but
-# package-lock.json still lists them under the root package's `dependencies`,
-# because it has not been regenerated since that move. Filtering on a
-# classification the two files disagree about would silently skip whichever set
-# is wrong that week, so this watches everything and lets the reviewer decide.
+# Two majors are ignored, both because they would land ahead of where this
+# project actually is:
+#
+#   @types/node — the types must not run ahead of engines.node. A major above
+#     the floor lets tsc accept APIs the oldest supported runtime does not have:
+#     against @types/node 26 a call to fs.glob (Node 22) compiles clean and then
+#     throws on Node 18. Pinned to the floor's major instead; minor and patch
+#     updates still arrive.
+#
+#   typescript — a major is a migration, not an update. TS 7 fails
+#     `npm run compile` on every CI job today, and moving to it is work to
+#     schedule rather than a PR to merge. Minor and patch keep flowing.
 version: 2
 updates:
   - package-ecosystem: "npm"
@@ -14,3 +21,8 @@ updates:
     schedule:
       interval: "weekly"
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
