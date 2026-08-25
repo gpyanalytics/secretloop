@@ -1,4 +1,7 @@
 #!/usr/bin/env node
+// First, and deliberately: this refuses an unsupported Node before any other
+// module initializes. See src/node-guard.ts — the import order is the mechanism.
+import "./node-guard";
 import { writeFileSync, statSync } from "fs";
 import * as path from "path";
 import { Finding, UnknownReason, scanText } from "./scanner";

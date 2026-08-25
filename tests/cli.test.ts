@@ -9,6 +9,7 @@ import {
   describeScope,
   HELP,
 } from "../src/cli";
+import { checkNodeVersion, MIN_NODE } from "../src/node-guard";
 import { Finding } from "../src/scanner";
 import { test, suite, finish, assert } from "./harness";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
@@ -284,5 +285,58 @@ test("a normal count is left alone", () => {
   assert.strictEqual(describeScope(412, "file"), "412 file(s)");
   assert.strictEqual(describeScope(1, "commit"), "1 commit(s)");
 });
+
+suite("\ncli.ts — refusing an unsupported Node before anything else runs");
+
+test("an unsupported Node is named, and so is the floor it missed", () => {
+  // "requires Node >=X" on its own leaves the reader checking their version by
+  // hand, which is the moment a cryptic error was already going to cost them.
+  for (const running of ["16.20.2", "14.21.3"]) {
+    const message = checkNodeVersion(running);
+    assert.ok(message, `${running} is below the floor and must be refused`);
+    assert.ok(
+      message!.includes(MIN_NODE),
+      `must name the floor it needs — got: ${message}`
+    );
+    assert.ok(
+      message!.includes(running),
+      `must name the version actually running — got: ${message}`
+    );
+    assert.match(message!, /require/i, message!);
+  }
+});
+
+test("exactly the floor is supported", () => {
+  // An off-by-one here refuses the very version the package declares support
+  // for, which is worse than not guarding at all.
+  assert.strictEqual(checkNodeVersion("18.0.0"), null);
+});
+
+test("the last version below the floor is refused", () => {
+  const message = checkNodeVersion("17.9.9");
+  assert.ok(message, "17.9.9 has no global fetch");
+  assert.ok(message!.includes("17.9.9"));
+});
+
+test("later majors pass through silently", () => {
+  for (const running of ["18.20.4", "20.11.1", "24.19.0"]) {
+    assert.strictEqual(checkNodeVersion(running), null, running);
+  }
+});
+
+test("a version string it cannot read fails open rather than crashing", () => {
+  // Deliberate: a guard that throws — or refuses — on a version string it does
+  // not recognise is worse than no guard. It would block a runtime that may be
+  // perfectly fine, and the failure it produced would be exactly the cryptic
+  // one it exists to prevent.
+  for (const weird of ["", "unknown"]) {
+    assert.strictEqual(
+      checkNodeVersion(weird),
+      null,
+      `${JSON.stringify(weird)} must be let through, not guessed at`
+    );
+  }
+});
+
 
 finish();
