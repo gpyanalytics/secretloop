@@ -37,7 +37,19 @@ export interface Args {
   root: string;
   /** Only fail the process on findings at or above this severity. */
   failOn: "any" | "verified" | "critical" | "high" | "never";
+  /**
+   * Everything wrong with the argv this was parsed from, in the order it was
+   * found. validateArgs reports the first, so a malformed invocation exits 2
+   * through the same path as every other usage error.
+   */
+  errors?: string[];
 }
+
+/** The formats --format accepts, and the only ones render() can produce. */
+const FORMATS: readonly OutputFormat[] = ["text", "json", "sarif"];
+
+/** The modes --fail-on accepts. Anything else lands on evaluateGate's default. */
+const FAIL_ON_MODES: readonly Args["failOn"][] = ["any", "verified", "critical", "high", "never"];
 
 export function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -48,20 +60,57 @@ export function parseArgs(argv: string[]): Args {
     root: process.cwd(),
     failOn: "any",
   };
+  const errors: string[] = [];
 
   const positional = argv.filter((a) => !a.startsWith("-"));
   if (positional.length > 0 && ["scan", "staged", "history", "help"].includes(positional[0])) {
     args.command = positional[0] as Args["command"];
   }
-  if (argv.includes("--help") || argv.includes("-h")) args.command = "help";
+  // Help wins over everything below, including the complaints. Someone reaching
+  // for --help is not asking to be told their other arguments are wrong.
+  const wantsHelp = argv.includes("--help") || argv.includes("-h");
+  if (wantsHelp) args.command = "help";
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    const next = () => argv[++i];
+    /**
+     * The value for `flag`, or undefined when there is not a usable one.
+     *
+     * Both failure modes used to be silent. `next()` was `argv[++i]` with no
+     * bounds check, so a flag at the end of argv got undefined — `--output`
+     * wrote no file, `--write-baseline` wrote no baseline, `--path` handed
+     * path.resolve undefined and threw a TypeError naming "paths[0]" rather
+     * than the flag. And a flag followed by another flag swallowed it:
+     * `--format --verify` set the format to "--verify" and left verification
+     * off, on a run whose whole point was to verify.
+     *
+     * A flag-shaped token is reported but NOT consumed, so it still parses as
+     * itself on the next iteration and `--verify` above still takes effect.
+     */
+    const value = (flag: string): string | undefined => {
+      const candidate = argv[i + 1];
+      if (candidate === undefined) {
+        errors.push(`${flag} requires a value.`);
+        return undefined;
+      }
+      if (candidate.startsWith("-")) {
+        errors.push(`${flag} requires a value, but was given ${candidate}.`);
+        return undefined;
+      }
+      i++;
+      return candidate;
+    };
     switch (a) {
-      case "--format":
-        args.format = next() as OutputFormat;
+      case "--format": {
+        const format = value("--format");
+        if (format === undefined) break;
+        // render() falls through to text for anything it does not recognise, so
+        // `--format sariff -o results.sarif` wrote a text file that
+        // upload-sarif could not read, and said nothing.
+        if (FORMATS.includes(format as OutputFormat)) args.format = format as OutputFormat;
+        else errors.push(`--format ${format} is not a known format. Use one of: ${FORMATS.join(", ")}.`);
         break;
+      }
       case "--verify":
         args.verify = true;
         break;
@@ -69,29 +118,62 @@ export function parseArgs(argv: string[]): Args {
         args.redact = false;
         break;
       case "--baseline":
-        args.baseline = next();
+        args.baseline = value("--baseline") ?? args.baseline;
         break;
       case "--write-baseline":
-        args.writeBaseline = next();
+        args.writeBaseline = value("--write-baseline") ?? args.writeBaseline;
         break;
       case "--output":
       case "-o":
-        args.output = next();
+        args.output = value(a) ?? args.output;
         break;
-      case "--max-commits":
-        args.maxCommits = Number(next());
+      case "--max-commits": {
+        // The one flag whose value is read as a number before it is judged
+        // flag-shaped: -5 is a bad limit, not a missing one, and the message
+        // has to fit the fault. So it is consumed either way.
+        const candidate = argv[i + 1];
+        if (candidate === undefined) {
+          errors.push("--max-commits requires a value.");
+          break;
+        }
+        i++;
+        const limit = Number(candidate);
+        // NaN and 0 are both falsy, so scanHistory's `if (options.maxCommits)`
+        // dropped them and scanned the whole history; -5 reached git as `-n-5`,
+        // which git treats as no limit at all.
+        if (!Number.isInteger(limit) || limit < 1) {
+          errors.push(`--max-commits ${candidate} is not a positive integer.`);
+        } else {
+          args.maxCommits = limit;
+        }
         break;
+      }
       case "--rev-range":
-        args.revRange = next();
+        args.revRange = value("--rev-range") ?? args.revRange;
         break;
-      case "--path":
-        args.root = path.resolve(next());
+      case "--path": {
+        const root = value("--path");
+        if (root !== undefined) args.root = path.resolve(root);
         break;
-      case "--fail-on":
-        args.failOn = next() as Args["failOn"];
+      }
+      case "--fail-on": {
+        const failOn = value("--fail-on");
+        if (failOn === undefined) break;
+        // evaluateGate's default branch treats anything unrecognised as "any",
+        // so `--fail-on hgih` silently became the strictest mode there is.
+        if ((FAIL_ON_MODES as readonly string[]).includes(failOn)) {
+          args.failOn = failOn as Args["failOn"];
+        } else {
+          errors.push(
+            `--fail-on ${failOn} is not a known mode. Use one of: ${FAIL_ON_MODES.join(", ")}.`
+          );
+        }
         break;
+      }
     }
   }
+
+  if (errors.length > 0 && !wantsHelp) args.errors = errors;
   return args;
 }
 
@@ -174,6 +256,12 @@ export function triageFindings(
  * a green build. Returns null when the arguments are coherent.
  */
 export function validateArgs(args: Args): string | null {
+  // Reported ahead of the combination rules below: a malformed argument makes
+  // the command unrunnable at all, while those rules are about which runnable
+  // combinations make sense. The first one is enough to send someone back to
+  // their command line.
+  if (args.errors && args.errors.length > 0) return args.errors[0];
+
   // `--fail-on verified` gates on findings the verification pass marked live.
   // Without `--verify` nothing ever sets that flag, so the gate exits 0 no
   // matter how many live credentials are in the repo.

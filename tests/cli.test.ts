@@ -339,4 +339,134 @@ test("a version string it cannot read fails open rather than crashing", () => {
 });
 
 
+suite("\ncli.ts — #8: a flag given the wrong value, or none");
+
+/** Parse errors only, so a test never has to reach into an optional field. */
+function errorsFor(argv: string[]): string[] {
+  return parseArgs(argv).errors ?? [];
+}
+
+/** Exactly one error, returned, so each assertion can say what it wanted. */
+function oneError(argv: string[]): string {
+  const errors = errorsFor(argv);
+  assert.strictEqual(errors.length, 1, `expected one error from ${argv.join(" ")}, got ${errors.length}: ${errors.join(" | ")}`);
+  return errors[0];
+}
+
+/** Every flag that consumes the next token. -o is the alias for --output. */
+const VALUE_FLAGS = [
+  "--format",
+  "--baseline",
+  "--write-baseline",
+  "--output",
+  "-o",
+  "--max-commits",
+  "--rev-range",
+  "--path",
+  "--fail-on",
+];
+
+test("a value-taking flag at the end of argv is rejected, not silently dropped", () => {
+  // next() is argv[++i] with no bounds check, so today each of these becomes
+  // undefined and the flag quietly does nothing: --output writes no file,
+  // --write-baseline writes no baseline, --format falls back to text.
+  for (const flag of VALUE_FLAGS) {
+    const message = oneError(["scan", flag]);
+    assert.ok(message.includes(flag), `must name the flag — got: ${message}`);
+    assert.match(message, /requires a value|missing/i, message);
+  }
+});
+
+test("a flag swallowed as another flag's value is rejected, naming both", () => {
+  // `--format --verify` is the dangerous one: --verify becomes the format
+  // string, verification never runs, and the report says so in a line nobody
+  // re-reads.
+  const format = oneError(["scan", "--format", "--verify"]);
+  assert.ok(format.includes("--format"), format);
+  assert.ok(format.includes("--verify"), `must name the token it swallowed — got: ${format}`);
+  // The token is reported but NOT consumed, so it still parses as itself.
+  // A consuming and a non-consuming implementation both yield exactly one
+  // error, so this is the only assertion that pins which one happened.
+  assert.strictEqual(
+    parseArgs(["scan", "--format", "--verify"]).verify,
+    true,
+    "--verify must still take effect after being reported as a bad value"
+  );
+
+  const output = oneError(["scan", "-o", "--verify"]);
+  assert.ok(output.includes("-o"), output);
+  assert.ok(output.includes("--verify"), output);
+});
+
+test("--max-commits -5 is a bad number, not a missing value", () => {
+  // It sits on the seam: -5 is flag-shaped, so a blanket "values must not start
+  // with -" rule would report the wrong fault. The message has to fit what is
+  // actually wrong with it.
+  const message = oneError(["history", "--max-commits", "-5"]);
+  assert.ok(message.includes("--max-commits"), message);
+  assert.ok(message.includes("-5"), message);
+  assert.match(message, /positive integer/i, message);
+  assert.doesNotMatch(message, /requires a value|missing/i, message);
+});
+
+test("an invalid enum value names the flag and the value it was given", () => {
+  // Today --format foo renders text through render()'s default branch, so
+  // `--format sariff -o results.sarif` writes a text file that upload-sarif
+  // cannot read; --fail-on potato lands on evaluateGate's default and silently
+  // becomes the strictest mode.
+  const format = oneError(["scan", "--format", "foo"]);
+  assert.ok(format.includes("--format"), format);
+  assert.ok(format.includes("foo"), format);
+
+  const failOn = oneError(["scan", "--fail-on", "potato"]);
+  assert.ok(failOn.includes("--fail-on"), failOn);
+  assert.ok(failOn.includes("potato"), failOn);
+});
+
+test("every documented enum value is still accepted", () => {
+  // No-change guard: rejection must not narrow what already works.
+  for (const format of ["text", "json", "sarif"]) {
+    assert.deepStrictEqual(errorsFor(["scan", "--format", format]), [], format);
+    assert.strictEqual(parseArgs(["scan", "--format", format]).format, format);
+  }
+  for (const failOn of ["any", "verified", "critical", "high", "never"]) {
+    assert.deepStrictEqual(errorsFor(["scan", "--fail-on", failOn]), [], failOn);
+    assert.strictEqual(parseArgs(["scan", "--fail-on", failOn]).failOn, failOn);
+  }
+});
+
+test("--max-commits rejects what git cannot use as a limit", () => {
+  // banana is NaN and 0 is falsy, so `if (options.maxCommits)` drops both and
+  // the scan silently covers the whole history. -5 reaches git as `-n-5`, which
+  // git treats as no limit at all — verified against a 53-commit repository.
+  for (const value of ["banana", "0", "-5"]) {
+    const message = oneError(["history", "--max-commits", value]);
+    assert.ok(message.includes("--max-commits"), message);
+    assert.ok(message.includes(value), `must quote back what it was given — got: ${message}`);
+  }
+});
+
+test("--max-commits still accepts a real limit", () => {
+  // No-change guard, and the one that proves the rejection is not blanket:
+  // --max-commits 2 correctly scans 2 of 53 commits today.
+  for (const value of ["1", "2", "500"]) {
+    assert.deepStrictEqual(errorsFor(["history", "--max-commits", value]), [], value);
+    assert.strictEqual(parseArgs(["history", "--max-commits", value]).maxCommits, Number(value));
+  }
+});
+
+test("validateArgs surfaces a parse error, so a bad flag exits 2 like any usage error", () => {
+  const error = validateArgs(parseArgs(["scan", "--format", "foo"]));
+  assert.ok(error, "a parse error must reach the usage-error path");
+  assert.ok(error!.includes("--format"), error!);
+});
+
+test("a parse error is reported ahead of the combination rules", () => {
+  // Both are wrong here. The one that makes the command unrunnable at all is
+  // the one worth printing first.
+  const error = validateArgs(parseArgs(["scan", "--fail-on", "verified", "--format", "foo"]));
+  assert.ok(error, "expected an error");
+  assert.ok(error!.includes("--format"), `the parse error should win — got: ${error}`);
+});
+
 finish();
