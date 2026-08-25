@@ -212,6 +212,8 @@ export class LogPatchParser {
   private commit: CommitInfo | null = null;
   private currentFile: string | null = null;
   private addedLine = 1;
+  /** Inside a hunk body, where `+++` is content rather than a file header. */
+  private inHunk = false;
   private commitsScanned = 0;
 
   // Buffers consecutive added lines per hunk so multi-line secrets like PEM
@@ -254,12 +256,22 @@ export class LogPatchParser {
         subject: rest.join(FIELD_SEP),
       };
       this.currentFile = null;
+      this.inHunk = false;
       this.commitsScanned++;
       this.onProgress?.(this.commitsScanned, this.findings.length);
       return;
     }
 
-    if (line.startsWith("+++ ")) {
+    // Position-dependent on purpose. A `+++` line is a file header only in the
+    // header block, never in a hunk body: `git log -p` renders an added line as
+    // "+" plus its content, so a committed patch file holding combined-diff
+    // output (`git diff --cc` — any merge patch) puts lines beginning "++ "
+    // into the hunk, and they arrive here as "+++ ". Read as headers they reset
+    // the parser mid-hunk and the rest of the hunk is dropped or filed under a
+    // path made out of the line's own text — a scan that says "found nothing"
+    // when it stopped looking. A genuine header is always preceded by
+    // `diff --git`, which is what closes the hunk below.
+    if (!this.inHunk && line.startsWith("+++ ")) {
       this.flush();
       const p = line.slice(4).trim();
       this.currentFile = p === "/dev/null" ? null : p.replace(/^b\//, "");
@@ -267,7 +279,16 @@ export class LogPatchParser {
       return;
     }
 
-    if (line.startsWith("--- ") || line.startsWith("diff --git ") || line.startsWith("index ")) {
+    if (line.startsWith("diff --git ")) {
+      this.flush();
+      this.inHunk = false;
+      return;
+    }
+
+    // `--- ` and `index ` deliberately do not close the hunk. A removed line
+    // whose content begins "-- " renders as "--- ..." inside one, so closing
+    // here would re-admit the header misread through the symmetric path.
+    if (line.startsWith("--- ") || line.startsWith("index ")) {
       this.flush();
       return;
     }
@@ -276,6 +297,7 @@ export class LogPatchParser {
       this.flush();
       const m = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
       this.addedLine = m ? Number(m[1]) : 1;
+      this.inHunk = true;
       return;
     }
 

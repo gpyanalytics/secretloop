@@ -121,6 +121,52 @@ test("handles a deleted file (+++ /dev/null) without crashing", () => {
   assert.strictEqual(parseLogPatch(patch, defaultConfig).length, 0);
 });
 
+// A `+++` line INSIDE a hunk is added content, not a file header. `git log -p`
+// renders an added line as "+" followed by its content, so a committed patch
+// file whose body is combined-diff output (`git diff --cc` — any merge patch)
+// puts lines beginning "++ " into the hunk, and they arrive here as "+++ ".
+// The diff grammar has no `+++` header inside a hunk: git emits `diff --git`
+// before every real one, so position is what tells them apart.
+test("a +++ line inside a hunk is scanned as added content, not read as a header", () => {
+  const patch = [
+    commitHeader("hhh888", "commit a merge patch"),
+    "diff --git a/merge.patch b/merge.patch",
+    "--- /dev/null",
+    "+++ b/merge.patch",
+    "@@ -0,0 +1,7 @@",
+    "+diff --cc app.js",
+    "+index 1111111..2222222 3333333",
+    "+--- a/app.js",
+    "++++ b/app.js",
+    "+@@@ -1,1 -1,1 +1,2 @@@",
+    "+++ const flag = true;",
+    `+++ const token = "${TOKEN}";`,
+  ].join("\n");
+
+  const hits = parseLogPatch(patch, defaultConfig).filter((f) => f.ruleId === "github-token");
+  assert.strictEqual(hits.length, 1, "the hunk after a +++ line must still be scanned");
+  assert.strictEqual(hits[0].file, "merge.patch", "the hunk still belongs to merge.patch");
+  assert.strictEqual(hits[0].line, 7, "and the added line it sits on is line 7");
+});
+
+test("added lines after a +++ line keep the right file and line number", () => {
+  // A fix that restores detection but leaves attribution wrong is still a
+  // verdict the check did not earn: it breaks the report, editor navigation,
+  // and the file:rule:value dedup key.
+  const patch = [
+    commitHeader("iii999", "commit a merge patch"),
+    "+++ b/merge.patch",
+    "@@ -0,0 +1,2 @@",
+    "+++ const flag = true;",
+    `+const token = "${TOKEN}";`,
+  ].join("\n");
+
+  const hits = parseLogPatch(patch, defaultConfig).filter((f) => f.ruleId === "github-token");
+  assert.strictEqual(hits.length, 1, "the added line after a +++ line must be scanned");
+  assert.strictEqual(hits[0].file, "merge.patch", "not the text of the +++ line");
+  assert.strictEqual(hits[0].line, 2, "the +++ line still consumed one added line");
+});
+
 test("counts commits scanned via the progress callback", () => {
   const patch = [commitHeader("h1"), commitHeader("h2"), commitHeader("h3")].join("\n");
   let last = 0;
@@ -162,6 +208,35 @@ test("finds a secret that was committed and later deleted", async () => {
       findings.some((f) => f.ruleId === "github-token"),
       "a clean working tree says nothing about what is in the object store"
     );
+  });
+});
+
+test("a committed merge patch does not hide the secret after its +++ line", async () => {
+  // The same defect at the layer the user sees: git renders every "++ " line
+  // of the committed patch as "+++ ", and the scan reported the repository
+  // clean while this token sat in the object store.
+  await withRepo(async (dir, git) => {
+    writeFileSync(
+      path.join(dir, "merge.patch"),
+      [
+        "diff --cc app.js",
+        "index 1111111..2222222 3333333",
+        "--- a/app.js",
+        "+++ b/app.js",
+        "@@@ -1,1 -1,1 +1,2 @@@",
+        "++ const flag = true;",
+        `++ const token = "${TOKEN}";`,
+        "",
+      ].join("\n")
+    );
+    git("add", "merge.patch");
+    git("commit", "-qm", "add merge patch");
+
+    const findings = await scanHistory({ config: mergeConfig({}), repoRoot: dir });
+    const hits = findings.filter((f) => f.ruleId === "github-token");
+    assert.strictEqual(hits.length, 1, "a repository carrying this token must not scan clean");
+    assert.strictEqual(hits[0].file, "merge.patch");
+    assert.strictEqual(hits[0].line, 7);
   });
 });
 
