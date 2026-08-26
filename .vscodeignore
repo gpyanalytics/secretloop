@@ -19,6 +19,15 @@ tests/**
 # includes anything new by default.
 docs/**
 
+# ...except the Marketplace icon, which package.json points at. Without this
+# line `vsce package` refuses to build at all — "The specified icon
+# 'extension/docs/icon.png' wasn't found in the extension" — so the negation is
+# what makes an icon under docs/ usable, not a nicety. (`vsce ls` is the quiet
+# one: it simply omits the icon and reports nothing, which is why the listing
+# alone is not a check.) Verified that nothing else returns through this
+# negation: src/ and tests/ still contribute zero entries.
+!docs/icon.png
+
 # Build configuration and repository tooling. scripts/ holds the release gate
 # that packs and runs the npm tarball; it is never loaded by the extension.
 scripts/**
