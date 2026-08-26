@@ -111,11 +111,13 @@
     "package": "vsce package",
     "publish:vsce": "vsce publish",
     "publish:ovsx": "ovsx publish",
+    "clean": "node -e \"require('fs').rmSync('out',{recursive:true,force:true})\"",
     "bundle": "esbuild src/extension.ts src/cli.ts --bundle --outdir=out --external:vscode --format=cjs --platform=node --minify",
-    "vscode:prepublish": "npm run bundle",
+    "vscode:prepublish": "npm run clean && npm run bundle",
     "prepack": "npm run bundle",
     "smoke:tarball": "bash scripts/smoke-tarball.sh",
-    "prepublishOnly": "npm run smoke:tarball"
+    "prepublishOnly": "npm run smoke:tarball",
+    "smoke:vsix": "bash scripts/smoke-vsix.sh"
   },
   "devDependencies": {
     "@aws-sdk/client-iam": "^3.600.0",
