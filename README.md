@@ -9,6 +9,26 @@ tool. It finds exposed credentials, checks whether they are actually live, and
 helps you rotate and remediate them — in your editor, your pre-commit hook, and
 your CI.
 
+![The SecretLoop CLI scanning a repository and verifying each credential against its provider](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demo.gif)
+
+## In the editor
+
+The extension puts the same engine where you are already looking:
+
+- **Findings are diagnostics, and the squiggle carries the verdict.** A format
+  match is a warning. A credential confirmed live is an error — and so is one
+  the provider refused to answer for, because a 403 leans live and no retry
+  resolves it. The hover says which of those happened and what to do about it.
+- **The quick-fix fits the verdict.** *Rotate / revoke this LIVE credential* on
+  a confirmed-live one, *Inspect / revoke this possibly-active credential* on a
+  refused check, and on any finding *Redact this secret*, *Copy to clipboard,
+  then redact*, or *Move to `.env` and reference it*.
+- **Scans run from the Command Palette** — *Scan Entire Workspace*, *Scan
+  Staged Files*, and *Scan Git History for Secrets*, which opens the whole
+  report as a document.
+- **Every decision it made is in View > Output > SecretLoop**, including how
+  many credentials left the machine and to whom.
+
 ## The loop
 
 Most tools stop after the first step. The whole point of SecretLoop is the
