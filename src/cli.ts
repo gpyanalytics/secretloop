@@ -11,10 +11,10 @@ import {
   BASELINE_VERSION,
   SecretLoopConfig,
 } from "./config";
-import { listFiles, getStagedFiles, findRepoRoot } from "./walk";
+import { listFilesWithExclusions, filterGenerated, getStagedFiles, findRepoRoot } from "./walk";
 import { scanFiles } from "./workspace";
 import { scanHistory, isGitRepo } from "./history";
-import { render, OutputFormat, sortFindings, UNKNOWN_REASONS } from "./report";
+import { render, OutputFormat, sortFindings, UNKNOWN_REASONS, describeScope } from "./report";
 import { verifyFindings } from "./verify";
 
 /**
@@ -37,6 +37,12 @@ export interface Args {
   root: string;
   /** Only fail the process on findings at or above this severity. */
   failOn: "any" | "verified" | "critical" | "high" | "never";
+  /**
+   * Scan the generated-file group too. Bypasses ONLY that group — the base
+   * exclusions (node_modules, package-lock.json, minified bundles) stay on, as
+   * they always have.
+   */
+  includeGenerated: boolean;
   /**
    * Everything wrong with the argv this was parsed from, in the order it was
    * found. validateArgs reports the first, so a malformed invocation exits 2
@@ -62,6 +68,7 @@ export function parseArgs(argv: string[]): Args {
     redact: true,
     root: process.cwd(),
     failOn: "any",
+    includeGenerated: false,
   };
   const errors: string[] = [];
 
@@ -118,6 +125,9 @@ export function parseArgs(argv: string[]): Args {
       }
       case "--verify":
         args.verify = true;
+        break;
+      case "--include-generated":
+        args.includeGenerated = true;
         break;
       case "--help":
       case "-h":
@@ -225,6 +235,10 @@ COMMANDS
 
 OPTIONS
   --verify                 Confirm liveness against the provider's API before reporting
+  --include-generated      Also scan generated files (lockfiles, Gradle/Maven
+                           wrappers, Xcode project files, SARIF reports). Does
+                           not re-enable node_modules, package-lock.json or
+                           minified bundles, which are never scanned.
   --format <text|json|sarif>   Output format (default: text)
   -o, --output <file>      Write the report to a file instead of stdout
   --no-redact              Print full secret values (dangerous in CI logs)
@@ -355,17 +369,20 @@ export function validateRoot(root: string): string | null {
 }
 
 /**
- * What the report says was covered.
+ * Re-exported from report.ts, where it now lives.
  *
- * Zero is called out rather than left to read as a pass. An excludePaths entry
- * that swallowed the tree, an empty rev-range and a repository with no commits
- * all arrive here, and "Scanned 0 file(s)." is a true sentence that a reader
- * skims as a clean bill of health.
+ * It moved because the extension has to say the same sentence, and importing it
+ * from here would compile the CLI's `main()` into out/extension.js as a
+ * top-level statement — esbuild inlines ESM modules flat, so cli.ts's
+ * `require.main === module` guard becomes a property of whichever bundle it
+ * lands in. Harmless in the extension host, which loads the bundle with
+ * require(), and a live scan of the working directory for anyone who ever runs
+ * it directly. report.ts is imported by both sides already and has no top-level
+ * effects, so it is the safe home.
+ *
+ * Kept exported here so every existing import site and test is untouched.
  */
-export function describeScope(count: number, noun: string): string {
-  if (count === 0) return `0 ${noun}(s) — nothing was scanned, so this is not a clean result`;
-  return `${count} ${noun}(s)`;
-}
+export { describeScope } from "./report";
 
 export interface GateOutcome {
   fail: boolean;
@@ -475,6 +492,11 @@ async function main(): Promise<void> {
 
   const root = findRepoRoot(args.root);
   const config = loadConfig(root);
+  // Emptying the group is the whole mechanism: everything downstream asks
+  // classifyPath, which then has nothing in this group to match. The base
+  // exclusions are a different array and are untouched, so no flag can widen
+  // the scan beyond what it has always been able to reach.
+  if (args.includeGenerated) config.generatedExcludePaths = [];
 
   let findings: Finding[];
   let texts = new Map<string, string>();
@@ -489,20 +511,29 @@ async function main(): Promise<void> {
       return;
     }
     let commitsScanned = 0;
+    let generatedExcluded = 0;
     findings = await scanHistory({
       config,
       repoRoot: root,
       maxCommits: args.maxCommits,
       revRange: args.revRange,
       onProgress: (commits) => (commitsScanned = commits),
+      onGeneratedExcluded: (count) => (generatedExcluded = count),
     });
-    scope = describeScope(commitsScanned, "commit");
+    scope = describeScope(commitsScanned, "commit", generatedExcluded);
   } else {
-    const files = args.command === "staged" ? getStagedFiles(root) : listFiles(root, config);
-    const result = scanFileList(root, files, config);
+    const listed =
+      args.command === "staged"
+        ? filterGenerated(getStagedFiles(root), config)
+        : listFilesWithExclusions(root, config);
+    const result = scanFileList(root, listed.files, config);
     findings = result.findings;
     texts = result.texts;
-    scope = describeScope(result.texts.size, args.command === "staged" ? "staged file" : "file");
+    scope = describeScope(
+      result.texts.size,
+      args.command === "staged" ? "staged file" : "file",
+      listed.generatedExcluded
+    );
   }
 
   if (args.baseline) {
@@ -552,6 +583,16 @@ async function main(): Promise<void> {
 
   const gate = evaluateGate(findings, args.failOn);
   if (gate.note) process.stderr.write(`secretloop: ${gate.note}\n`);
+  if (gate.fail) {
+    // stderr, never stdout: the report on stdout is piped into files and
+    // dashboards, and a byte added there would change every consumer's input.
+    // A non-zero exit from a scanner reads as a crash to anyone who has not met
+    // this flag before, and the report itself gives them no way to tell.
+    process.stderr.write(
+      "secretloop: exit 1: findings at or above the fail-on threshold " +
+        "(this is the CI gate, not an error)\n"
+    );
+  }
   process.exitCode = gate.fail ? 1 : 0;
 }
 

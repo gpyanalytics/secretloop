@@ -1,6 +1,6 @@
 import { Finding, scanText } from "./scanner";
 import { SecretLoopConfig } from "./config";
-import { listFiles, readTextFile } from "./walk";
+import { listFilesWithExclusions, readTextFile } from "./walk";
 import { VerificationCache, VerifyContext, verifyFindings } from "./verify";
 
 /**
@@ -58,7 +58,31 @@ export function scanWorkspaceFiles(
   config: SecretLoopConfig,
   options: ScanFilesOptions = {}
 ): ScannedFile[] {
-  return scanFiles(root, listFiles(root, config), config, options);
+  return scanWorkspaceScan(root, config, options).scanned;
+}
+
+export interface WorkspaceScan {
+  scanned: ScannedFile[];
+  /** Files the generated-file group kept out, for the scope disclosure. */
+  generatedExcluded: number;
+}
+
+/**
+ * The same scan, with the number of generated files it skipped.
+ *
+ * Separate from scanWorkspaceFiles so every existing caller keeps its return
+ * type; a caller that wants to disclose the skips asks for them.
+ */
+export function scanWorkspaceScan(
+  root: string,
+  config: SecretLoopConfig,
+  options: ScanFilesOptions = {}
+): WorkspaceScan {
+  const listed = listFilesWithExclusions(root, config);
+  return {
+    scanned: scanFiles(root, listed.files, config, options),
+    generatedExcluded: listed.generatedExcluded,
+  };
 }
 
 export interface VerifyScanOptions {

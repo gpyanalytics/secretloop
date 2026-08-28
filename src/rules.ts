@@ -978,8 +978,18 @@ export const placeholderDenylist = new Set([
   "undefined",
 ]);
 
-/** Paths never worth scanning: generated, vendored, or lock-step files. */
-export const defaultExcludePaths = [
+/**
+ * Paths never worth scanning, in two groups that are kept apart on purpose.
+ *
+ * `--include-generated` bypasses the second group and only the second group.
+ * That is why these are two arrays rather than one: a flag that also switched
+ * node_modules and package-lock.json back on would be a different, much larger
+ * promise than the one it makes, and no flag has ever been able to make
+ * SecretLoop scan those.
+ */
+
+/** The original list. Always active; no flag turns any of it off. */
+export const baseExcludePaths = [
   "**/node_modules/**",
   "**/vendor/**",
   "**/dist/**",
@@ -998,6 +1008,41 @@ export const defaultExcludePaths = [
   "**/go.sum",
   "**/composer.lock",
 ];
+
+/**
+ * Generated and machine-written files, added in 0.1.1 and bypassable with
+ * `--include-generated`.
+ *
+ * Derived from what actually fired on a bugsnag-js scan rather than from a list
+ * of things that sound generated: `*.lock` (226 history findings, almost all
+ * CocoaPods `Podfile.lock`, which the named-lockfile patterns above do not
+ * cover), `*.pbxproj` (109), and the Gradle and Maven wrappers (73). Together
+ * 408 of 855.
+ *
+ * `*.xcworkspacedata` and `*.sarif` fired nothing there and are kept anyway:
+ * the first is the same Xcode machinery as `.pbxproj`, and the second is a
+ * SecretLoop report — a scan output should never be a scan input, which the
+ * benchmark demonstrated by finding four credentials inside a `results.sarif`
+ * left behind by an earlier run.
+ *
+ * Deliberately absent: `*.min.js`, `*.min.css`, `*.map` and the named
+ * lockfiles. They belong to this category but they are already in the base
+ * group, and moving them here would make `--include-generated` start scanning
+ * `package-lock.json` — a change to existing behaviour rather than an addition.
+ */
+export const generatedExcludePaths = [
+  "**/*.lock",
+  "**/gradlew",
+  "**/gradlew.bat",
+  "**/mvnw",
+  "**/mvnw.cmd",
+  "**/*.pbxproj",
+  "**/*.xcworkspacedata",
+  "**/*.sarif",
+];
+
+/** Both groups, which is what a default scan excludes. */
+export const defaultExcludePaths = [...baseExcludePaths, ...generatedExcludePaths];
 
 export const rulesById = new Map(rules.map((r) => [r.id, r]));
 

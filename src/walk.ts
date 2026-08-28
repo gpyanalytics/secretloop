@@ -1,14 +1,32 @@
 import { readdirSync, statSync, readFileSync } from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
-import { SecretLoopConfig, isPathExcluded } from "./config";
+import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
 
 /**
  * Enumerates candidate files. Prefers `git ls-files` when available so
  * .gitignore is respected for free — scanning ignored build output is both
  * slow and the main source of "why is it flagging my dist bundle" complaints.
  */
-export function listFiles(root: string, config: SecretLoopConfig): string[] {
+export interface FileListing {
+  files: string[];
+  /**
+   * Files skipped by the generated-file group specifically, not by the base
+   * exclusions. This is the number the report discloses, so it counts only what
+   * this release started skipping.
+   */
+  generatedExcluded: number;
+}
+
+/**
+ * Enumeration, with the generated-file skips counted rather than discarded.
+ *
+ * The count has to come from here because this is the only place that sees a
+ * candidate before it is dropped. A caller handed the surviving list cannot
+ * reconstruct how many files were removed, and a scan that silently skipped
+ * twelve files reads exactly like one that had nothing to skip.
+ */
+export function listFilesWithExclusions(root: string, config: SecretLoopConfig): FileListing {
   const fromGit = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
     cwd: root,
     encoding: "utf8",
@@ -20,7 +38,39 @@ export function listFiles(root: string, config: SecretLoopConfig): string[] {
       ? fromGit.stdout.split("\n").filter((l) => l.trim().length > 0)
       : walkDirectory(root, root);
 
-  return candidates.filter((rel) => !isPathExcluded(rel, config));
+  const files: string[] = [];
+  let generatedExcluded = 0;
+  for (const rel of candidates) {
+    switch (classifyPath(rel, config)) {
+      case "none":
+        files.push(rel);
+        break;
+      case "generated":
+        generatedExcluded++;
+        break;
+      default:
+        break; // already excluded before this release; not disclosed
+    }
+  }
+  return { files, generatedExcluded };
+}
+
+export function listFiles(root: string, config: SecretLoopConfig): string[] {
+  return listFilesWithExclusions(root, config).files;
+}
+
+/** Applies the generated-file group to a caller-supplied list, e.g. staged files. */
+export function filterGenerated(
+  files: string[],
+  config: SecretLoopConfig
+): FileListing {
+  const kept: string[] = [];
+  let generatedExcluded = 0;
+  for (const rel of files) {
+    if (classifyPath(rel, config) === "generated") generatedExcluded++;
+    else kept.push(rel);
+  }
+  return { files: kept, generatedExcluded };
 }
 
 function walkDirectory(dir: string, root: string, acc: string[] = []): string[] {

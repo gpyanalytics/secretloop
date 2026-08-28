@@ -48,6 +48,25 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   /^[A-Za-z0-9+/=_-]*\.(?:js|ts|css|png|jpg|svg|woff2?|json|map)$/i, // hashed asset filename
   /^[0-9.]+$/,                                                // version / numeric
   /^(?:[A-Fa-f0-9]{2}:){5,}[A-Fa-f0-9]{2}$/,                  // MAC / fingerprint
+
+  // URLs and paths, added in 0.1.1. The three above them cover a *bare* URL and
+  // an *absolute* path, and between them they missed 148 of 362 entropy
+  // findings on the bugsnag-js benchmark. Two reasons, both structural:
+  //
+  //  - The capture alphabet has no ":", so "https://host/x" is never captured
+  //    whole. What reaches here is the "//host/x" remainder, which the
+  //    ^https?:// filter cannot see and the absolute-path filter rejects
+  //    because its second character is a slash.
+  //  - Relative paths ("../node_modules/react-native/Libraries/RCTRequired")
+  //    never start with a slash at all.
+  //
+  // Every pattern is anchored and segment-shaped rather than "contains a
+  // slash", because base64 contains slashes: a looser rule silently ate real
+  // high-entropy blobs, which is the one failure mode that matters here. Base64
+  // padding and "+" cannot appear in any segment these accept.
+  /^\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\//,                  // protocol-relative URL
+  /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/[\w./-]*$/,              // host/path with no scheme
+  /^(?:[\w.-]+\/)+[\w.-]+$/,                                   // relative filesystem path
 ];
 
 function isStructuralFalsePositive(value: string): boolean {
