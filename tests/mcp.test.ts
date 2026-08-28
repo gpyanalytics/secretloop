@@ -1,6 +1,6 @@
 import { test, suite, finish, assert } from "./harness";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "fs";
-import { tmpdir } from "os";
+import { homedir, tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
 import { positiveSamples } from "./fixtures";
@@ -478,6 +478,111 @@ test("every tool enforces the boundary, not just scan", async () => {
     assert.strictEqual(toolGetFinding({ fingerprint: "x", path: outside }).ok, false);
   } finally {
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("a sibling sharing a name prefix is not authorized", () => {
+  // /repo/project must not authorize /repo/project-evil. A containment check
+  // written as startsWith(root) accepts it, because "/repo/project-evil"
+  // literally starts with "/repo/project" — the classic way this boundary is
+  // written wrong.
+  const parent = mkdtempSync(path.join(tmpdir(), "secretloop-prefix-"));
+  const saved = getAllowedRoots();
+  try {
+    const project = path.join(parent, "project");
+    const evil = path.join(parent, "project-evil");
+    mkdirSync(project, { recursive: true });
+    mkdirSync(evil, { recursive: true });
+    writeFileSync(path.join(project, "app.js"), "const ok = 1;\n", "utf8");
+    writeFileSync(path.join(evil, "app.js"), SECRET_FILE, "utf8");
+
+    setAllowedRoots([project]);
+    resetSessions();
+
+    const outside = toolScan({ path: evil });
+    assert.strictEqual(
+      outside.ok,
+      false,
+      "a sibling sharing the root's name prefix was authorized"
+    );
+    assert.match(
+      (outside as { ok: false; error: string }).error,
+      /outside the directories this server was started with/
+    );
+
+    // And the real root still works, so this refused rather than broke.
+    assert.strictEqual(toolScan({ path: project }).ok, true);
+  } finally {
+    setAllowedRoots(saved);
+    rmSync(parent, { recursive: true, force: true });
+  }
+});
+
+test("a tilde path is never expanded to the home directory", () => {
+  // Node does not expand "~", and nothing here may add it. If something did,
+  // this call would scan the user's entire home directory -- which is allowed
+  // in this test precisely so that expansion, not the boundary, is what fails.
+  const saved = getAllowedRoots();
+  try {
+    setAllowedRoots([homedir()]);
+    resetSessions();
+    for (const candidate of ["~", "~/", "~/.ssh"]) {
+      const result = toolScan({ path: candidate });
+      assert.strictEqual(result.ok, false, `${candidate} was accepted as a scannable path`);
+      const error = (result as { ok: false; error: string }).error;
+      assert.ok(
+        error.includes(candidate),
+        `the refusal should name the literal path it was given, got: ${error}`
+      );
+      assert.doesNotMatch(
+        error,
+        /generated file|finding/,
+        `${candidate} appears to have been scanned rather than refused`
+      );
+    }
+  } finally {
+    setAllowedRoots(saved);
+  }
+});
+
+test("a non-string path is refused before any filesystem access", async () => {
+  // The message is the evidence for "before": statSync on a non-string throws a
+  // TypeError about paths, so seeing the type-check's own wording proves the
+  // check ran first rather than the filesystem rejecting it downstream.
+  const bad: unknown[] = [null, undefined, 123, [], {}, true, ["/tmp"], { path: "/tmp" }];
+  for (const value of bad) {
+    const label = JSON.stringify(value) ?? String(value);
+
+    const scan = toolScan({ path: value as never });
+    assert.strictEqual(scan.ok, false, `toolScan accepted ${label}`);
+    assert.match(
+      (scan as { ok: false; error: string }).error,
+      /path is required and must be a non-empty string\./,
+      `toolScan let ${label} reach the filesystem`
+    );
+
+    const list = toolListFindings({ path: value as never });
+    assert.strictEqual(list.ok, false, `toolListFindings accepted ${label}`);
+
+    const hist = await toolHistoryScan({ path: value as never });
+    assert.strictEqual(hist.ok, false, `toolHistoryScan accepted ${label}`);
+
+    // get_finding's path is optional, so undefined is legitimately allowed
+    // through to the "no scan in this session" branch; the rest must not be.
+    if (value !== undefined) {
+      const got = toolGetFinding({ fingerprint: "x", path: value as never });
+      assert.strictEqual(got.ok, false, `toolGetFinding accepted ${label}`);
+      assert.match(
+        (got as { ok: false; error: string }).error,
+        /path is required and must be a non-empty string\./,
+        `toolGetFinding let ${label} reach the filesystem`
+      );
+    }
+  }
+
+  // An empty or whitespace-only string is the same class of bad input.
+  for (const blank of ["", "   ", "\t"]) {
+    assert.strictEqual(toolScan({ path: blank }).ok, false, `accepted blank ${JSON.stringify(blank)}`);
   }
 });
 

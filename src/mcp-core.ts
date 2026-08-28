@@ -606,7 +606,12 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
   }
 
   let scans: CachedScan[];
-  if (input.path) {
+  // `!== undefined`, not truthiness. `if (input.path)` treated null, "", false
+  // and 0 as "no path given" and quietly searched every cached scan instead of
+  // refusing the argument — a malformed input silently changing what the call
+  // means, which is the failure mode this file spends most of its comments on.
+  // Only an absent argument may take the all-sessions branch.
+  if (input.path !== undefined) {
     const resolved = resolveRoot(input.path);
     if ("error" in resolved) return fail(resolved.error);
     const cached = sessions.get(resolved.root);
