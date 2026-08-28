@@ -42,6 +42,12 @@ tsconfig.tests.json
 # Source maps: useful when debugging locally, dead weight in a published VSIX.
 out/**/*.map
 
+# Scan reports. A SecretLoop run in the repo root leaves results.sarif behind,
+# and a VSIX built straight afterwards shipped it — 74 kB of findings, including
+# every value the report quotes. Denylists include anything new by default,
+# which is exactly how this got into a package listing unnoticed.
+*.sarif
+
 # Local validation and coverage artifacts, if any are ever produced here.
 *.py
 coverage/**

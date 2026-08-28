@@ -1,7 +1,7 @@
 import { readFileSync, existsSync } from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
-import { defaultExcludePaths } from "./rules";
+import { baseExcludePaths, generatedExcludePaths } from "./rules";
 
 /**
  * Project-level configuration, read from `.secretloop.json` at the repo root.
@@ -14,6 +14,21 @@ export interface SecretLoopConfig {
   entropyThreshold: number;
   /** Glob patterns (relative to repo root) that are never scanned. */
   excludePaths: string[];
+  /**
+   * The generated-file group, kept separate from excludePaths so
+   * `--include-generated` can empty this one without touching the other.
+   * Empty means the caller asked for generated files to be scanned.
+   */
+  generatedExcludePaths: string[];
+  /**
+   * Glob patterns that win over every exclusion above.
+   *
+   * The escape hatch for a project that genuinely keeps a credential-bearing
+   * file behind one of these patterns. An explicit include is a deliberate act,
+   * so it outranks a default — including the base group, which nothing else
+   * can reach.
+   */
+  includePaths: string[];
   /** Rule IDs disabled for this project. */
   excludeRules: string[];
   /** Regex source strings; any finding whose value matches is dropped. */
@@ -26,7 +41,9 @@ export interface SecretLoopConfig {
 
 export const defaultConfig: SecretLoopConfig = {
   entropyThreshold: 4.3,
-  excludePaths: [...defaultExcludePaths],
+  excludePaths: [...baseExcludePaths],
+  generatedExcludePaths: [...generatedExcludePaths],
+  includePaths: [],
   excludeRules: [],
   allowValues: [],
   maxFileSizeBytes: 1_000_000,
@@ -75,6 +92,10 @@ export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
     // User excludes ADD to the built-in generated/vendored list rather than
     // replacing it — nobody wants to re-list node_modules to add one path.
     excludePaths: [...defaultConfig.excludePaths, ...(raw.excludePaths ?? [])],
+    // Not user-extensible: this group exists so one flag can switch it off, and
+    // a user pattern mixed into it would be switched off with it.
+    generatedExcludePaths: [...defaultConfig.generatedExcludePaths],
+    includePaths: raw.includePaths ?? [],
     excludeRules: raw.excludeRules ?? [],
     allowValues: checkAllowValues(raw.allowValues ?? []),
     maxFileSizeBytes: raw.maxFileSizeBytes ?? defaultConfig.maxFileSizeBytes,
@@ -143,9 +164,33 @@ export function globToRegExp(glob: string): RegExp {
   return new RegExp(`^${out}$`);
 }
 
-export function isPathExcluded(relPath: string, config: SecretLoopConfig): boolean {
+/**
+ * Why a path was skipped, or that it was not.
+ *
+ * Three states rather than a boolean because the report has to say how many
+ * files the *generated* group cost, and a boolean cannot tell that from the
+ * node_modules that were already being skipped before this release. Reporting
+ * "12 generated files excluded" when eleven of them were node_modules would be
+ * the same class of overstatement as calling a 403 a revocation.
+ */
+export type ExclusionReason = "none" | "excluded" | "generated";
+
+export function classifyPath(relPath: string, config: SecretLoopConfig): ExclusionReason {
   const normalized = relPath.split(path.sep).join("/").replace(/^\.\//, "");
-  return config.excludePaths.some((g) => globToRegExp(g).test(normalized));
+  const matches = (globs: string[]) => globs.some((g) => globToRegExp(g).test(normalized));
+
+  // An explicit include outranks every exclusion, default or otherwise.
+  if (matches(config.includePaths)) return "none";
+  // Base first, so a file both groups match is attributed to the group that was
+  // already skipping it. Otherwise `out/results.sarif` would be counted as a
+  // generated-file skip that this release caused, which it did not.
+  if (matches(config.excludePaths)) return "excluded";
+  if (matches(config.generatedExcludePaths)) return "generated";
+  return "none";
+}
+
+export function isPathExcluded(relPath: string, config: SecretLoopConfig): boolean {
+  return classifyPath(relPath, config) !== "none";
 }
 
 /**

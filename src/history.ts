@@ -1,6 +1,6 @@
 import { spawn, spawnSync } from "child_process";
 import { Finding, scanText } from "./scanner";
-import { SecretLoopConfig, isPathExcluded } from "./config";
+import { SecretLoopConfig, classifyPath } from "./config";
 
 /**
  * Scans git history for secrets that were committed at some point, even if
@@ -19,6 +19,12 @@ export interface HistoryScanOptions {
   /** Only scan commits reachable from this rev range, e.g. "origin/main..HEAD". */
   revRange?: string;
   onProgress?: (commitsScanned: number, findingsSoFar: number) => void;
+  /**
+   * How many distinct files the generated-file group kept out of this scan.
+   * Reported once, at the end, so the scope statement can disclose it the same
+   * way a working-tree scan does.
+   */
+  onGeneratedExcluded?: (count: number) => void;
   /**
    * Aborts the scan and kills the git process.
    *
@@ -153,10 +159,16 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
       try {
         // A cancelled scan resolves with what it managed to read. It is a
         // partial answer the user asked for, not a failure.
-        if (cancelled) return resolve(parser.finish());
+        if (cancelled) {
+          const partial = parser.finish();
+          options.onGeneratedExcluded?.(parser.generatedExcludedCount());
+          return resolve(partial);
+        }
         if (code !== 0) return reject(new Error(describeGitFailure(code, signal, stderr)));
         if (carry.length > 0) parser.push(carry);
-        resolve(parser.finish());
+        const all = parser.finish();
+        options.onGeneratedExcluded?.(parser.generatedExcludedCount());
+        resolve(all);
       } catch (err) {
         // The trailing flush parses too, and on a repository small enough to
         // arrive in one chunk it parses everything — which is where this first
@@ -215,6 +227,8 @@ export class LogPatchParser {
   /** Inside a hunk body, where `+++` is content rather than a file header. */
   private inHunk = false;
   private commitsScanned = 0;
+  /** Distinct paths the generated group kept out, for the scope disclosure. */
+  private readonly generatedSkipped = new Set<string>();
 
   // Buffers consecutive added lines per hunk so multi-line secrets like PEM
   // blocks are scanned as one body rather than line by line.
@@ -275,7 +289,11 @@ export class LogPatchParser {
       this.flush();
       const p = line.slice(4).trim();
       this.currentFile = p === "/dev/null" ? null : p.replace(/^b\//, "");
-      if (this.currentFile && isPathExcluded(this.currentFile, this.config)) this.currentFile = null;
+      if (this.currentFile) {
+        const reason = classifyPath(this.currentFile, this.config);
+        if (reason === "generated") this.generatedSkipped.add(this.currentFile);
+        if (reason !== "none") this.currentFile = null;
+      }
       return;
     }
 
@@ -317,6 +335,11 @@ export class LogPatchParser {
   finish(): Finding[] {
     this.flush();
     return this.findings;
+  }
+
+  /** Distinct files the generated-file group excluded from this scan. */
+  generatedExcludedCount(): number {
+    return this.generatedSkipped.size;
   }
 }
 

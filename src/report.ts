@@ -14,6 +14,34 @@ export interface ReportOptions {
   scope?: string;
 }
 
+/**
+ * What the report says was covered.
+ *
+ * Zero is called out rather than left to read as a pass. An excludePaths entry
+ * that swallowed the tree, an empty rev-range and a repository with no commits
+ * all arrive here, and "Scanned 0 file(s)." is a true sentence that a reader
+ * skims as a clean bill of health.
+ *
+ * Lives here rather than in cli.ts so the extension can say the same sentence
+ * without pulling the CLI's entry point into its bundle.
+ */
+export function describeScope(count: number, noun: string, generatedExcluded = 0): string {
+  const base =
+    count === 0
+      ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
+      : `${count} ${noun}(s)`;
+  // Disclosure, not a footnote. A scan that skipped generated files must not
+  // read identically to one that had none to skip — which is the whole reason
+  // the count is threaded up from the walker instead of being dropped there.
+  if (generatedExcluded > 0) {
+    return (
+      `${base}; ${generatedExcluded} generated file(s) excluded by default ` +
+      `(--include-generated to scan them)`
+    );
+  }
+  return base;
+}
+
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
 
 /**
@@ -119,7 +147,7 @@ function renderText(findings: Finding[], options: ReportOptions): string {
 
   if (live.length > 0) {
     lines.push(`CONFIRMED LIVE (${live.length}) — these credentials currently work. Rotate them.`);
-    for (const f of live) lines.push(...formatFinding(f, options));
+    for (const g of groupByValue(live)) lines.push(...formatGroup(g, options));
     lines.push("");
   }
 
@@ -133,7 +161,7 @@ function renderText(findings: Finding[], options: ReportOptions): string {
     for (const [reason, group] of groupByReason(needsLook)) {
       const { label, remedy } = UNKNOWN_REASONS[reason];
       lines.push(`  ${label} (${group.length}) — ${remedy}`);
-      for (const f of group) lines.push(...formatFinding(f, options, "    "));
+      for (const g of groupByValue(group)) lines.push(...formatGroup(g, options, "    "));
     }
     lines.push("");
   }
@@ -143,7 +171,7 @@ function renderText(findings: Finding[], options: ReportOptions): string {
       `UNVERIFIED (${unchecked.length}) — matched a known format or entropy heuristic; ` +
         `no liveness check was run.`
     );
-    for (const f of unchecked) lines.push(...formatFinding(f, options));
+    for (const g of groupByValue(unchecked)) lines.push(...formatGroup(g, options));
     lines.push("");
   }
 
@@ -153,9 +181,10 @@ function renderText(findings: Finding[], options: ReportOptions): string {
     lines.push(
       `CONFIRMED DEAD (${dead.length}) — no longer active, but still in your source. Remove them.`
     );
-    for (const f of dead) {
-      const loc = f.commit ? `${f.file}:${f.line} (commit ${f.commit.slice(0, 8)})` : `${f.file ?? "<text>"}:${f.line}`;
-      lines.push(`  [${f.severity}] ${f.description} (${f.ruleId}) — ${loc}`);
+    for (const g of groupByValue(dead)) {
+      const f = g[0];
+      const where = g.length === 1 ? locationOf(f) : `${g.length} locations: ${g.map(locationOf).join(", ")}`;
+      lines.push(`  [${f.severity}] ${f.description} (${f.ruleId}) — ${where}`);
     }
     lines.push("");
   }
@@ -178,17 +207,73 @@ function groupByReason(findings: Finding[]): Array<[UnknownReason, Finding[]]> {
     .map((r) => [r, groups.get(r)!]);
 }
 
-function formatFinding(f: Finding, options: ReportOptions, indent = "  "): string[] {
-  const loc = f.commit
+function locationOf(f: Finding): string {
+  return f.commit
     ? `${f.file}:${f.line} (commit ${f.commit.slice(0, 8)})`
     : `${f.file ?? "<text>"}:${f.line}`;
-  const out = [
-    `${indent}[${f.severity}] ${f.description} (${f.ruleId})`,
-    `${indent}  ${loc}`,
-    `${indent}  value: ${displayValue(f, options.redact)}`,
-  ];
+}
+
+/**
+ * Occurrences of one credential, collapsed into one entry.
+ *
+ * Purely a rendering concern, and confined to the text report on purpose. One
+ * leaked value copied into forty files is one thing to rotate, and printing it
+ * forty times buries the other findings underneath it — on the bugsnag-js
+ * benchmark the single worst value accounts for 43 of the occurrences in the
+ * post-exclusion set.
+ *
+ * What this deliberately does NOT do: change how many findings there are. The
+ * header and footer still count occurrences, SARIF still emits one result per
+ * occurrence, JSON still holds one object per finding, and every occurrence
+ * keeps its own fingerprint. Grouping is how the list is drawn, not what is in
+ * it — a baseline written before this release matches exactly what it matched
+ * before.
+ *
+ * Grouped by rule as well as value: the same string matching two rules is two
+ * different claims about it, and merging them would report one.
+ */
+function groupByValue(findings: Finding[]): Finding[][] {
+  const groups = new Map<string, Finding[]>();
+  const order: string[] = [];
+  for (const f of findings) {
+    const key = `${f.ruleId}\u0000${f.value}`;
+    const bucket = groups.get(key);
+    if (bucket) bucket.push(f);
+    else {
+      groups.set(key, [f]);
+      order.push(key);
+    }
+  }
+  return order.map((k) => groups.get(k)!);
+}
+
+function formatFinding(f: Finding, options: ReportOptions, indent = "  "): string[] {
+  return formatGroup([f], options, indent);
+}
+
+/**
+ * One entry for a group of occurrences. A single-occurrence group renders
+ * exactly as it always did, so nothing changes for the common case.
+ */
+function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): string[] {
+  const f = group[0];
+  const out = [`${indent}[${f.severity}] ${f.description} (${f.ruleId})`];
+
+  if (group.length === 1) {
+    out.push(`${indent}  ${locationOf(f)}`);
+  } else {
+    out.push(`${indent}  ${group.length} locations, same value:`);
+    for (const occurrence of group) out.push(`${indent}    ${locationOf(occurrence)}`);
+  }
+
+  out.push(`${indent}  value: ${displayValue(f, options.redact)}`);
   if (f.verifyDetail) out.push(`${indent}  ${f.verifyDetail}`);
-  if (f.fingerprint) out.push(`${indent}  fingerprint: ${f.fingerprint}`);
+  // Every occurrence keeps its own identity, and every one is printed: a
+  // baseline entry is per occurrence, so showing only the first would leave
+  // someone unable to accept the rest.
+  for (const occurrence of group) {
+    if (occurrence.fingerprint) out.push(`${indent}  fingerprint: ${occurrence.fingerprint}`);
+  }
   return out;
 }
 
