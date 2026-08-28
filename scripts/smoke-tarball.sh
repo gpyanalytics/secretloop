@@ -112,7 +112,12 @@ for (let i = 0; i < 36; i++) body += "abcdefghijklmnopqrstuvwxyz0123456789"[(i *
 const token = "ghp_" + body;
 writeFileSync(path.join(scanDir, "app.js"), `const t = "${token}";\n`, "utf8");
 
-const server = spawn("node", [path.join(work, "package", "out", "mcp.js")], {
+// Launched with an explicit allowed root, which is the only thing that
+// authorizes a path. scanDir is inside it; `outside` deliberately is not.
+const outside = require("fs").mkdtempSync(require("path").join(require("os").tmpdir(), "sl-outside-"));
+require("fs").writeFileSync(path.join(outside, "app.js"), `const t = "${token}";\n`, "utf8");
+
+const server = spawn("node", [path.join(work, "package", "out", "mcp.js"), scanDir], {
   stdio: ["pipe", "pipe", "inherit"],
 });
 
@@ -190,8 +195,41 @@ function fail(message) {
   // The boundary claim, checked on the wire rather than in a unit test.
   if (text.includes(token)) fail("the raw credential crossed the stdio boundary");
 
+  // ---- roots guard -------------------------------------------------------
+  // A path outside the launch-time root is refused, a roots notification is
+  // ignored, and it is still refused afterwards. This is the whole point of
+  // taking authorization from argv: the peer can advertise whatever it likes.
+  const scanOutside = async () =>
+    await send("tools/call", { name: "secretloop_scan", arguments: { path: outside } });
+
+  const before = await scanOutside();
+  if (!before.result?.isError) fail("a path outside the launch-time root was scanned");
+
+  notify("notifications/roots/list_changed", {});
+  // Give the server a turn to process it before asking again.
+  await send("tools/list", {});
+
+  const after = await scanOutside();
+  if (!after.result?.isError) {
+    fail("a roots notification widened the allowed roots — the guard does not hold");
+  }
+  if (JSON.stringify(before.result.content) !== JSON.stringify(after.result.content)) {
+    fail("the refusal changed after a roots notification");
+  }
+
+  // And the legitimate root still works, so the guard refused rather than broke.
+  const still = await send("tools/call", {
+    name: "secretloop_scan",
+    arguments: { path: scanDir },
+  });
+  if (still.error || still.result?.isError) fail("the allowed root stopped working");
+
+  require("fs").rmSync(outside, { recursive: true, force: true });
   server.kill();
-  console.log("smoke: MCP round-trip ok — 4 tools, 1 finding, value redacted on the wire");
+  console.log(
+    "smoke: MCP round-trip ok — 4 tools, 1 finding, value redacted on the wire, " +
+      "roots notification ignored and boundary held"
+  );
 })().catch((err) => fail(err.message));
 NODE
 

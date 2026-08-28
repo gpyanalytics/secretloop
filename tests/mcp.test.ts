@@ -1,5 +1,5 @@
 import { test, suite, finish, assert } from "./harness";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
@@ -17,6 +17,8 @@ import {
   toolListFindings,
   toolScan,
   wrapUntrusted,
+  setAllowedRoots,
+  getAllowedRoots,
   describeScope as mcpDescribeScope,
   validateRoot as mcpValidateRoot,
 } from "../src/mcp-core";
@@ -143,6 +145,11 @@ let emptyDir = "";
 let hostileDir = "";
 
 function setup(): void {
+  // The server takes its allowed roots from argv at launch; an in-process test
+  // has no argv, so it declares them the same way the launcher does. Without
+  // this every fixture under tmpdir is correctly refused, because the default
+  // is the working directory.
+  setAllowedRoots([ROOT]);
   dirtyDir = repo("dirty", { "app.js": SECRET_FILE, "readme.md": "hello" });
   cleanDir = repo("clean", { "index.js": "console.log(1);\n" });
   emptyDir = repo("empty", {});
@@ -415,6 +422,78 @@ test("wrapUntrusted masks a value the scanner deliberately did not report", () =
   const wrapped = wrapUntrusted("app.js", text, 1, 3, [secret]);
   assert.ok(!wrapped.block.includes(secret), "suppressed secret survived into the context block");
   assert.strictEqual(wrapped.secretsRedacted, 1);
+});
+
+// ---------------------------------------------------------------------------
+suite("mcp-core — allowed roots");
+
+test("a path outside the launch-time roots is refused", () => {
+  resetSessions();
+  const outside = mkdtempSync(path.join(tmpdir(), "secretloop-outside-"));
+  try {
+    writeFileSync(path.join(outside, "app.js"), SECRET_FILE, "utf8");
+    const result = record(toolScan({ path: outside }));
+    assert.strictEqual(result.ok, false, "a directory outside the allowed roots was scanned");
+    const error = (result as { ok: false; error: string }).error;
+    assert.match(error, /outside the directories this server was started with/);
+    assert.match(error, /cannot\s+be changed by a client/);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("every tool enforces the boundary, not just scan", async () => {
+  resetSessions();
+  const outside = mkdtempSync(path.join(tmpdir(), "secretloop-outside2-"));
+  try {
+    assert.strictEqual(toolScan({ path: outside }).ok, false);
+    assert.strictEqual(toolListFindings({ path: outside }).ok, false);
+    assert.strictEqual((await toolHistoryScan({ path: outside })).ok, false);
+    // get_finding takes an optional path and must refuse it the same way.
+    assert.strictEqual(toolGetFinding({ fingerprint: "x", path: outside }).ok, false);
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("setAllowedRoots never widens to everything, and an empty list falls back to cwd", () => {
+  const saved = getAllowedRoots();
+  try {
+    setAllowedRoots([]);
+    assert.deepStrictEqual(getAllowedRoots(), [realpathSync(process.cwd())]);
+    setAllowedRoots(["", "   "].filter(Boolean));
+    assert.strictEqual(getAllowedRoots().length, 1, "a list of junk must not authorize everything");
+  } finally {
+    setAllowedRoots(saved);
+  }
+});
+
+test("the repo-root walk cannot escape an allowed root", () => {
+  // findRepoRoot walks up to the enclosing git repository. A workspace inside a
+  // larger repo must not silently become that repo.
+  const outer = mkdtempSync(path.join(tmpdir(), "secretloop-outer-"));
+  const saved = getAllowedRoots();
+  try {
+    const git = (...args: string[]) => spawnSync("git", args, { cwd: outer, encoding: "utf8" });
+    git("init", "-q", ".");
+    const inner = path.join(outer, "packages", "app");
+    mkdirSync(inner, { recursive: true });
+    writeFileSync(path.join(inner, "app.js"), SECRET_FILE, "utf8");
+    writeFileSync(path.join(outer, "secrets.js"), SECRET_FILE, "utf8");
+
+    setAllowedRoots([inner]);
+    resetSessions();
+    const p = payload(toolScan({ path: inner }));
+    assert.strictEqual(p.root, realpathSync(inner), `scan root escaped upward to ${p.root}`);
+    const files: string[] = p.findings.map((f: any) => f.file);
+    assert.ok(
+      !files.some((f) => f.includes("secrets.js")),
+      `a file outside the allowed root was scanned: ${files.join(", ")}`
+    );
+  } finally {
+    setAllowedRoots(saved);
+    rmSync(outer, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------

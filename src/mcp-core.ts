@@ -20,7 +20,8 @@
  *     already share. There is no second path into the scanner.
  *  4. Repository content is data. It is never returned unwrapped.
  */
-import { statSync } from "fs";
+import { realpathSync, statSync } from "fs";
+import * as nodePath from "path";
 import { Finding, ConfidenceTier, redactValue } from "./scanner";
 import { Severity, rulesById } from "./rules";
 import {
@@ -79,6 +80,61 @@ export function validateRoot(root: string): string | null {
   }
   if (!stat.isDirectory()) return `${root} is not a directory.`;
   return null;
+}
+
+// ---------------------------------------------------------------------------
+// Allowed roots
+// ---------------------------------------------------------------------------
+
+/**
+ * The directories this server may read, fixed at launch.
+ *
+ * Authorization comes from the command line that started the process and from
+ * nowhere else. That is a deliberate refusal of the MCP roots capability: VS
+ * Code and Visual Studio advertise workspace roots over the protocol, and a
+ * server that treated them as permission would let the peer on the other end of
+ * the socket decide what the server is allowed to read. `roots/list_changed`
+ * would then be a message that widens a security boundary, which is not a
+ * property any boundary should have.
+ *
+ * So roots notifications are ignored and logged, this list is never mutated
+ * after startup, and a `path` argument is checked against it on every call —
+ * tool arguments are protocol-supplied too, and before this guard existed a
+ * client could name any directory on the machine.
+ *
+ * Defaults to the working directory, which is what a client launching the
+ * server in a workspace gives us. Fail closed: an empty list would authorize
+ * nothing, and an absent list would authorize everything.
+ */
+let allowedRoots: string[] = [safeReal(process.cwd())];
+
+/** Resolves symlinks so a link inside an allowed root cannot point outside it. */
+function safeReal(p: string): string {
+  try {
+    return realpathSync(nodePath.resolve(p));
+  } catch {
+    return nodePath.resolve(p);
+  }
+}
+
+/** Set once, at launch, from argv. Never from a protocol message. */
+export function setAllowedRoots(roots: string[]): void {
+  const resolved = roots.filter((r) => typeof r === "string" && r.length > 0).map(safeReal);
+  allowedRoots = resolved.length > 0 ? resolved : [safeReal(process.cwd())];
+}
+
+export function getAllowedRoots(): string[] {
+  return [...allowedRoots];
+}
+
+/** True when `child` is `parent` or sits underneath it. */
+function contains(parent: string, child: string): boolean {
+  const rel = nodePath.relative(parent, child);
+  return rel === "" || (!rel.startsWith("..") && !nodePath.isAbsolute(rel));
+}
+
+function withinAllowedRoots(candidate: string): boolean {
+  return allowedRoots.some((root) => contains(root, candidate));
 }
 
 /**
@@ -290,8 +346,18 @@ export function resetSessions(): void {
   sessions.clear();
 }
 
+/**
+ * The cached scan for a root, keyed the way the tools key it.
+ *
+ * Normalized because the cache is keyed on the resolved path: the roots guard
+ * runs every argument through realpath, so on macOS a caller holding
+ * "/var/folders/x" looks up an entry stored under "/private/var/folders/x" and
+ * gets nothing. An accessor that silently misses is worse here than elsewhere —
+ * the redaction test reads its ground truth through this function, and an empty
+ * result made a leak check pass by having nothing to check.
+ */
 export function cachedScan(root: string): CachedScan | undefined {
-  return sessions.get(root);
+  return sessions.get(safeReal(root)) ?? sessions.get(root);
 }
 
 // ---------------------------------------------------------------------------
@@ -311,13 +377,31 @@ export type ToolResult =
 const fail = (error: string): ToolResult => ({ ok: false, error });
 
 /** Resolves and checks a caller-supplied root before anything touches it. */
-function resolveRoot(path: string): { root: string } | { error: string } {
-  if (typeof path !== "string" || path.trim().length === 0) {
+function resolveRoot(requested: string): { root: string } | { error: string } {
+  if (typeof requested !== "string" || requested.trim().length === 0) {
     return { error: "path is required and must be a non-empty string." };
   }
-  const problem = validateRoot(path);
+  const problem = validateRoot(requested);
   if (problem) return { error: problem };
-  return { root: findRepoRoot(path) };
+
+  const real = safeReal(requested);
+  if (!withinAllowedRoots(real)) {
+    return {
+      error:
+        `${requested} is outside the directories this server was started with ` +
+        `(${allowedRoots.join(", ")}). Allowed directories are fixed at launch and cannot ` +
+        `be changed by a client. Restart the server pointing at that directory if you ` +
+        `intend to scan it.`,
+    };
+  }
+
+  // findRepoRoot walks UP to the enclosing git repository, so on a workspace
+  // that sits inside a larger repo it can hand back a directory above every
+  // allowed root — the guard undone by a helper called after it. When that
+  // happens the requested directory is used as-is rather than the repo root.
+  // Narrower than intended is a worse scan; wider is a broken boundary.
+  const repoRoot = safeReal(findRepoRoot(real));
+  return { root: withinAllowedRoots(repoRoot) ? repoRoot : real };
 }
 
 /** What the project's own configuration is doing to this scan, said out loud. */

@@ -368,6 +368,33 @@ For Claude Code, the same thing on one line:
 claude mcp add secretloop -- npx -y --package=secretloop secretloop-mcp
 ```
 
+### GitHub Copilot
+
+Same server, different file. **VS Code** reads `.vscode/mcp.json`, where the
+top-level key is `servers` rather than `mcpServers`:
+
+```json
+{
+  "servers": {
+    "secretloop": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "--package=secretloop", "secretloop-mcp"]
+    }
+  }
+}
+```
+
+**Visual Studio 2022 17.14+ and Visual Studio 2026** take the same shape and
+discover it automatically, checking `%USERPROFILE%\.mcp.json`, then
+`<SolutionDir>\.vs\mcp.json`, `<SolutionDir>\.mcp.json`,
+`<SolutionDir>\.vscode\mcp.json`, and `<SolutionDir>\.cursor\mcp.json`. Put it in
+`<SolutionDir>\.mcp.json` if you want it tracked in source control, and add that
+file to **Solution Items** so Visual Studio reloads it when you edit it.
+
+In both, MCP tools are available to Copilot **only in agent mode** — pick
+**Agent** from the mode dropdown at the bottom of the chat pane.
+
 ### The four tools
 
 | Tool | What it does |
@@ -400,9 +427,25 @@ changes, and nothing destructive.
   `unverified` means *no liveness check ran* — never that a credential is
   inactive or a file is clean. A scan that stopped early says so and is never a
   clean result.
+- **The server reads only the directories it was launched with.** Allowed roots
+  come from the command line that started it (the working directory by
+  default), and nothing on the protocol can change them. A `path` argument
+  outside them is refused, and the MCP roots capability — which VS Code and
+  Visual Studio use to advertise workspace folders — is deliberately not
+  honoured: a `roots/list_changed` that widened what the server may read would
+  let the client move its own boundary. Such notifications are ignored and
+  logged. To scan another directory, restart the server pointing at it:
+  `npx -y --package=secretloop secretloop-mcp /path/to/repo`.
 - **Every invocation is logged to stderr** — tool name, arguments and result
   counts, never a value — the same accounting the extension writes to
   **View > Output > SecretLoop**.
+
+Your client's own approval prompt — Copilot's **Allow** in Visual Studio 2022,
+**Confirm** in Visual Studio 2026, the equivalent in VS Code, Cursor and Claude
+— governs whether the agent may *call* these tools at all; it is your client's
+control, not SecretLoop's consent mechanism, and whatever you permit there, no
+tool here writes anything, contacts a provider, or returns an unredacted
+credential.
 
 An assistant composes its own reply, and no server can bind what it says. The
 tool responses carry the counts and the scan's scope so a claim can be checked
