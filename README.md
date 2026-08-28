@@ -336,6 +336,78 @@ secretloop scan --write-baseline .secretloop-baseline.json
 secretloop scan --baseline .secretloop-baseline.json --fail-on high
 ```
 
+## Use SecretLoop from Claude / Cursor (MCP)
+
+SecretLoop ships an MCP server, so an AI assistant you already use can run the
+scanner and reason about the results. **There is no AI inside SecretLoop** — no
+model, no API key, no LLM dependency. The assistant does the explaining; the
+deterministic scanner does the finding, and only the scanner decides what a
+finding is.
+
+Add it to `claude_desktop_config.json` (Claude Desktop) or `.cursor/mcp.json`
+(Cursor):
+
+```json
+{
+  "mcpServers": {
+    "secretloop": {
+      "command": "npx",
+      "args": ["-y", "--package=secretloop", "secretloop-mcp"]
+    }
+  }
+}
+```
+
+`--package=secretloop` is required, not decorative: `secretloop-mcp` is a
+command inside the `secretloop` package rather than a package of its own, and
+`npx -y secretloop-mcp` would go looking for a package by that name and fail.
+
+For Claude Code, the same thing on one line:
+
+```bash
+claude mcp add secretloop -- npx -y --package=secretloop secretloop-mcp
+```
+
+### The four tools
+
+| Tool | What it does |
+|---|---|
+| `secretloop_scan` | Scans the working tree. Optional globs narrow it. |
+| `secretloop_list_findings` | Filters the last scan's findings by severity, rule or liveness. |
+| `secretloop_get_finding` | One finding in full, with masked source context. |
+| `secretloop_history_scan` | Scans git history, bounded by a commit and time limit. |
+
+All four are **read-only**: no writes, no rotation, no config or baseline
+changes, and nothing destructive.
+
+### What crosses the boundary, and what does not
+
+- **No credential is ever transmitted.** Liveness verification is the only thing
+  in SecretLoop that contacts a third party, and it is deliberately not exposed
+  as a tool. Nothing an assistant can call will send a credential anywhere.
+- **Values are redacted, always.** Every value is masked the same way the CLI
+  masks it — the format prefix and the last four characters, as in
+  `ghp_****…6789`, never the credential. There is no flag, argument or tool that
+  unredacts, including in the source context returned by
+  `secretloop_get_finding`.
+- **Repository content comes back as data, not instructions.** Source lines are
+  returned inside an `<untrusted-repository-content>` block, line-prefixed, with
+  every secret in them masked and any attempt to close the block from inside
+  neutralised. A repository is assumed hostile: it may contain text written to
+  manipulate whatever reads it.
+- **The scanner's verdicts are authoritative.** The assistant may group, sort
+  and explain findings. It may not reclassify, downgrade or suppress one, and
+  `unverified` means *no liveness check ran* — never that a credential is
+  inactive or a file is clean. A scan that stopped early says so and is never a
+  clean result.
+- **Every invocation is logged to stderr** — tool name, arguments and result
+  counts, never a value — the same accounting the extension writes to
+  **View > Output > SecretLoop**.
+
+An assistant composes its own reply, and no server can bind what it says. The
+tool responses carry the counts and the scan's scope so a claim can be checked
+against them, and `secretloop scan` on the command line remains the record.
+
 ## Controlling false positives
 
 False-positive fatigue is what gets scanners muted, so suppression is

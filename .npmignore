@@ -14,10 +14,14 @@
 # npm always includes package.json, README and LICENSE regardless of these
 # rules, so they are not listed.
 #
-# The npm package is the CLI. out/extension.js is the VS Code bundle and has no
-# use here — it is 620KB a CLI user would download and never load.
+# The npm package is the CLI and the MCP server. out/extension.js is the VS Code
+# bundle and has no use here — it is 620KB a CLI user would download and never
+# load. out/mcp.js ships because package.json declares it as the secretloop-mcp
+# bin; it has to be named explicitly, since the allowlist above denies anything
+# not listed and a bin pointing at a file the tarball omits is a broken install.
 
 /*
 !/out
 /out/*
 !/out/cli.js
+!/out/mcp.js

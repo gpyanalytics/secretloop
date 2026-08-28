@@ -8,7 +8,24 @@
     ],
     "sourceMap": true,
     "rootDir": "src",
-    "strict": true
+    "strict": true,
+    // The MCP SDK ships zod, whose .d.cts declarations do not type-check under
+    // this project's settings (TS1259, default imports without esModuleInterop).
+    // Skipping declaration files rather than turning on esModuleInterop, which
+    // changes how every existing import in src/ is emitted. tsconfig.tests.json
+    // already sets this, which is why the test type-check passed while
+    // `npm run compile` — the one CI runs — did not.
+    "skipLibCheck": true,
+    // The MCP SDK publishes its subpaths through package.json "exports",
+    // which the node10 resolution this project uses does not read. Mapping the
+    // one package rather than moving the whole project to moduleResolution
+    // node16: that mode rejects the extensionless dynamic imports in
+    // extension.ts, so it would mean editing the extension to add a server.
+    // No baseUrl — it is not needed for this and would make every bare
+    // specifier resolvable from the repo root as a side effect.
+    "paths": {
+      "@modelcontextprotocol/sdk/*": ["./node_modules/@modelcontextprotocol/sdk/dist/cjs/*"]
+    }
   },
   "exclude": [
     "node_modules",

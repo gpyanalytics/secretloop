@@ -92,6 +92,12 @@ tsconfig.tests.json
 .vscode/**
 .vscode-test/**
 
+# The MCP server. It is an npm-side bin (secretloop-mcp) with no role in the
+# extension host: nothing in extension.ts loads it, and hooks.ts resolves only
+# out/cli.js from the extension path. Excluded so adding it changes the VSIX by
+# nothing at all — verified by diffing `vsce ls` against the pre-change listing.
+out/mcp.js
+
 # Source maps: useful when debugging locally, dead weight in a published VSIX.
 out/**/*.map
 

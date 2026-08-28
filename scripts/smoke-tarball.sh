@@ -4,8 +4,9 @@
 # source tree, and runs the CLI the way a user gets it.
 #
 # This exists because `npm pack --dry-run` verifies the file *list* and the
-# damage lands in file *content*. The tarball ships exactly one executable file,
-# out/cli.js, and whether that file works depends on which build wrote it last:
+# damage lands in file *content*. The tarball ships two executable files,
+# out/cli.js and out/mcp.js, and whether either works depends on which build
+# wrote it last:
 # `npm run bundle` produces a self-contained bundle, while `npm run compile`
 # (tsc) produces a module that requires ./scanner, ./report and friends — none
 # of which the .npmignore allowlist ships. Both produce the same 4-file,
@@ -84,5 +85,114 @@ esac
 echo "smoke: running a real scan in an empty directory"
 mkdir -p "$work/empty-scan"
 node package/out/cli.js scan --path "$work/empty-scan" >/dev/null
+
+# The MCP server, over the transport a client actually speaks.
+#
+# Nothing in the unit suite exercises stdio: tests/mcp.test.ts calls mcp-core
+# directly, which is the right trade there and leaves exactly one thing
+# unchecked — whether the bundled server can complete a real handshake as
+# shipped. A bundling fault shows up here and nowhere else, which is the same
+# reason this file runs the CLI rather than trusting `npm pack --dry-run`.
+echo "smoke: driving the MCP server over stdio"
+mkdir -p "$work/mcp-scan"
+MCP_SMOKE_WORK="$work" node - <<'NODE'
+const { spawn } = require("child_process");
+const { writeFileSync } = require("fs");
+const path = require("path");
+
+const work = process.env.MCP_SMOKE_WORK;
+const scanDir = path.join(work, "mcp-scan");
+
+// Built here rather than written as a literal: this file is scanned by the
+// project's own CI self-scan, and a credential-shaped constant in scripts/
+// would fail that scan exactly as it is supposed to.
+let body = "";
+// secretloop:allow — an alphabet, not a credential.
+for (let i = 0; i < 36; i++) body += "abcdefghijklmnopqrstuvwxyz0123456789"[(i * 7 + 3) % 36];
+const token = "ghp_" + body;
+writeFileSync(path.join(scanDir, "app.js"), `const t = "${token}";\n`, "utf8");
+
+const server = spawn("node", [path.join(work, "package", "out", "mcp.js")], {
+  stdio: ["pipe", "pipe", "inherit"],
+});
+
+const pending = new Map();
+let buffer = "";
+server.stdout.setEncoding("utf8");
+server.stdout.on("data", (chunk) => {
+  buffer += chunk;
+  const lines = buffer.split("\n");
+  buffer = lines.pop() ?? "";
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const msg = JSON.parse(line);
+    const resolve = pending.get(msg.id);
+    if (resolve) { pending.delete(msg.id); resolve(msg); }
+  }
+});
+
+let nextId = 1;
+function send(method, params) {
+  const id = nextId++;
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`timed out waiting for ${method}`)), 30000);
+    pending.set(id, (msg) => { clearTimeout(timer); resolve(msg); });
+    server.stdin.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n");
+  });
+}
+function notify(method, params) {
+  server.stdin.write(JSON.stringify({ jsonrpc: "2.0", method, params }) + "\n");
+}
+
+function fail(message) {
+  console.error("smoke: FAIL — " + message);
+  server.kill();
+  process.exit(1);
+}
+
+(async () => {
+  const init = await send("initialize", {
+    protocolVersion: "2024-11-05",
+    capabilities: {},
+    clientInfo: { name: "smoke", version: "0" },
+  });
+  if (init.error) fail("initialize returned an error: " + JSON.stringify(init.error));
+  if (init.result?.serverInfo?.name !== "secretloop") {
+    fail("unexpected serverInfo: " + JSON.stringify(init.result?.serverInfo));
+  }
+  notify("notifications/initialized", {});
+
+  const listed = await send("tools/list", {});
+  const names = (listed.result?.tools ?? []).map((t) => t.name).sort();
+  const expected = [
+    "secretloop_get_finding",
+    "secretloop_history_scan",
+    "secretloop_list_findings",
+    "secretloop_scan",
+  ];
+  if (JSON.stringify(names) !== JSON.stringify(expected)) {
+    fail("tools/list returned " + JSON.stringify(names));
+  }
+
+  const called = await send("tools/call", {
+    name: "secretloop_scan",
+    arguments: { path: scanDir },
+  });
+  if (called.error) fail("tools/call returned an error: " + JSON.stringify(called.error));
+  const text = called.result?.content?.[0]?.text ?? "";
+  const parsed = JSON.parse(text);
+  if (parsed.summary?.total !== 1) {
+    fail("expected exactly 1 finding, got " + JSON.stringify(parsed.summary));
+  }
+  if (parsed.findings[0].ruleId !== "github-token") {
+    fail("unexpected rule " + parsed.findings[0].ruleId);
+  }
+  // The boundary claim, checked on the wire rather than in a unit test.
+  if (text.includes(token)) fail("the raw credential crossed the stdio boundary");
+
+  server.kill();
+  console.log("smoke: MCP round-trip ok — 4 tools, 1 finding, value redacted on the wire");
+})().catch((err) => fail(err.message));
+NODE
 
 echo "smoke: ok — $tarball runs standalone"
