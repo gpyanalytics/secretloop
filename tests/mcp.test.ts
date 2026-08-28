@@ -177,13 +177,20 @@ suite("mcp-core — parity with the CLI");
  * empty scan reading as a clean one.
  */
 test("describeScope matches the CLI's, word for word", () => {
+  // The third argument is 0.1.1's generated-file disclosure. It is in the
+  // matrix because the two-argument form alone did NOT catch this drift: the
+  // CLI gained a parameter that defaults to 0, so every two-argument call kept
+  // returning the same string and the pin stayed green while the MCP surface
+  // silently stopped disclosing skipped files.
   for (const count of [0, 1, 2, 41, 855]) {
     for (const noun of ["file", "staged file", "commit"]) {
-      assert.strictEqual(
-        mcpDescribeScope(count, noun),
-        cliDescribeScope(count, noun),
-        `drift at ${count} ${noun}`
-      );
+      for (const excluded of [0, 1, 12]) {
+        assert.strictEqual(
+          mcpDescribeScope(count, noun, excluded),
+          cliDescribeScope(count, noun, excluded),
+          `drift at ${count} ${noun}, ${excluded} excluded`
+        );
+      }
     }
   }
   // And that the payload actually uses it, so exporting a matching function
@@ -198,6 +205,24 @@ test("describeScope matches the CLI's, word for word", () => {
     payload(toolScan({ path: cleanDir })).scope.statement,
     `Scanned ${cliDescribeScope(1, "file")}.`
   );
+});
+
+test("a scan that skipped generated files discloses it, as the CLI does", () => {
+  // The invariant 0.1.1 introduced, checked on the MCP surface: a scan that
+  // skipped files must never read identically to one that had nothing to skip.
+  const dir = repo("generated-disclosure", {
+    "app.js": "const ok = 1;\n",
+    "ios/Podfile.lock": `t = "${tokens(3)[2]}"\n`,
+  });
+  resetSessions();
+  const p = payload(toolScan({ path: dir }));
+  assert.strictEqual(p.scope.filesScanned, 1);
+  assert.match(
+    p.scope.statement,
+    /1 generated file\(s\) excluded by default \(--include-generated to scan them\)/,
+    `MCP dropped the disclosure the CLI makes: ${p.scope.statement}`
+  );
+  assert.strictEqual(p.summary.total, 0, "the generated file should not have been scanned");
 });
 
 test("validateRoot's refusals match the CLI's, word for word", () => {

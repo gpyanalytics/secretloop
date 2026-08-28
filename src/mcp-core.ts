@@ -26,12 +26,13 @@ import { Finding, ConfidenceTier, redactValue } from "./scanner";
 import { Severity, rulesById } from "./rules";
 import {
   SecretLoopConfig,
+  classifyPath,
   loadConfig,
   resolveConfigFile,
   globToRegExp,
 } from "./config";
-import { listFiles, findRepoRoot } from "./walk";
-import { ScannedFile, scanFiles, scanWorkspaceFiles } from "./workspace";
+import { listFilesWithExclusions, findRepoRoot } from "./walk";
+import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
 import { scanHistory, isGitRepo } from "./history";
 import { isVerifiable } from "./verify";
 
@@ -61,10 +62,28 @@ import { isVerifiable } from "./verify";
  * only kind of coupling that is safe across a bundle boundary.
  */
 
-/** Must stay identical to describeScope in src/cli.ts. Exported for the pin test. */
-export function describeScope(count: number, noun: string): string {
-  if (count === 0) return `0 ${noun}(s) — nothing was scanned, so this is not a clean result`;
-  return `${count} ${noun}(s)`;
+/**
+ * Must stay identical to describeScope in src/report.ts (re-exported by
+ * src/cli.ts). Exported for the pin test.
+ *
+ * `generatedExcluded` arrived with 0.1.1's generated-file group. It is not
+ * optional decoration: a scan that skipped files must never read identically to
+ * one that had nothing to skip, and for one release this copy could not say it,
+ * so an assistant asking through MCP was told "Scanned 1 file(s)." about a
+ * repository where a lockfile had been passed over.
+ */
+export function describeScope(count: number, noun: string, generatedExcluded = 0): string {
+  const base =
+    count === 0
+      ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
+      : `${count} ${noun}(s)`;
+  if (generatedExcluded > 0) {
+    return (
+      `${base}; ${generatedExcluded} generated file(s) excluded by default ` +
+      `(--include-generated to scan them)`
+    );
+  }
+  return base;
 }
 
 /** Must stay identical to validateRoot in src/cli.ts. Exported for the pin test. */
@@ -444,15 +463,28 @@ export function toolScan(input: ScanInput): ToolResult {
 
   const include = input.include?.filter((g) => typeof g === "string" && g.length > 0) ?? [];
   let scanned: ScannedFile[];
+  let generatedExcluded: number;
   try {
     if (include.length === 0) {
-      scanned = scanWorkspaceFiles(root, config);
+      const result = scanWorkspaceScan(root, config);
+      scanned = result.scanned;
+      generatedExcluded = result.generatedExcluded;
     } else {
       // Same enumeration, then the project's own glob matcher over it. Writing a
       // second matcher here is how `*` would come to cross `/` in one place and
       // not the other.
+      //
+      // Enumerated with the generated group emptied so the candidates are
+      // visible, then classified individually. Taking the whole-repo count
+      // instead would report generated files the globs never selected — the
+      // disclosure has to describe this scan, not the repository.
       const matchers = include.map((g) => globToRegExp(g));
-      const files = listFiles(root, config).filter((rel) => matchers.some((m) => m.test(rel)));
+      const candidates = listFilesWithExclusions(root, {
+        ...config,
+        generatedExcludePaths: [],
+      }).files.filter((rel) => matchers.some((m) => m.test(rel)));
+      const files = candidates.filter((rel) => classifyPath(rel, config) === "none");
+      generatedExcluded = candidates.length - files.length;
       scanned = scanFiles(root, files, config);
     }
   } catch (err) {
@@ -483,7 +515,7 @@ export function toolScan(input: ScanInput): ToolResult {
         // The one sentence that keeps an empty enumeration from reading as a
         // pass. Word-for-word the CLI's, and pinned to it by test rather than
         // by import — see the note on describeScope above.
-        statement: `Scanned ${describeScope(scanned.length, "file")}.`,
+        statement: `Scanned ${describeScope(scanned.length, "file", generatedExcluded)}.`,
       },
       config: describeConfig(root, config),
       summary: summarize(findings),
@@ -717,6 +749,7 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let commitsScanned = 0;
+  let generatedExcluded = 0;
   let findings: Finding[];
   try {
     findings = await scanHistory({
@@ -725,6 +758,7 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
       maxCommits,
       revRange: input.revRange,
       onProgress: (commits) => (commitsScanned = commits),
+      onGeneratedExcluded: (count) => (generatedExcluded = count),
       // scanHistory kills the git process on abort and resolves with what it
       // read. Merely stopping consumption would leave git reading pack files
       // after the client has been answered.
@@ -751,7 +785,7 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
   // shaped payload, and the only thing standing between them and being read
   // alike is this sentence.
   const statement = complete
-    ? `Scanned ${describeScope(commitsScanned, "commit")}.`
+    ? `Scanned ${describeScope(commitsScanned, "commit", generatedExcluded)}.`
     : `Stopped after ${commitsScanned} commit(s) — ${
         stopReason === "timeout"
           ? `the ${timeoutMs}ms limit was reached`
