@@ -78,6 +78,18 @@ KEYNAMES = {
 }
 
 
+# Path segments the product treats as fixture noise. Defined here so the corpus
+# and the scanner cannot drift apart silently.
+FIXTURE_SEGMENTS = {
+    "test", "tests", "__test__", "__tests__", "__mocks__",
+    "__snapshots__", "__fixtures__", "fixtures", "snapshots", "examples",
+}
+
+
+def is_fixture_dir(d):
+    return any(seg in FIXTURE_SEGMENTS for seg in d.split("/"))
+
+
 SEED = 20260829
 
 
@@ -127,16 +139,22 @@ def build(ROOT, seed=SEED):
         return [{"path": relpath, "line": ln, "kind": k, "label": "secret" if s else "decoy"} for ln, k, s in rows]
 
     DIRS = ["src", "src/api", "src/lib", "config", "services", "internal", "scripts", "deploy", "test", "docs"]
+    # Secrets never land in a fixture path. A labelled secret sitting where the
+    # product suppresses findings makes a miss unreadable: scanner failure, or
+    # the corpus asking for something it also asked to be hidden? Decoys DO stay
+    # in fixture paths on purpose -- they are the coverage for the suppression.
+    NONFIXTURE_DIRS = [d for d in DIRS if not is_fixture_dir(d)]
     FILLER = 0
     si, di = 0, 0
     files_made = 0
     # 190 tree files; distribute secrets and decoys across them.
     for n in range(190):
         ext, emb, header = LANGS[n % len(LANGS)]
-        d = DIRS[n % len(DIRS)]
+        carries_secret = si < len(tree_secrets) and n % 3 == 0
+        d = NONFIXTURE_DIRS[n % len(NONFIXTURE_DIRS)] if carries_secret else DIRS[n % len(DIRS)]
         name = f"{d}/mod_{n:03d}.{ext}"
         items = []
-        if si < len(tree_secrets) and n % 3 == 0:
+        if carries_secret:
             k = tree_secrets[si]; si += 1
             items.append((k, SECRETS[k](), True))
         for _ in range(2 if n % 2 == 0 else 1):
@@ -159,6 +177,12 @@ def build(ROOT, seed=SEED):
         k = DECOY_PLAN[di]; di += 1
         labels.extend(write_file(f"src/dextra_{extra:02d}.py", "py", emb_py, 'import os', [(k, DECOYS[k](), False)]))
         extra += 1; files_made += 1
+
+    # A decoy in a fixture path is coverage for the fixture suppression, so what
+    # should happen to it is recorded rather than inferred.
+    for l in labels:
+        if l["label"] == "decoy" and is_fixture_dir(os.path.dirname(l["path"])):
+            l["expected"] = "suppressed"
 
     json.dump({"tree": labels, "history": []}, open(os.path.join(ROOT, "_labels_tree.json"), "w"), indent=1)
     # The history-only plants. Drawn from the same seeded stream and written

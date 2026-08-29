@@ -112,6 +112,7 @@
    "line": 2,
    "kind": "lockfile-integrity",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -119,17 +120,18 @@
    "line": 3,
    "kind": "hex-color-blob",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
-   "path": "docs/mod_009.tf",
+   "path": "src/mod_009.tf",
    "line": 2,
    "kind": "stripe-live",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "docs/mod_009.tf",
+   "path": "src/mod_009.tf",
    "line": 3,
    "kind": "jwt-public-claims",
    "label": "decoy",
@@ -157,21 +159,21 @@
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_012.js",
+   "path": "config/mod_012.js",
    "line": 3,
    "kind": "github-pat",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_012.js",
+   "path": "config/mod_012.js",
    "line": 4,
    "kind": "aws-doc-secret",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_012.js",
+   "path": "config/mod_012.js",
    "line": 5,
    "kind": "git-sha1",
    "label": "decoy",
@@ -199,14 +201,14 @@
    "where": "tree"
   },
   {
-   "path": "internal/mod_015.go",
+   "path": "scripts/mod_015.go",
    "line": 6,
    "kind": "generic-password",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "internal/mod_015.go",
+   "path": "scripts/mod_015.go",
    "line": 7,
    "kind": "aws-doc-secret",
    "label": "decoy",
@@ -234,21 +236,21 @@
    "where": "tree"
   },
   {
-   "path": "test/mod_018.yaml",
+   "path": "src/mod_018.yaml",
    "line": 5,
    "kind": "aws-secret-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "test/mod_018.yaml",
+   "path": "src/mod_018.yaml",
    "line": 6,
    "kind": "jwt-public-claims",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "test/mod_018.yaml",
+   "path": "src/mod_018.yaml",
    "line": 7,
    "kind": "hex-color-blob",
    "label": "decoy",
@@ -276,14 +278,14 @@
    "where": "tree"
   },
   {
-   "path": "src/api/mod_021.tf",
+   "path": "config/mod_021.tf",
    "line": 2,
    "kind": "slack-bot",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/api/mod_021.tf",
+   "path": "config/mod_021.tf",
    "line": 3,
    "kind": "url",
    "label": "decoy",
@@ -311,21 +313,21 @@
    "where": "tree"
   },
   {
-   "path": "services/mod_024.js",
+   "path": "scripts/mod_024.js",
    "line": 4,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "services/mod_024.js",
+   "path": "scripts/mod_024.js",
    "line": 13,
    "kind": "sha256-digest",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "services/mod_024.js",
+   "path": "scripts/mod_024.js",
    "line": 14,
    "kind": "hashed-asset",
    "label": "decoy",
@@ -353,14 +355,14 @@
    "where": "tree"
   },
   {
-   "path": "deploy/mod_027.go",
+   "path": "src/mod_027.go",
    "line": 6,
    "kind": "github-pat",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "deploy/mod_027.go",
+   "path": "src/mod_027.go",
    "line": 7,
    "kind": "url",
    "label": "decoy",
@@ -371,6 +373,7 @@
    "line": 4,
    "kind": "aws-doc-sample",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -378,6 +381,7 @@
    "line": 5,
    "kind": "aws-doc-secret",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -388,21 +392,21 @@
    "where": "tree"
   },
   {
-   "path": "src/mod_030.yaml",
+   "path": "config/mod_030.yaml",
    "line": 5,
    "kind": "generic-password",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/mod_030.yaml",
+   "path": "config/mod_030.yaml",
    "line": 6,
    "kind": "version-string",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "src/mod_030.yaml",
+   "path": "config/mod_030.yaml",
    "line": 7,
    "kind": "version-string",
    "label": "decoy",
@@ -430,14 +434,14 @@
    "where": "tree"
   },
   {
-   "path": "config/mod_033.tf",
+   "path": "scripts/mod_033.tf",
    "line": 2,
    "kind": "github-fine",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "config/mod_033.tf",
+   "path": "scripts/mod_033.tf",
    "line": 3,
    "kind": "aws-doc-secret",
    "label": "decoy",
@@ -465,21 +469,21 @@
    "where": "tree"
   },
   {
-   "path": "scripts/mod_036.js",
+   "path": "src/mod_036.js",
    "line": 3,
    "kind": "aws-secret-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "scripts/mod_036.js",
+   "path": "src/mod_036.js",
    "line": 4,
    "kind": "hex-color-blob",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "scripts/mod_036.js",
+   "path": "src/mod_036.js",
    "line": 5,
    "kind": "aws-doc-sample",
    "label": "decoy",
@@ -497,6 +501,7 @@
    "line": 3,
    "kind": "version-string",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -504,17 +509,18 @@
    "line": 4,
    "kind": "uuid",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
-   "path": "docs/mod_039.go",
+   "path": "config/mod_039.go",
    "line": 6,
    "kind": "aws-secret-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "docs/mod_039.go",
+   "path": "config/mod_039.go",
    "line": 7,
    "kind": "sha256-digest",
    "label": "decoy",
@@ -542,21 +548,21 @@
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_042.yaml",
+   "path": "scripts/mod_042.yaml",
    "line": 5,
    "kind": "generic-password",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_042.yaml",
+   "path": "scripts/mod_042.yaml",
    "line": 6,
    "kind": "uuid",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_042.yaml",
+   "path": "scripts/mod_042.yaml",
    "line": 7,
    "kind": "sha256-digest",
    "label": "decoy",
@@ -584,14 +590,14 @@
    "where": "tree"
   },
   {
-   "path": "internal/mod_045.tf",
+   "path": "src/mod_045.tf",
    "line": 3,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "internal/mod_045.tf",
+   "path": "src/mod_045.tf",
    "line": 12,
    "kind": "sha256-digest",
    "label": "decoy",
@@ -619,21 +625,21 @@
    "where": "tree"
   },
   {
-   "path": "test/mod_048.js",
+   "path": "config/mod_048.js",
    "line": 3,
    "kind": "aws-access-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "test/mod_048.js",
+   "path": "config/mod_048.js",
    "line": 4,
    "kind": "base64-image",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "test/mod_048.js",
+   "path": "config/mod_048.js",
    "line": 5,
    "kind": "aws-doc-secret",
    "label": "decoy",
@@ -661,14 +667,14 @@
    "where": "tree"
   },
   {
-   "path": "src/api/mod_051.go",
+   "path": "scripts/mod_051.go",
    "line": 6,
    "kind": "slack-bot",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/api/mod_051.go",
+   "path": "scripts/mod_051.go",
    "line": 7,
    "kind": "hashed-asset",
    "label": "decoy",
@@ -696,21 +702,21 @@
    "where": "tree"
   },
   {
-   "path": "services/mod_054.yaml",
+   "path": "src/mod_054.yaml",
    "line": 6,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "services/mod_054.yaml",
+   "path": "src/mod_054.yaml",
    "line": 15,
    "kind": "url",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "services/mod_054.yaml",
+   "path": "src/mod_054.yaml",
    "line": 16,
    "kind": "hex-color-blob",
    "label": "decoy",
@@ -738,14 +744,14 @@
    "where": "tree"
   },
   {
-   "path": "deploy/mod_057.tf",
+   "path": "config/mod_057.tf",
    "line": 2,
    "kind": "github-pat",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "deploy/mod_057.tf",
+   "path": "config/mod_057.tf",
    "line": 3,
    "kind": "lockfile-integrity",
    "label": "decoy",
@@ -756,6 +762,7 @@
    "line": 3,
    "kind": "jwt-public-claims",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -763,6 +770,7 @@
    "line": 4,
    "kind": "sha256-digest",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -773,21 +781,21 @@
    "where": "tree"
   },
   {
-   "path": "src/mod_060.js",
+   "path": "scripts/mod_060.js",
    "line": 4,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/mod_060.js",
+   "path": "scripts/mod_060.js",
    "line": 13,
    "kind": "aws-doc-sample",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "src/mod_060.js",
+   "path": "scripts/mod_060.js",
    "line": 14,
    "kind": "url",
    "label": "decoy",
@@ -815,14 +823,14 @@
    "where": "tree"
   },
   {
-   "path": "config/mod_063.go",
+   "path": "src/mod_063.go",
    "line": 7,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "config/mod_063.go",
+   "path": "src/mod_063.go",
    "line": 16,
    "kind": "git-sha1",
    "label": "decoy",
@@ -850,21 +858,21 @@
    "where": "tree"
   },
   {
-   "path": "scripts/mod_066.yaml",
+   "path": "config/mod_066.yaml",
    "line": 5,
    "kind": "stripe-live",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "scripts/mod_066.yaml",
+   "path": "config/mod_066.yaml",
    "line": 6,
    "kind": "jwt-public-claims",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "scripts/mod_066.yaml",
+   "path": "config/mod_066.yaml",
    "line": 7,
    "kind": "hex-color-blob",
    "label": "decoy",
@@ -882,6 +890,7 @@
    "line": 2,
    "kind": "aws-doc-secret",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
@@ -889,17 +898,18 @@
    "line": 3,
    "kind": "jwt-public-claims",
    "label": "decoy",
+   "expected": "suppressed",
    "where": "tree"
   },
   {
-   "path": "docs/mod_069.tf",
+   "path": "scripts/mod_069.tf",
    "line": 2,
    "kind": "generic-password",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "docs/mod_069.tf",
+   "path": "scripts/mod_069.tf",
    "line": 3,
    "kind": "aws-doc-secret",
    "label": "decoy",
@@ -927,21 +937,21 @@
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_072.js",
+   "path": "src/mod_072.js",
    "line": 3,
    "kind": "slack-bot",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_072.js",
+   "path": "src/mod_072.js",
    "line": 4,
    "kind": "hex-color-blob",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_072.js",
+   "path": "src/mod_072.js",
    "line": 5,
    "kind": "sha256-digest",
    "label": "decoy",
@@ -969,14 +979,14 @@
    "where": "tree"
   },
   {
-   "path": "internal/mod_075.go",
+   "path": "config/mod_075.go",
    "line": 7,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "internal/mod_075.go",
+   "path": "config/mod_075.go",
    "line": 16,
    "kind": "uuid",
    "label": "decoy",
@@ -1004,21 +1014,21 @@
    "where": "tree"
   },
   {
-   "path": "test/mod_078.yaml",
+   "path": "scripts/mod_078.yaml",
    "line": 5,
    "kind": "github-pat",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "test/mod_078.yaml",
+   "path": "scripts/mod_078.yaml",
    "line": 6,
    "kind": "version-string",
    "label": "decoy",
    "where": "tree"
   },
   {
-   "path": "test/mod_078.yaml",
+   "path": "scripts/mod_078.yaml",
    "line": 7,
    "kind": "uuid",
    "label": "decoy",
@@ -1032,21 +1042,21 @@
    "where": "tree"
   },
   {
-   "path": "src/api/mod_081.tf",
+   "path": "src/mod_081.tf",
    "line": 2,
    "kind": "stripe-live",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "services/mod_084.js",
+   "path": "config/mod_084.js",
    "line": 3,
    "kind": "github-fine",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "deploy/mod_087.go",
+   "path": "scripts/mod_087.go",
    "line": 6,
    "kind": "slack-bot",
    "label": "secret",
@@ -1074,119 +1084,119 @@
    "where": "tree"
   },
   {
-   "path": "docs/mod_099.go",
+   "path": "src/mod_099.go",
    "line": 6,
    "kind": "github-pat",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_102.yaml",
+   "path": "config/mod_102.yaml",
    "line": 5,
    "kind": "stripe-live",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "internal/mod_105.tf",
+   "path": "scripts/mod_105.tf",
    "line": 2,
    "kind": "aws-access-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "test/mod_108.js",
+   "path": "src/mod_108.js",
    "line": 3,
    "kind": "aws-secret-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/api/mod_111.go",
+   "path": "config/mod_111.go",
    "line": 6,
    "kind": "generic-password",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "services/mod_114.yaml",
+   "path": "scripts/mod_114.yaml",
    "line": 5,
    "kind": "slack-bot",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "deploy/mod_117.tf",
+   "path": "src/mod_117.tf",
    "line": 2,
    "kind": "github-fine",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/mod_120.js",
+   "path": "config/mod_120.js",
    "line": 4,
    "kind": "pem-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "config/mod_123.go",
+   "path": "scripts/mod_123.go",
    "line": 6,
    "kind": "github-fine",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "scripts/mod_126.yaml",
+   "path": "src/mod_126.yaml",
    "line": 5,
    "kind": "aws-secret-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "docs/mod_129.tf",
+   "path": "config/mod_129.tf",
    "line": 2,
    "kind": "aws-access-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/lib/mod_132.js",
+   "path": "scripts/mod_132.js",
    "line": 3,
    "kind": "stripe-live",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "internal/mod_135.go",
+   "path": "src/mod_135.go",
    "line": 6,
    "kind": "github-fine",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "test/mod_138.yaml",
+   "path": "config/mod_138.yaml",
    "line": 5,
    "kind": "aws-access-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "src/api/mod_141.tf",
+   "path": "scripts/mod_141.tf",
    "line": 2,
    "kind": "slack-bot",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "services/mod_144.js",
+   "path": "src/mod_144.js",
    "line": 3,
    "kind": "aws-access-key",
    "label": "secret",
    "where": "tree"
   },
   {
-   "path": "deploy/mod_147.go",
+   "path": "config/mod_147.go",
    "line": 6,
    "kind": "generic-password",
    "label": "secret",
