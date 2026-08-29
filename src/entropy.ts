@@ -45,7 +45,15 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   /^data:[a-z]+\/[a-z0-9.+-]+;base64,/i,                      // inline data URI
   /^(?:[A-Za-z]:)?[\\/](?:[\w.-]+[\\/])+[\w.-]+$/,            // filesystem path
   /^https?:\/\//i,                                            // bare URL (credential URLs have their own rule)
-  /^[A-Za-z0-9+/=_-]*\.(?:js|ts|css|png|jpg|svg|woff2?|json|map)$/i, // hashed asset filename
+  // Hashed asset filename. The stem carries a dot because a content-hashed
+  // bundle name has inner dots -- main.<hash>.chunk.js -- and without it this
+  // filter recognised only the simplest form of the shape it is named for.
+  // Three benchmark false positives, all of them main.<20 hex>.chunk.js.
+  //
+  // The extension alternation still anchors the end, so this stays "a name
+  // ending in a known asset extension" rather than "anything with a dot in
+  // it"; a high-entropy value ending .exe or .sql still reports.
+  /^[A-Za-z0-9+/=_.-]*\.(?:js|ts|css|png|jpg|svg|woff2?|json|map)$/i,
   /^[0-9.]+$/,                                                // version / numeric
   /^(?:[A-Fa-f0-9]{2}:){5,}[A-Fa-f0-9]{2}$/,                  // MAC / fingerprint
 

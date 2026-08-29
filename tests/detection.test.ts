@@ -1,6 +1,7 @@
 import { test, suite, finish, assert } from "./harness";
 import { scanText, Finding } from "../src/scanner";
 import { rules } from "../src/rules";
+import { findHighEntropyStrings } from "../src/entropy";
 import { positiveSamples } from "./fixtures";
 
 /**
@@ -195,6 +196,50 @@ test("the jwt rule itself is unchanged", () => {
     "\\beyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b",
     "fix 3 was supposed to change the sample list, not the rule"
   );
+});
+
+// ---------------------------------------------------------------------------
+suite("detection — Fix 4: hashed asset filenames with more than one dot");
+
+/**
+ * Benchmark: 3 corpus-A false positives, all `main.<20 hex>.chunk.js`.
+ *
+ * The structural filter's stem class was [A-Za-z0-9+/=_-]*, which cannot contain
+ * a dot, so it matched `<stem>.js` and nothing with an inner dot -- and inner
+ * dots are exactly what a content-hashed bundle name has. The filter caught the
+ * shape it was named for only in its simplest form.
+ */
+const fires = (v: string) => findHighEntropyStrings(`const asset = "${v}";`, 4.3).length > 0;
+
+test("multi-dot hashed asset names no longer fire", () => {
+  for (const v of [
+    "main.6f1a2b3c4d5e6f7a8b9c.chunk.js",
+    "vendor.a1b2c3d4e5f6a7b8c9d0.bundle.min.js",
+    "styles.0f9e8d7c6b5a4938271a.chunk.css",
+    "app.9a8b7c6d5e4f3a2b1c0d.esm.js",
+  ]) {
+    assert.ok(!fires(v), `still reported: ${v}`);
+  }
+});
+
+test("the single-dot form it already handled still does not fire", () => {
+  for (const v of ["6f1a2b3c4d5e6f7a8b9c1d2e3f4a5b6c.js", "a1b2c3d4e5f6a7b8c9d0e1f2.css"]) {
+    assert.ok(!fires(v), `regressed: ${v}`);
+  }
+});
+
+test("the extension alternation still anchors — dotted strings do not slip through", () => {
+  // Adding the dot widens the stem; it must not turn the filter into "anything
+  // containing a dot". Each of these is high-entropy, dotted, and NOT an asset
+  // name, so each must still be reported.
+  for (const v of [
+    `${gen(30, alnum, 21)}.${gen(30, alnum, 23)}`,
+    `${gen(24, alnum, 25)}.${gen(24, alnum, 27)}.${gen(24, alnum, 29)}`,
+    `${gen(40, alnum, 31)}.exe`,
+    `${gen(40, alnum, 33)}.sql`,
+  ]) {
+    assert.ok(fires(v), `the widened filter swallowed a non-asset value: ${v}`);
+  }
 });
 
 finish();
