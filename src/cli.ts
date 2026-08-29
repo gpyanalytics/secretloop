@@ -448,13 +448,14 @@ function scanFileList(
   root: string,
   files: string[],
   config: SecretLoopConfig
-): { findings: Finding[]; texts: Map<string, string> } {
+): { findings: Finding[]; texts: Map<string, string>; suppressed: number } {
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
   const scanned = scanFiles(root, files, config);
   return {
     findings: scanned.flatMap((s) => s.findings),
     texts: new Map(scanned.map((s) => [s.path, s.text])),
+    suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
   };
 }
 
@@ -503,6 +504,9 @@ async function main(): Promise<void> {
   // What the header says was covered. "55 findings" means something different
   // over 31 commits than over 4 staged files.
   let scope: string | undefined;
+  // The same facts as numbers, for the machine-readable formats.
+  let scannedCount: number | undefined;
+  let scopeNoun: string | undefined;
 
   if (args.command === "history") {
     if (!isGitRepo(root)) {
@@ -512,6 +516,7 @@ async function main(): Promise<void> {
     }
     let commitsScanned = 0;
     let generatedExcluded = 0;
+    let suppressed = 0;
     findings = await scanHistory({
       config,
       repoRoot: root,
@@ -519,20 +524,38 @@ async function main(): Promise<void> {
       revRange: args.revRange,
       onProgress: (commits) => (commitsScanned = commits),
       onGeneratedExcluded: (count) => (generatedExcluded = count),
+      onSuppressed: (count) => (suppressed = count),
     });
-    scope = describeScope(commitsScanned, "commit", generatedExcluded);
+    scope = describeScope(commitsScanned, "commit", generatedExcluded, suppressed);
+    scannedCount = commitsScanned;
+    scopeNoun = "commit";
   } else {
-    const listed =
-      args.command === "staged"
-        ? filterGenerated(getStagedFiles(root), config)
-        : listFilesWithExclusions(root, config);
+    let listed;
+    if (args.command === "staged") {
+      const staged = getStagedFiles(root);
+      // "git could not answer" is not "nothing is staged". Reported as an
+      // environment error rather than folded into an empty scan, because the
+      // pre-commit hook exits on this code path and a 0 here lets the commit
+      // through on a scan that never ran.
+      if ("error" in staged) {
+        process.stderr.write(`secretloop: ${staged.error}\n`);
+        process.exitCode = 2;
+        return;
+      }
+      listed = filterGenerated(staged.files, config);
+    } else {
+      listed = listFilesWithExclusions(root, config);
+    }
     const result = scanFileList(root, listed.files, config);
     findings = result.findings;
     texts = result.texts;
+    scopeNoun = args.command === "staged" ? "staged file" : "file";
+    scannedCount = result.texts.size;
     scope = describeScope(
       result.texts.size,
-      args.command === "staged" ? "staged file" : "file",
-      listed.generatedExcluded
+      scopeNoun,
+      listed.generatedExcluded,
+      result.suppressed
     );
   }
 
@@ -570,7 +593,13 @@ async function main(): Promise<void> {
     return;
   }
 
-  const report = render(sortFindings(findings), args.format, { redact: args.redact, root, scope });
+  const report = render(sortFindings(findings), args.format, {
+    redact: args.redact,
+    root,
+    scope,
+    scannedCount,
+    scopeNoun,
+  });
   if (args.output) writeFileSync(args.output, report + "\n", "utf8");
   else process.stdout.write(report + "\n");
 

@@ -13,6 +13,11 @@
 src/**
 tests/**
 
+# The changelog. Excluded to keep the VSIX contents unchanged by this release;
+# the Marketplace would render it if it shipped, which is a deliberate decision
+# to make separately rather than a side effect of adding the file.
+CHANGELOG.md
+
 # Prose that belongs in the repository, not in the extension. Listed before it
 # exists on purpose: this file has already shipped two things nobody meant to
 # send (tsconfig.tests.json and an npm tarball) purely because a denylist

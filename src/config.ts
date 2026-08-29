@@ -283,7 +283,14 @@ export function loadBaseline(file: string): LoadedBaseline {
   if (!existsSync(file)) {
     return { fingerprints: new Set(), version: BASELINE_VERSION, outdated: false };
   }
-  const parsed = JSON.parse(readFileSync(file, "utf8"));
+  // Named like loadConfig's, so a corrupt baseline says which file and why
+  // instead of surfacing a bare token error from somewhere in the call stack.
+  let parsed: any;
+  try {
+    parsed = JSON.parse(readFileSync(file, "utf8"));
+  } catch (err) {
+    throw new Error(`Could not parse ${path.basename(file)}: ${(err as Error).message}`);
+  }
   const list: string[] = Array.isArray(parsed) ? parsed : (parsed.fingerprints ?? []);
   const version: number = Array.isArray(parsed) ? 1 : (parsed.version ?? 1);
 

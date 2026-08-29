@@ -20,6 +20,12 @@ export interface ScannedFile {
   path: string;
   text: string;
   findings: Finding[];
+  /**
+   * Findings this file dropped to an inline directive, for the disclosure.
+   * Optional so a caller constructing a ScannedFile by hand need not know
+   * about it; absent means none were counted, not that none occurred.
+   */
+  suppressed?: number;
 }
 
 export interface ScanFilesOptions {
@@ -47,7 +53,13 @@ export function scanFiles(
     // what the user is actually looking at.
     const text = options.textFor?.(relPath) ?? readTextFile(root, relPath, config);
     if (text === null || text === undefined) continue;
-    scanned.push({ path: relPath, text, findings: scanText(text, { config, filePath: relPath }) });
+    let suppressed = 0;
+    const findings = scanText(text, {
+      config,
+      filePath: relPath,
+      onSuppressed: (n) => (suppressed += n),
+    });
+    scanned.push({ path: relPath, text, findings, suppressed });
   }
   return scanned;
 }

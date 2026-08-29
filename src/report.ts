@@ -12,6 +12,10 @@ export interface ReportOptions {
    * Omitted when the caller has nothing meaningful to say.
    */
   scope?: string;
+  /** How many units were covered, for a consumer that wants the number alone. */
+  scannedCount?: number;
+  /** What those units are: "file", "staged file", "commit". */
+  scopeNoun?: string;
 }
 
 /**
@@ -25,7 +29,12 @@ export interface ReportOptions {
  * Lives here rather than in cli.ts so the extension can say the same sentence
  * without pulling the CLI's entry point into its bundle.
  */
-export function describeScope(count: number, noun: string, generatedExcluded = 0): string {
+export function describeScope(
+  count: number,
+  noun: string,
+  generatedExcluded = 0,
+  suppressed = 0
+): string {
   const base =
     count === 0
       ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
@@ -33,13 +42,20 @@ export function describeScope(count: number, noun: string, generatedExcluded = 0
   // Disclosure, not a footnote. A scan that skipped generated files must not
   // read identically to one that had none to skip — which is the whole reason
   // the count is threaded up from the walker instead of being dropped there.
+  let out = base;
   if (generatedExcluded > 0) {
-    return (
-      `${base}; ${generatedExcluded} generated file(s) excluded by default ` +
-      `(--include-generated to scan them)`
-    );
+    out +=
+      `; ${generatedExcluded} generated file(s) excluded by default ` +
+      `(--include-generated to scan them)`;
   }
-  return base;
+  // A suppression is a choice someone made on purpose, but a report that never
+  // mentions it reads exactly like a scan with nothing to suppress. Appended
+  // rather than folded in, so the three-argument form stays byte-identical and
+  // the callers pinned against it are unaffected.
+  if (suppressed > 0) {
+    out += `; ${suppressed} finding(s) suppressed by inline directives`;
+  }
+  return out;
 }
 
 const SEVERITY_ORDER = { critical: 0, high: 1, medium: 2, low: 3 } as const;
@@ -283,6 +299,13 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
       tool: "secretloop",
       summary: {
         total: findings.length,
+        // Scope in the machine-readable formats, not only in the text one. CI
+        // consumes exactly json and sarif, so the honest-scope invariant was
+        // weakest precisely where the reader is a machine that cannot infer
+        // from prose that nothing was looked at.
+        scope: options.scope ?? null,
+        scannedCount: options.scannedCount ?? null,
+        scopeNoun: options.scopeNoun ?? null,
         confirmedLive: findings.filter((f) => f.verifyStatus === "live").length,
         bySeverity: countBy(findings, (f) => f.severity),
         byLiveness: {
@@ -345,6 +368,16 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
             }),
           },
         },
+        // SARIF's own place for "what this run did". executionSuccessful is the
+        // object's only required property; everything SecretLoop-specific goes
+        // in the properties bag the format provides for exactly that, so the
+        // document stays valid rather than gaining invented siblings.
+        invocations: [
+          {
+            executionSuccessful: true,
+            properties: { scope: options.scope ?? null },
+          },
+        ],
         results: findings.map((f) => ({
           ruleId: f.ruleId,
           level: sarifLevel(f),

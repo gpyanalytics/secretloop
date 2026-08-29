@@ -82,6 +82,22 @@ export interface Finding {
 
 export interface ScanOptions {
   config?: SecretLoopConfig;
+  /**
+   * Called once per finding dropped by an inline `secretloop:allow` /
+   * `gitleaks:allow` directive.
+   *
+   * A suppression is a deliberate choice a human made, but a report that never
+   * mentions it reads exactly like a scan that had nothing to suppress. The
+   * count is disclosed; which findings, and whether they were right to
+   * suppress, is not this layer's business.
+   *
+   * Counted by distinct span, not by candidate. A suppressed rule match never
+   * enters `findings`, so the entropy pass's overlap check does not fire and
+   * the same secret is offered a second time — counting naively reported two
+   * suppressions for one annotated credential, which is an overstatement in a
+   * disclosure whose whole purpose is not to overstate.
+   */
+  onSuppressed?: (count: number) => void;
   /** Repo-relative path, used for fingerprints and reporting. */
   filePath?: string;
   /** Commit SHA when scanning history. */
@@ -102,6 +118,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   const lowerText = text.toLowerCase();
   const lineStarts = computeLineStarts(text);
   const ignoredLines = collectIgnoredLines(text);
+  const suppressedSpans = new Set<number>();
 
   const findings: Finding[] = [];
   const excluded = new Set(config.excludeRules);
@@ -128,7 +145,10 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
 
       const startIndex = rule.fullMatch ? m.index : captureStart(m, value);
       const line = lineOf(startIndex, lineStarts);
-      if (ignoredLines.has(line)) continue;
+      if (ignoredLines.has(line)) {
+        suppressedSpans.add(startIndex);
+        continue;
+      }
 
       findings.push(
         buildFinding({
@@ -166,7 +186,10 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       if (overlaps) continue;
 
       const line = lineOf(hit.index, lineStarts);
-      if (ignoredLines.has(line)) continue;
+      if (ignoredLines.has(line)) {
+        suppressedSpans.add(hit.index);
+        continue;
+      }
 
       findings.push(
         buildFinding({
@@ -182,6 +205,8 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       );
     }
   }
+
+  if (suppressedSpans.size > 0) options.onSuppressed?.(suppressedSpans.size);
 
   const sorted = findings.sort((a, b) => a.startIndex - b.startIndex);
   if (options.filePath) assignFingerprints(sorted, text, options.filePath);
@@ -506,8 +531,24 @@ export function lineOf(index: number, lineStarts: number[]): number {
   return lo + 1;
 }
 
-/** Masks a secret for display in logs and reports. */
+/**
+ * Masks a secret for display in logs and reports.
+ *
+ * Three tiers, because "first four and last four" is a fraction, not a
+ * constant. On a 9-character value it revealed eight of nine characters, and a
+ * 10-character value eight of ten — in CI logs, in JSON, and in SARIF, with
+ * redaction ON. That length range is where human-chosen passwords live, and it
+ * is the same material the context-fingerprint strategy already refuses to
+ * hash. A display path cannot be looser than the identity path about the same
+ * bytes.
+ *
+ * The prefix survives below 16 characters because recognising a `ghp_` or
+ * `sk-` shape is most of what a reader needs from a masked value; the suffix
+ * does not, because prefix plus suffix is the pair that reconstructs a short
+ * secret.
+ */
 export function redactValue(value: string): string {
   if (value.length <= 8) return "*".repeat(value.length);
+  if (value.length < 16) return `${value.slice(0, 2)}${"*".repeat(value.length - 2)}`;
   return `${value.slice(0, 4)}${"*".repeat(Math.min(value.length - 8, 20))}${value.slice(-4)}`;
 }

@@ -141,13 +141,51 @@ export function isTracked(root: string, relPath: string): TrackedState {
   return res.stdout.trim().length > 0 ? "tracked" : "untracked";
 }
 
-export function getStagedFiles(root: string): string[] {
+/**
+ * The staged set, or the reason there isn't one.
+ *
+ * Two outcomes, kept apart, because the old signature could not tell them
+ * apart: a non-zero git exit returned `[]`, which the caller then reported as
+ * "0 staged file(s)" and exited 0 on. A transient index lock during a
+ * pre-commit hook therefore let the commit through with a clean-looking scan
+ * that had never run. That is the same fail-soft composition validateRoot
+ * exists to break — a check that could not run has proven nothing.
+ */
+export type StagedFiles = { files: string[] } | { error: string };
+
+export function getStagedFiles(root: string): StagedFiles {
   const res = spawnSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACM"], {
     cwd: root,
     encoding: "utf8",
   });
-  if (res.status !== 0) return [];
-  return res.stdout.split("\n").filter((l) => l.trim().length > 0);
+  if (res.error) {
+    return { error: `could not run git: ${res.error.message}` };
+  }
+  if (res.status !== 0) {
+    return { error: describeStagedFailure(res.status, res.signal, res.stderr ?? "") };
+  }
+  return { files: res.stdout.split("\n").filter((l) => l.trim().length > 0) };
+}
+
+/**
+ * Why git could not list the staged set, in terms someone can act on. Mirrors
+ * describeGitFailure in history.ts: an empty stderr is not an absence of
+ * information, because the status or the signal is the information.
+ */
+export function describeStagedFailure(
+  code: number | null,
+  signal: NodeJS.Signals | null,
+  stderr: string
+): string {
+  const said = stderr.trim();
+  if (said) return `git could not list staged files: ${said}`;
+  if (signal) {
+    return `git was killed by ${signal} before it could list staged files.`;
+  }
+  return (
+    `git exited with status ${code} and wrote no error output while listing staged files. ` +
+    `Check that this is a git repository and that the index is not locked.`
+  );
 }
 
 /**
