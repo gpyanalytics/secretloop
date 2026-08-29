@@ -295,4 +295,43 @@ test("the known cost of the narrowing, pinned rather than hidden", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+suite("detection — F-14: AWS's published documentation secret key");
+
+/**
+ * The example secret key AWS prints in its own documentation. It produced all 8
+ * of corpus A's remaining entropy-tier false positives once C2 narrowed the
+ * relative-path filter -- that filter had been masking it by accident, because
+ * the value contains two slashes and no + or =.
+ *
+ * Listed literally for the same reason Stripe's sample is: unlike AWS's example
+ * ACCESS key, which carries the string EXAMPLE and is caught by a pattern, this
+ * one has no marker to match on.
+ */
+// secretloop:allow
+const AWS_DOC_SECRET = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYz9Qb7xTvKE";
+
+test("the doc sample is dropped on both paths", () => {
+  // Named path: aws-secret-key carries DOC_SAMPLE as its allowlist.
+  // Entropy path: isDocumentationSample consults the same list. One entry has
+  // to cover both, or the sample is merely demoted a tier and still reported.
+  const named = ids(`aws_secret_access_key = "${AWS_DOC_SECRET}"`);
+  assert.deepStrictEqual(named, [], `named tier reported the doc sample: ${named}`);
+
+  const entropy = scanText(`const blob = "${AWS_DOC_SECRET}";`, {
+    filePath: "f.txt",
+    config: { ...require("../src/config").defaultConfig, entropyPassEnabled: true },
+  }).map((f: Finding) => f.ruleId);
+  assert.deepStrictEqual(entropy, [], `entropy tier reported the doc sample: ${entropy}`);
+});
+
+test("a real key in the same embedding still reports", () => {
+  const real = gen(40, alnum + "+/", 41);
+  const found = ids(`aws_secret_access_key = "${real}"`);
+  assert.ok(
+    found.includes("aws-secret-key"),
+    `the allowlist swallowed a genuine 40-character key: ${found.join(",")}`
+  );
+});
+
 finish();

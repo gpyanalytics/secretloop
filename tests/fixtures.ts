@@ -27,7 +27,11 @@ const uuid = () => `${hex(8)}-${hex(4)}-${hex(4)}-${hex(4)}-${hex(12)}`;
 /** ruleId -> a snippet that rule must flag. */
 export const positiveSamples: Record<string, string> = {
   "aws-access-key": "AKIA2Q7RZDXK4LM9PBWT",
-  "aws-secret-key": `aws_secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYz9Qb7xTvKE"`,
+  // Generated, not AWS's published example. The doc sample used to sit here and
+  // stopped working as a positive fixture the moment DOC_SAMPLE learned to
+  // recognise it -- a rule that correctly declines a value cannot also be
+  // proven by it. The negative case has its own test.
+  "aws-secret-key": `aws_secret_access_key = "${gen(40, ALNUM + "+/")}"`,
   "aws-session-token": `aws_session_token="${gen(140)}"`,
   "google-api-key": "AIzaSyD" + gen(32),
   "gcp-service-account-key": `"private_key_id": "${hex(40)}"`,

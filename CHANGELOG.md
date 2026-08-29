@@ -52,6 +52,14 @@ benchmark ships as `bench/` — `npm run bench` reproduces every number below.
 - **Hashed bundle filenames no longer look like secrets.** `main.<hash>.chunk.js`
   slipped past the filter written to catch exactly that shape, because the
   filter's stem could not contain a dot.
+- **AWS's published documentation secret key is recognised as a sample.** The
+  counterpart to `AKIAIOSFODNN7EXAMPLE`, which was already caught by the
+  `EXAMPLE` pattern. This one carries no such marker, so it is matched
+  literally. It had never been recognised -- the entropy pass's relative-path
+  filter was dropping it by accident, because the value contains two slashes and no `+`
+  or `=`, and narrowing that filter uncovered it. Both tiers drop it: the
+  `aws-secret-key` rule reads the same shared list the entropy pass does, so
+  the sample is not merely demoted from one tier to the other.
 
 Measured on the benchmark corpus, working tree, before → after:
 
@@ -60,12 +68,20 @@ Measured on the benchmark corpus, working tree, before → after:
 | default (entropy on) | 0.768 → 1.000 | 0.860 → 1.000 |
 | named rules only | 0.808 → 1.000 | 0.840 → 1.000 |
 
-Every planted credential is now found, and no decoy is reported. On 185 KLOC of
-real code with no known secrets, the false-positive count moved from 150 to 151:
-one new finding, a code expression in a test fixture, from the widened password
-class.
+Every planted credential is now found, and no decoy is reported.
 
-No rule ID, keyword, entropy threshold or allowlist outside these four changed.
+The same corpus measures the two entropy-pass changes further down this
+release. On 185 KLOC of real code with no known secrets, the false-positive
+count went 150 → 151 across the four fixes above -- one code expression in a
+test fixture, from the widened password class -- and then 151 → 4 (0.022 per
+KLOC) once findings in fixture paths were suppressed and the relative-path
+filter was narrowed.
+
+Narrowing that filter is what exposed the AWS sample: it had been eating
+23.18% of random 40-character base64 keys, real ones included, and the
+documentation sample along with them. The replacement predicate eats 0.823%.
+
+No rule ID, keyword, entropy threshold or allowlist outside these five changed.
 
 ### Honesty about what was and was not looked at
 - **Redaction hardened for short secrets.** Masking revealed the first and last
