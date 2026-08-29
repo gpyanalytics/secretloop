@@ -222,6 +222,11 @@ list that breaks constantly gets loosened rather than maintained.
 
 Full version in `docs/ROADMAP.md`. Summary:
 
+> **Before touching `src/rules.ts`:** 0.1.1's detection freeze was lifted on
+> 29 August 2026, scope-limited to four named fixes. Read *Detection freeze
+> lifted for 0.1.1* in `docs/ROADMAP.md` first — everything outside those four
+> is still frozen.
+
 | phase | status |
 |---|---|
 | 0 — Ship hygiene | repo metadata, docs move — mostly done |
