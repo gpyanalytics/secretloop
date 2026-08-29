@@ -26,6 +26,8 @@ export interface ScannedFile {
    * about it; absent means none were counted, not that none occurred.
    */
   suppressed?: number;
+  /** Generic findings dropped because this file is test/fixture material. */
+  fixtureSuppressed?: number;
 }
 
 export interface ScanFilesOptions {
@@ -54,12 +56,14 @@ export function scanFiles(
     const text = options.textFor?.(relPath) ?? readTextFile(root, relPath, config);
     if (text === null || text === undefined) continue;
     let suppressed = 0;
+    let fixtureSuppressed = 0;
     const findings = scanText(text, {
       config,
       filePath: relPath,
       onSuppressed: (n) => (suppressed += n),
+      onFixtureSuppressed: (n) => (fixtureSuppressed += n),
     });
-    scanned.push({ path: relPath, text, findings, suppressed });
+    scanned.push({ path: relPath, text, findings, suppressed, fixtureSuppressed });
   }
   return scanned;
 }

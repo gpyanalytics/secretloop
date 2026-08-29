@@ -45,10 +45,12 @@ export interface ScopeNotes {
   suppressed?: number;
   /** Files skipped because their realpath is outside the scan root. */
   outsideExcluded?: number;
+  /** Generic-tier findings dropped because the file is test/fixture material. */
+  fixtureSuppressed?: number;
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
-  const { generatedExcluded = 0, suppressed = 0, outsideExcluded = 0 } = notes;
+  const { generatedExcluded = 0, suppressed = 0, outsideExcluded = 0, fixtureSuppressed = 0 } = notes;
   const base =
     count === 0
       ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
@@ -74,6 +76,11 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   // a path inside, with nothing saying so.
   if (outsideExcluded > 0) {
     out += `; ${outsideExcluded} file(s) excluded (symlinks resolving outside the scan root)`;
+  }
+  if (fixtureSuppressed > 0) {
+    out +=
+      `; ${fixtureSuppressed} generic finding(s) suppressed in test/fixture paths ` +
+      `(--include-fixtures to report them)`;
   }
   return out;
 }

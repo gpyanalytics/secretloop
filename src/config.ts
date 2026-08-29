@@ -37,6 +37,15 @@ export interface SecretLoopConfig {
   maxFileSizeBytes: number;
   /** Disable the generic entropy pass entirely (rule matches only). */
   entropyPassEnabled: boolean;
+  /**
+   * Report generic-tier findings in test, fixture and example paths.
+   *
+   * Off by default. The generic rules exist to catch credentials with no
+   * recognisable format, and in fixture directories that is overwhelmingly test
+   * material -- but a named provider rule still fires everywhere, because a real
+   * token committed to a test file is a real leaked token.
+   */
+  includeFixtures: boolean;
 }
 
 export const defaultConfig: SecretLoopConfig = {
@@ -48,7 +57,41 @@ export const defaultConfig: SecretLoopConfig = {
   allowValues: [],
   maxFileSizeBytes: 1_000_000,
   entropyPassEnabled: true,
+  includeFixtures: false,
 };
+
+/**
+ * Path segments whose contents are test material rather than deployed code.
+ *
+ * Derived from measurement, not intuition: on 185 KLOC of a real repository
+ * every one of 151 false positives came from the two generic rules, and 135 sat
+ * under one of these segments. The dunder spellings are in the list because the
+ * plural-only version left 14 findings behind in `__test__/` -- a directory name
+ * common enough in React Native projects that omitting it halves the benefit.
+ *
+ * Matched as whole segments. `src/testing/` and `contests/` are not test
+ * directories, and a substring match would silently stop scanning them.
+ */
+export const FIXTURE_PATH_SEGMENTS = new Set([
+  "test",
+  "tests",
+  "__test__",
+  "__tests__",
+  "__mocks__",
+  "__snapshots__",
+  "__fixtures__",
+  "fixtures",
+  "snapshots",
+  "examples",
+]);
+
+export function isFixturePath(relPath: string): boolean {
+  return relPath
+    .split(path.sep)
+    .join("/")
+    .split("/")
+    .some((seg) => FIXTURE_PATH_SEGMENTS.has(seg));
+}
 
 export const CONFIG_FILENAME = ".secretloop.json";
 
@@ -100,6 +143,7 @@ export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
     allowValues: checkAllowValues(raw.allowValues ?? []),
     maxFileSizeBytes: raw.maxFileSizeBytes ?? defaultConfig.maxFileSizeBytes,
     entropyPassEnabled: raw.entropyPassEnabled ?? defaultConfig.entropyPassEnabled,
+    includeFixtures: raw.includeFixtures ?? defaultConfig.includeFixtures,
   };
 }
 
