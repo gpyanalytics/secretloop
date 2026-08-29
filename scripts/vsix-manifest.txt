@@ -1,0 +1,7 @@
+extension/LICENSE.txt
+extension/SECURITY.md
+extension/docs/icon.png
+extension/out/cli.js
+extension/out/extension.js
+extension/package.json
+extension/readme.md

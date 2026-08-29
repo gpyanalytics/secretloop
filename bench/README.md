@@ -58,6 +58,46 @@ landed on a decoy as true positives: measured at +3 spurious true positives for
 SecretLoop and +7 for gitleaks on the first run of this benchmark. Every tool
 compared reports exact lines for these formats, so the window bought nothing.
 
+## Holdout: does this generalise beyond the corpus the fixes were written against?
+
+`python3 bench/run.py --seed <n>` regenerates the corpus with a different seed
+and skips the labels.json pin. A holdout at seed 20260930, run against the build
+after the four 0.1.1 detection fixes:
+
+| tier | tree P/R | history P/R |
+|---|---|---|
+| entropy-on | 1.000 / 1.000 | 0.879 / 0.967 |
+| named-only | 1.000 / 1.000 | 0.891 / 0.950 |
+
+Identical tree scores to the committed corpus. **This is a weaker result than it
+looks.** A different seed draws different values from the *same generator*: the
+same eight secret kinds, the same twelve host languages, the same embeddings,
+the same decoy classes. It shows the fixes are not overfitted to particular
+strings; it does not show they generalise to credential shapes or file layouts
+the generator cannot produce.
+
+**This is a regression suite, not a benchmark of the product.** It answers "did
+this change break or fix what it claimed" against a corpus we wrote. It does not
+answer "how good is SecretLoop", and a 1.000 here is a statement about the
+corpus as much as about the scanner.
+
+## What the corpus does to the tools it compares
+
+Two measured cases where the corpus, not the scanner, decides the score:
+
+- **PEM plants favour marker matching.** The generator writes
+  `-----BEGIN RSA PRIVATE KEY-----` around random base64. SecretLoop and
+  gitleaks match the marker and report it; TruffleHog does not, scoring 0 of 7.
+  That is not results filtering -- its PrivateKey detector is active and fired 15
+  times on corpus B. Checked directly: given a real `openssl genrsa` key
+  TruffleHog reports it, and given the synthetic block it does not. It requires
+  something that parses as a key. On this axis the corpus rewards the looser
+  behaviour, and TruffleHog's is arguably the more correct one.
+- **History plants use one variable name.** Every history-only plant is written
+  as `CREDENTIAL = "..."`, so keyword-gated rules cannot fire on any of them
+  regardless of kind. History recall therefore under-measures named rules across
+  the board; only the entropy tier is really being tested there.
+
 ## Comparing against other scanners
 
 `COMMANDS.md` records the exact gitleaks and TruffleHog invocations used, with

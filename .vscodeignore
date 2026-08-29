@@ -13,9 +13,14 @@
 src/**
 tests/**
 
-# The changelog. Excluded to keep the VSIX contents unchanged by this release;
-# the Marketplace would render it if it shipped, which is a deliberate decision
-# to make separately rather than a side effect of adding the file.
+# The changelog.
+#
+# OPEN DECISION, deliberately left excluded. The Marketplace renders CHANGELOG.md
+# on the extension's listing page, and many extensions ship it on purpose. It is
+# excluded here only because it arrived mid-release and shipping it would have
+# been a side effect of adding a file rather than a choice anyone made. Including
+# it is a one-line change plus a scripts/vsix-manifest.txt update; the decision
+# belongs to whoever publishes, not to the commit that wrote the file.
 CHANGELOG.md
 
 # The detection benchmark. Generators, labels and a scorer -- development

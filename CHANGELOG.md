@@ -80,6 +80,9 @@ No rule ID, keyword, entropy threshold or allowlist outside these four changed.
   same sentence. CI reads exactly these two formats, so this is where the
   guarantee that "nothing was scanned" never reads as "nothing was found"
   matters most. Existing keys are unchanged; the new ones are additive.
+  Note for SARIF consumers: **every SARIF document now carries an `invocations`
+  block**, including scans with nothing unusual to disclose. Anything that
+  enumerates a run's top-level properties will see one more than before.
 - **Inline suppressions are counted and disclosed.** A scan that dropped
   findings to `secretloop:allow` or `gitleaks:allow` now says so:
   `; 3 finding(s) suppressed by inline directives`. The directives themselves

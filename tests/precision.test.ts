@@ -364,8 +364,15 @@ test("JSON keeps one object per finding, with grouping added non-destructively",
   }
 });
 
-test("SARIF for an identical scanned input is unchanged by this release", () => {
-  // The same-input compatibility fixture. Generated-file exclusion may change
+test("SARIF result structure and fingerprints are unchanged for a fixed finding set", () => {
+  // Named for what it checks. It was "SARIF for an identical scanned input is
+  // unchanged", which reads as byte compatibility and is not what it asserts --
+  // it compares result count, fingerprints, version and driver name. It did not
+  // notice 0.1.1 adding an invocations block to every SARIF document, because
+  // that is a structural addition it does not look at. Renamed rather than
+  // strengthened: byte comparison would pin formatting nobody has promised.
+  //
+  // Generated-file exclusion may change
   // WHICH results a default scan produces; for a fixed set of findings the
   // serializer and the fingerprints must be untouched.
   const input =
