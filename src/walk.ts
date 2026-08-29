@@ -1,4 +1,4 @@
-import { readdirSync, statSync, readFileSync } from "fs";
+import { readdirSync, statSync, readFileSync, realpathSync } from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
@@ -10,6 +10,11 @@ import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
  */
 export interface FileListing {
   files: string[];
+  /**
+   * Files skipped because their real location is outside the scan root.
+   * Disclosed, never silent.
+   */
+  outsideExcluded: number;
   /**
    * Files skipped by the generated-file group specifically, not by the base
    * exclusions. This is the number the report discloses, so it counts only what
@@ -26,6 +31,37 @@ export interface FileListing {
  * reconstruct how many files were removed, and a scan that silently skipped
  * twelve files reads exactly like one that had nothing to skip.
  */
+/**
+ * Whether a path really lives inside the directory being scanned.
+ *
+ * git tracks symlinks -- mode 120000 -- so a clone can carry a link to
+ * ~/.aws/credentials or /etc/passwd. `git ls-files` lists the link and a plain
+ * read follows it, so the target's content was scanned, reported under a path
+ * inside the repository, and with --verify transmitted to a provider. On a
+ * threat model that assumes a cloned repository may be hostile, a scan that
+ * cannot stay inside the directory it was given is not bounded at all.
+ *
+ * Containment, not symlink avoidance: a link resolving back inside the root is
+ * an ordinary file and is still scanned. A path that cannot be resolved -- a
+ * broken link -- has no location to check and is dropped rather than raising.
+ */
+export function isInsideRoot(root: string, relPath: string): boolean {
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(path.resolve(root));
+  } catch {
+    return false;
+  }
+  let real: string;
+  try {
+    real = realpathSync(path.join(realRoot, relPath));
+  } catch {
+    return false;
+  }
+  const rel = path.relative(realRoot, real);
+  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+}
+
 export function listFilesWithExclusions(root: string, config: SecretLoopConfig): FileListing {
   const fromGit = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
     cwd: root,
@@ -40,10 +76,15 @@ export function listFilesWithExclusions(root: string, config: SecretLoopConfig):
 
   const files: string[] = [];
   let generatedExcluded = 0;
+  let outsideExcluded = 0;
   for (const rel of candidates) {
     switch (classifyPath(rel, config)) {
       case "none":
-        files.push(rel);
+        // Checked after the exclusion groups so a node_modules symlink is
+        // attributed to the group that was already skipping it, not counted as
+        // something this release started excluding.
+        if (isInsideRoot(root, rel)) files.push(rel);
+        else outsideExcluded++;
         break;
       case "generated":
         generatedExcluded++;
@@ -52,7 +93,7 @@ export function listFilesWithExclusions(root: string, config: SecretLoopConfig):
         break; // already excluded before this release; not disclosed
     }
   }
-  return { files, generatedExcluded };
+  return { files, generatedExcluded, outsideExcluded };
 }
 
 export function listFiles(root: string, config: SecretLoopConfig): string[] {
@@ -61,16 +102,19 @@ export function listFiles(root: string, config: SecretLoopConfig): string[] {
 
 /** Applies the generated-file group to a caller-supplied list, e.g. staged files. */
 export function filterGenerated(
+  root: string,
   files: string[],
   config: SecretLoopConfig
 ): FileListing {
   const kept: string[] = [];
   let generatedExcluded = 0;
+  let outsideExcluded = 0;
   for (const rel of files) {
     if (classifyPath(rel, config) === "generated") generatedExcluded++;
+    else if (!isInsideRoot(root, rel)) outsideExcluded++;
     else kept.push(rel);
   }
-  return { files: kept, generatedExcluded };
+  return { files: kept, generatedExcluded, outsideExcluded };
 }
 
 function walkDirectory(dir: string, root: string, acc: string[] = []): string[] {
@@ -97,6 +141,10 @@ function walkDirectory(dir: string, root: string, acc: string[] = []): string[] 
 
 /** Reads a file as text, returning null for binaries and oversized blobs. */
 export function readTextFile(root: string, relPath: string, config: SecretLoopConfig): string | null {
+  // Enforced at the read as well as at the walk. A caller with its own file
+  // list -- the staged set, or anything that never goes through listFiles --
+  // would otherwise follow a link straight out of the root.
+  if (!isInsideRoot(root, relPath)) return null;
   const full = path.join(root, relPath);
   try {
     const stat = statSync(full);

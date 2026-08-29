@@ -526,7 +526,7 @@ async function main(): Promise<void> {
       onGeneratedExcluded: (count) => (generatedExcluded = count),
       onSuppressed: (count) => (suppressed = count),
     });
-    scope = describeScope(commitsScanned, "commit", generatedExcluded, suppressed);
+    scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
   } else {
@@ -542,7 +542,7 @@ async function main(): Promise<void> {
         process.exitCode = 2;
         return;
       }
-      listed = filterGenerated(staged.files, config);
+      listed = filterGenerated(root, staged.files, config);
     } else {
       listed = listFilesWithExclusions(root, config);
     }
@@ -551,12 +551,11 @@ async function main(): Promise<void> {
     texts = result.texts;
     scopeNoun = args.command === "staged" ? "staged file" : "file";
     scannedCount = result.texts.size;
-    scope = describeScope(
-      result.texts.size,
-      scopeNoun,
-      listed.generatedExcluded,
-      result.suppressed
-    );
+    scope = describeScope(result.texts.size, scopeNoun, {
+      generatedExcluded: listed.generatedExcluded,
+      suppressed: result.suppressed,
+      outsideExcluded: listed.outsideExcluded,
+    });
   }
 
   if (args.baseline) {

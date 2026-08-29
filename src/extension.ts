@@ -563,7 +563,7 @@ export function workspaceScanSummary(
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
   // scan differently — the same reason workspace.ts exists at all.
-  const scope = describeScope(fileCount, "file", generatedExcluded);
+  const scope = describeScope(fileCount, "file", { generatedExcluded });
   return findings.length > 0
     ? `SecretLoop: scanned ${scope}. ${livenessCounts(findings)}.`
     : `SecretLoop: no secrets found across ${scope}.`;
