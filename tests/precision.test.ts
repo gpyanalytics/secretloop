@@ -234,9 +234,17 @@ test("host/path strings without a scheme no longer fire", () => {
 });
 
 test("relative filesystem paths no longer fire", () => {
+  // "react-native/Libraries/TurboModule/RCTExport" was in this list and is not
+  // any more. It is the measured, accepted cost of narrowing this filter in
+  // C2: the original predicate ate 23.12% of random 40-character base64 keys,
+  // and every predicate that still catches a path with neither a ./ prefix nor
+  // a file extension costs at least 1.80% against the chosen 0.823%.
+  //
+  // The assertion was not deleted, it moved. tests/detection.test.ts now
+  // asserts that value DOES fire, so the trade is pinned from both sides and a
+  // future widening has to break a test that says why it exists.
   const paths = [
     "../node_modules/react-native/Libraries/ActionSheetIOS",
-    "react-native/Libraries/TurboModule/RCTExport",
     "../node_modules/react-native/third-party-podspecs/DoubleConversion.podspec",
   ];
   for (const p of paths) {
