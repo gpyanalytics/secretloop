@@ -81,6 +81,16 @@ Narrowing that filter is what exposed the AWS sample: it had been eating
 23.18% of random 40-character base64 keys, real ones included, and the
 documentation sample along with them. The replacement predicate eats 0.823%.
 
+The benchmark itself was measuring one of its own artifacts. `_history_plan.json`
+— the generator's record of the ten history-only plants, values in plaintext —
+was written inside the corpus root, so `git add -A` put it in the object store
+before a later `git rm` took it out of the working tree. The history scan found
+it there and the scorer counted it as false positives, capping corpus A history
+precision at 0.857 by construction. Both scratch files now live beside the
+corpus rather than inside it; all four arms measure 1.000 precision and 1.000
+recall. Detection did not change — only what the corpus was asking the scanner
+to explain.
+
 No rule ID, keyword, entropy threshold or allowlist outside these five changed.
 
 ### Honesty about what was and was not looked at
@@ -114,6 +124,24 @@ No rule ID, keyword, entropy threshold or allowlist outside these five changed.
   the CI gate, not an error)`. Report output on stdout is byte-identical.
 - **A corrupt baseline now names the file** — `Could not parse
   .secretloop-baseline.json: …` instead of a bare parser error.
+- **`--verify` and `--write-baseline` together are now refused.** The
+  combination sent every detected credential to its provider and then wrote the
+  baseline and exited before reporting, so every verdict was discarded. Nothing
+  leaked and the outbound record counted each call honestly — it was network
+  traffic carrying live credentials in service of nothing. It now exits 2 and
+  says to write the baseline first, then verify against it.
+- **A revision range can no longer be read by git as an option.** `--rev-range`
+  is checked against the characters rev-ranges are made of before it reaches
+  `git log`'s arguments, where a value like `--output=<path>` would have made
+  git write a file. The CLI's argument parser already refused flag-shaped
+  values, so no released version was exploitable through it; the check now sits
+  at the point where the argument is used, which covers every caller rather
+  than the one that goes through the parser.
+- **A credential is verified once even when several checks start at once.** The
+  result cache could only help after a result existed, so concurrent checks of
+  the same credential each contacted the provider. A second check now waits for
+  the first. Counts of what was sent are unchanged in meaning — they have
+  always recorded what actually left the machine, and now less does.
 - **`.secretloop.example.json` claimed a fallback that never shipped.** It said
   a `.secretguard.json` from before the rebrand would still be read if no
   `.secretloop.json` existed. No release ever did this: `resolveConfigFile`
