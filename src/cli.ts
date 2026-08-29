@@ -347,6 +347,27 @@ export function validateArgs(args: Args): string | null {
       "marked live, so the scan always exits 0."
     );
   }
+  // --write-baseline accepts every current finding and returns before the
+  // report is rendered. With --verify, the verification pass has already run by
+  // then: every detected credential was sent to its provider and every verdict
+  // was thrown away. Not a leak and not a lie — the outbound record counted
+  // each call honestly — but network traffic carrying a user's live credentials
+  // in service of nothing.
+  //
+  // Rejected rather than reordered or quietly skipped. Skipping the pass would
+  // be the friendlier default and the wrong one: --verify is the flag that
+  // sends credentials to third parties, and a run that ignores it teaches that
+  // it is advisory. Which runnable combinations make sense is a question for
+  // the command line, and this is not one of them.
+  if (args.verify && args.writeBaseline) {
+    return (
+      "--verify and --write-baseline cannot be used together. --write-baseline " +
+      "accepts every current finding and exits before reporting, so verification " +
+      "would send each credential to its provider and discard the answer. Write " +
+      "the baseline first, then verify against it."
+    );
+  }
+
   // Reading and rewriting one baseline in a single run is ambiguous: it reads
   // as "refresh", but --write-baseline accepts every current finding and exits
   // before reporting. Naming two files makes the intent explicit.

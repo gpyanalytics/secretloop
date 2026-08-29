@@ -12,7 +12,8 @@ import {
 import { checkNodeVersion, MIN_NODE } from "../src/node-guard";
 import { Finding } from "../src/scanner";
 import { test, suite, finish, assert } from "./harness";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
 
@@ -533,5 +534,142 @@ test("asking for help anywhere in argv is help, with nothing to complain about",
   }
 });
 
+
+suite("\ncli.ts — --verify and --write-baseline are not a combination");
+
+/**
+ * The combination sent every credential to its provider and threw the verdicts
+ * away.
+ *
+ * --write-baseline accepts every current finding and returns before the report
+ * is rendered, so the verification pass ran, the credentials left the machine,
+ * and nothing was ever printed about what came back. Not a leak and not a lie
+ * -- the outbound record counted every call honestly -- just network traffic
+ * with a user's live credentials in it, in service of nothing.
+ *
+ * Rejected rather than reordered or silently skipped, matching the two rules
+ * already in validateArgs: which runnable combinations make sense is a question
+ * for the command line, not something to resolve on the user's behalf when the
+ * resolution involves transmitting credentials.
+ */
+
+/** The parser's own defaults, so a case here differs from a real run in one field. */
+function baseArgs() {
+  return parseArgs(["scan"]);
+}
+
+const CLI_PATH = path.join(__dirname, "..", "out", "cli.js");
+const VERIFIABLE = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+
+test("validateArgs rejects them together, and neither alone", () => {
+  const both = validateArgs({ ...baseArgs(), verify: true, writeBaseline: "/tmp/b.json" });
+  assert.ok(both, "--verify --write-baseline was accepted");
+  assert.match(both!, /--verify/);
+  assert.match(both!, /--write-baseline/);
+
+  assert.strictEqual(validateArgs({ ...baseArgs(), verify: true }), null, "--verify alone still works");
+  assert.strictEqual(
+    validateArgs({ ...baseArgs(), writeBaseline: "/tmp/b.json" }),
+    null,
+    "--write-baseline alone still works"
+  );
+});
+
+/**
+ * A fetch that records what it was asked for and answers without a socket.
+ *
+ * Recording alone is not enough: calling through would send a fixture
+ * credential to GitHub, which this suite must never do. The shim answers 401
+ * itself, so the assertion is about what the CLI tried to send and nothing
+ * leaves the machine either way.
+ */
+function withFetchSpy(
+  fn: (run: (args: string[]) => { status: number | null; stdout: string; stderr: string; sent: string[] }) => void
+): void {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-spy-"));
+  try {
+    const spyFile = path.join(dir, "sent.log");
+    const shim = path.join(dir, "shim.js");
+    writeFileSync(
+      shim,
+      [
+        'const fs = require("fs");',
+        "globalThis.fetch = async (input) => {",
+        '  fs.appendFileSync(process.env.SECRETLOOP_SPY, String(input) + "\\n");',
+        '  return new Response("{}", { status: 401 });',
+        "};",
+      ].join("\n"),
+      "utf8"
+    );
+    const run = (args: string[]) => {
+      rmSync(spyFile, { force: true });
+      const res = spawnSync("node", [CLI_PATH, ...args], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          NODE_OPTIONS: `${process.env.NODE_OPTIONS ?? ""} --require ${shim}`.trim(),
+          SECRETLOOP_SPY: spyFile,
+        },
+      });
+      const sent = existsSync(spyFile)
+        ? readFileSync(spyFile, "utf8").split("\n").filter(Boolean)
+        : [];
+      return { status: res.status, stdout: res.stdout, stderr: res.stderr, sent };
+    };
+    fn(run);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("the combination exits 2, sends nothing, and writes no baseline", () => {
+  withFetchSpy((run) => {
+    const repo = mkdtempSync(path.join(tmpdir(), "secretloop-wb-"));
+    try {
+      writeFileSync(path.join(repo, "app.js"), `const t = "${VERIFIABLE}";\n`, "utf8");
+      const baseline = path.join(repo, "baseline.json");
+
+      // The control first, so the spy is known to work. Without it "nothing was
+      // sent" is a claim about a shim that might never have been installed.
+      const verifying = run(["scan", "--path", repo, "--verify"]);
+      assert.ok(
+        verifying.sent.some((u) => u.includes("api.github.com")),
+        `the spy recorded nothing for --verify alone: ${JSON.stringify(verifying.sent)}`
+      );
+
+      const both = run(["scan", "--path", repo, "--verify", "--write-baseline", baseline]);
+      assert.strictEqual(both.status, 2, `expected exit 2, got ${both.status}: ${both.stderr}`);
+      assert.match(both.stderr, /--verify/);
+      assert.match(both.stderr, /--write-baseline/);
+      assert.deepStrictEqual(
+        both.sent,
+        [],
+        `a refused run still contacted a provider: ${JSON.stringify(both.sent)}`
+      );
+      assert.strictEqual(both.stdout, "", "a refused run printed a report");
+      assert.ok(!existsSync(baseline), "a refused run wrote the baseline anyway");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
+test("--write-baseline alone still writes, without contacting anyone", () => {
+  withFetchSpy((run) => {
+    const repo = mkdtempSync(path.join(tmpdir(), "secretloop-wb2-"));
+    try {
+      writeFileSync(path.join(repo, "app.js"), `const t = "${VERIFIABLE}";\n`, "utf8");
+      const baseline = path.join(repo, "baseline.json");
+      const res = run(["scan", "--path", repo, "--write-baseline", baseline]);
+      assert.strictEqual(res.status, 0, `expected exit 0, got ${res.status}: ${res.stderr}`);
+      assert.ok(existsSync(baseline), "the baseline was not written");
+      assert.deepStrictEqual(res.sent, [], "writing a baseline contacted a provider");
+      const written = JSON.parse(readFileSync(baseline, "utf8"));
+      assert.ok(written.fingerprints.length > 0, "the baseline is empty");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
 
 finish();
