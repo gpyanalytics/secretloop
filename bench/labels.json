@@ -1,0 +1,1273 @@
+{
+ "corpus": "A-SEEDED",
+ "generator_seed": 20260829,
+ "tree": [
+  {
+   "path": "src/mod_000.js",
+   "line": 3,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_000.js",
+   "line": 4,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_000.js",
+   "line": 5,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_001.ts",
+   "line": 2,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_002.py",
+   "line": 3,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_002.py",
+   "line": 4,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_003.go",
+   "line": 6,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_003.go",
+   "line": 7,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_004.java",
+   "line": 4,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_004.java",
+   "line": 5,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_005.rb",
+   "line": 2,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_006.yaml",
+   "line": 5,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_006.yaml",
+   "line": 6,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_006.yaml",
+   "line": 7,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_007.json",
+   "line": 3,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_008.env",
+   "line": 2,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_008.env",
+   "line": 3,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_009.tf",
+   "line": 2,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_009.tf",
+   "line": 3,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_010.sh",
+   "line": 3,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_010.sh",
+   "line": 4,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_011.md",
+   "line": 5,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_012.js",
+   "line": 3,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_012.js",
+   "line": 4,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_012.js",
+   "line": 5,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_013.ts",
+   "line": 2,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_014.py",
+   "line": 3,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_014.py",
+   "line": 4,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_015.go",
+   "line": 6,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_015.go",
+   "line": 7,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_016.java",
+   "line": 4,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_016.java",
+   "line": 5,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_017.rb",
+   "line": 2,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_018.yaml",
+   "line": 5,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_018.yaml",
+   "line": 6,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_018.yaml",
+   "line": 7,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_019.json",
+   "line": 3,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_020.env",
+   "line": 2,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_020.env",
+   "line": 3,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_021.tf",
+   "line": 2,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_021.tf",
+   "line": 3,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_022.sh",
+   "line": 3,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_022.sh",
+   "line": 4,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_023.md",
+   "line": 5,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_024.js",
+   "line": 4,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_024.js",
+   "line": 13,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_024.js",
+   "line": 14,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_025.ts",
+   "line": 2,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_026.py",
+   "line": 3,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_026.py",
+   "line": 4,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_027.go",
+   "line": 6,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_027.go",
+   "line": 7,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_028.java",
+   "line": 4,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_028.java",
+   "line": 5,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_029.rb",
+   "line": 2,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_030.yaml",
+   "line": 5,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_030.yaml",
+   "line": 6,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_030.yaml",
+   "line": 7,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_031.json",
+   "line": 3,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_032.env",
+   "line": 2,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_032.env",
+   "line": 3,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_033.tf",
+   "line": 2,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_033.tf",
+   "line": 3,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_034.sh",
+   "line": 3,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_034.sh",
+   "line": 4,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_035.md",
+   "line": 5,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_036.js",
+   "line": 3,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_036.js",
+   "line": 4,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_036.js",
+   "line": 5,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_037.ts",
+   "line": 2,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_038.py",
+   "line": 3,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_038.py",
+   "line": 4,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_039.go",
+   "line": 6,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_039.go",
+   "line": 7,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_040.java",
+   "line": 4,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_040.java",
+   "line": 5,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_041.rb",
+   "line": 2,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_042.yaml",
+   "line": 5,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_042.yaml",
+   "line": 6,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_042.yaml",
+   "line": 7,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_043.json",
+   "line": 3,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_044.env",
+   "line": 2,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_044.env",
+   "line": 3,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_045.tf",
+   "line": 3,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_045.tf",
+   "line": 12,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_046.sh",
+   "line": 3,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_046.sh",
+   "line": 4,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_047.md",
+   "line": 5,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_048.js",
+   "line": 3,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_048.js",
+   "line": 4,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_048.js",
+   "line": 5,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_049.ts",
+   "line": 2,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_050.py",
+   "line": 3,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_050.py",
+   "line": 4,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_051.go",
+   "line": 6,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_051.go",
+   "line": 7,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_052.java",
+   "line": 4,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_052.java",
+   "line": 5,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_053.rb",
+   "line": 2,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_054.yaml",
+   "line": 6,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_054.yaml",
+   "line": 15,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_054.yaml",
+   "line": 16,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_055.json",
+   "line": 3,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_056.env",
+   "line": 2,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_056.env",
+   "line": 3,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_057.tf",
+   "line": 2,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_057.tf",
+   "line": 3,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_058.sh",
+   "line": 3,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_058.sh",
+   "line": 4,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_059.md",
+   "line": 5,
+   "kind": "lockfile-integrity",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_060.js",
+   "line": 4,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_060.js",
+   "line": 13,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_060.js",
+   "line": 14,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_061.ts",
+   "line": 2,
+   "kind": "url",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_062.py",
+   "line": 3,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_062.py",
+   "line": 4,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_063.go",
+   "line": 7,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_063.go",
+   "line": 16,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_064.java",
+   "line": 4,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_064.java",
+   "line": 5,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_065.rb",
+   "line": 2,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_066.yaml",
+   "line": 5,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_066.yaml",
+   "line": 6,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_066.yaml",
+   "line": 7,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_067.json",
+   "line": 3,
+   "kind": "base64-image",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_068.env",
+   "line": 2,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_068.env",
+   "line": 3,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_069.tf",
+   "line": 2,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_069.tf",
+   "line": 3,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_070.sh",
+   "line": 3,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_070.sh",
+   "line": 4,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_071.md",
+   "line": 5,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_072.js",
+   "line": 3,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_072.js",
+   "line": 4,
+   "kind": "hex-color-blob",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_072.js",
+   "line": 5,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_073.ts",
+   "line": 2,
+   "kind": "jwt-public-claims",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_074.py",
+   "line": 3,
+   "kind": "git-sha1",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_074.py",
+   "line": 4,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_075.go",
+   "line": 7,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_075.go",
+   "line": 16,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_076.java",
+   "line": 4,
+   "kind": "aws-doc-sample",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_076.java",
+   "line": 5,
+   "kind": "sha256-digest",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_077.rb",
+   "line": 2,
+   "kind": "aws-doc-secret",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_078.yaml",
+   "line": 5,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_078.yaml",
+   "line": 6,
+   "kind": "version-string",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_078.yaml",
+   "line": 7,
+   "kind": "uuid",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_079.json",
+   "line": 3,
+   "kind": "hashed-asset",
+   "label": "decoy",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_081.tf",
+   "line": 2,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_084.js",
+   "line": 3,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_087.go",
+   "line": 6,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_090.yaml",
+   "line": 5,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_093.tf",
+   "line": 2,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_096.js",
+   "line": 3,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_099.go",
+   "line": 6,
+   "kind": "github-pat",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_102.yaml",
+   "line": 5,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_105.tf",
+   "line": 2,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_108.js",
+   "line": 3,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_111.go",
+   "line": 6,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_114.yaml",
+   "line": 5,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_117.tf",
+   "line": 2,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/mod_120.js",
+   "line": 4,
+   "kind": "pem-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "config/mod_123.go",
+   "line": 6,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "scripts/mod_126.yaml",
+   "line": 5,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "docs/mod_129.tf",
+   "line": 2,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/lib/mod_132.js",
+   "line": 3,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "internal/mod_135.go",
+   "line": 6,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "test/mod_138.yaml",
+   "line": 5,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "src/api/mod_141.tf",
+   "line": 2,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "services/mod_144.js",
+   "line": 3,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "tree"
+  },
+  {
+   "path": "deploy/mod_147.go",
+   "line": 6,
+   "kind": "generic-password",
+   "label": "secret",
+   "where": "tree"
+  }
+ ],
+ "history_only": [
+  {
+   "path": "legacy/old_config_00.py",
+   "line": 4,
+   "kind": "slack-bot",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_01.py",
+   "line": 4,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_02.py",
+   "line": 4,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_03.py",
+   "line": 4,
+   "kind": "aws-secret-key",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_04.py",
+   "line": 4,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_05.py",
+   "line": 4,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_06.py",
+   "line": 4,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_07.py",
+   "line": 4,
+   "kind": "github-fine",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_08.py",
+   "line": 4,
+   "kind": "aws-access-key",
+   "label": "secret",
+   "where": "history-only"
+  },
+  {
+   "path": "legacy/old_config_09.py",
+   "line": 4,
+   "kind": "stripe-live",
+   "label": "secret",
+   "where": "history-only"
+  }
+ ],
+ "counts": {
+  "tree_secrets": 50,
+  "tree_decoys": 120,
+  "history_only_secrets": 10
+ }
+}

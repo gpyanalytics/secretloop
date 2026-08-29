@@ -18,6 +18,10 @@ tests/**
 # to make separately rather than a side effect of adding the file.
 CHANGELOG.md
 
+# The detection benchmark. Generators, labels and a scorer -- development
+# tooling with no runtime role, and it plants credential-shaped values.
+bench/**
+
 # Prose that belongs in the repository, not in the extension. Listed before it
 # exists on purpose: this file has already shipped two things nobody meant to
 # send (tsconfig.tests.json and an npm tarball) purely because a denylist
