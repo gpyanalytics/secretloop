@@ -1,5 +1,5 @@
 import { scanText } from "../src/scanner";
-import { rules } from "../src/rules";
+import { rules, isDocumentationSample } from "../src/rules";
 import { positiveSamples, negativeSamples } from "./fixtures";
 import { test, suite, finish, assert } from "./harness";
 
@@ -40,6 +40,33 @@ for (const { label, text } of negativeSamples) {
 }
 
 suite("\nrules.ts — hygiene");
+
+test("the AWS fixture is a fake the rule still fires on, not an allowlisted sample", () => {
+  // Two ways this fixture can rot, and the generic "detects <rule>" loop above
+  // catches only the first.
+  //
+  // It went in as a randomly-generated real-format key ID, which detects fine
+  // and reads to any outside reader like a planted AWS credential. The obvious
+  // repair -- reach for a recognisable placeholder -- walks straight into the
+  // second failure: AKIAIOSFODNN7EXAMPLE and anything else carrying /EXAMPLE/i
+  // is on DOC_SAMPLE, so the rule correctly DECLINES it and the fixture would
+  // then prove the opposite of what it is filed under.
+  //
+  // So the sentinel has to satisfy both at once, and this pins both. Adding the
+  // value to DOC_SAMPLE, to aws-access-key's allowlist or to
+  // placeholderDenylist fails here rather than silently turning a positive
+  // fixture into a negative one.
+  const sample = positiveSamples["aws-access-key"];
+  assert.match(sample, /^AKIA[0-9A-Z]{16}$/, "the fixture no longer has the shape the rule matches");
+  assert.strictEqual(
+    isDocumentationSample(sample),
+    false,
+    `${sample} is on the documentation-sample allowlist, so it can never be a positive fixture`
+  );
+  const hit = scanText(sample).find((f) => f.ruleId === "aws-access-key");
+  assert.ok(hit, `aws-access-key did not fire on ${sample}`);
+  assert.strictEqual(hit!.value, sample, "the rule matched something other than the whole key ID");
+});
 
 test("no duplicate rule ids", () => {
   const seen = new Set<string>();

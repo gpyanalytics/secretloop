@@ -13,7 +13,7 @@ import { Finding } from "../src/scanner";
 import * as assert from "node:assert";
 import { test, suite, finish } from "./harness";
 
-function finding(ruleId: string, value = "AKIA2Q7RZDXK4LM9PBWT"): Finding {
+function finding(ruleId: string, value = "AKIAXXXXXXXXXXXXXXXX"): Finding {
   return {
     ruleId,
     description: ruleId,
