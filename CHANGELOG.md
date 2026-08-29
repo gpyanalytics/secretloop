@@ -11,8 +11,8 @@ threshold is unchanged.
   CocoaPods `Podfile.lock`), Gradle and Maven wrappers, Xcode project files and
   SARIF reports. Scan them anyway with `--include-generated`, which bypasses
   this group only: `node_modules`, `package-lock.json` and minified bundles are
-  never scanned, as before. On a bugsnag-js benchmark this removed 408 of 855
-  history findings.
+  never scanned, as before. On the benchmark's real-noise corpus this removed
+  408 of 855 history findings.
 - **URLs and file paths no longer look like secrets.** The entropy pass already
   skipped bare URLs and absolute paths; it now also skips protocol-relative
   URLs (`//cdn.example.com/…`) and relative paths
@@ -24,7 +24,7 @@ threshold is unchanged.
   unchanged — one result per occurrence, every fingerprint intact — so existing
   baselines and dashboards are unaffected.
 
-On bugsnag-js at `5da3ae1`: history 855 → 299 findings (82 grouped entries);
+On the real-noise corpus: history 855 → 299 findings (82 grouped entries);
 working tree 239 → 150 findings (30 grouped entries).
 
 ### Detection

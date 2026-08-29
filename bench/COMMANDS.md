@@ -21,7 +21,10 @@ gitleaks git $A --report-format json --report-path A.gitleaks.hist.json --no-ban
 trufflehog filesystem $A --json --no-verification --no-update -x th-exclude.txt > A.trufflehog.tree.jsonl
 trufflehog git file://$A --json --no-verification --no-update > A.trufflehog.hist.jsonl
 
-## Corpus B (real noise) — /Users/mac/Documents/Bugsnag/bugsnag-js @ 5da3ae169c9ff716fa70d1388bb8e2157ca46ea6
+## Corpus B (real noise) — /path/to/real-noise-repo, at its pinned commit
+# $BJ is that checkout. The repository is not named here and its path is not a
+# real one: corpus B is any large real-world JS repository with no known
+# secrets, and the numbers below describe the class, not that one project.
 node out/cli.js scan    --path $BJ --format json -o B.secretloop.tree.json
 node out/cli.js history --path $BJ --format json -o B.secretloop.hist.json
 gitleaks dir $BJ --report-format json --report-path B.gitleaks.tree.json --no-banner --exit-code 0

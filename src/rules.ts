@@ -1072,7 +1072,7 @@ export const baseExcludePaths = [
  * Generated and machine-written files, added in 0.1.1 and bypassable with
  * `--include-generated`.
  *
- * Derived from what actually fired on a bugsnag-js scan rather than from a list
+ * Derived from what actually fired on a real-noise corpus scan rather than from a list
  * of things that sound generated: `*.lock` (226 history findings, almost all
  * CocoaPods `Podfile.lock`, which the named-lockfile patterns above do not
  * cover), `*.pbxproj` (109), and the Gradle and Maven wrappers (73). Together

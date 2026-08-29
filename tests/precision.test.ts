@@ -218,7 +218,7 @@ suite("0.1.1 — URL / path entropy skip");
 
 test("protocol-relative URLs no longer fire the entropy pass", () => {
   const urls = [
-    "//d2wy8f7a9ursnm.cloudfront.net/v4.7.3/bugsnag.min.js",
+    "//d3kx9m2vqp7wt1.cloudfront.net/v4.7.3/tracker.min.js",
     "//developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Object/Keys",
     "//github.com/sgerrand/alpine-pkg-glibc/releases/download/2.28-r0/glibc-2.28-r0.apk",
   ];
