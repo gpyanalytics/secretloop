@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import json, os, subprocess, sys
+import gen_corpus
 def build(ROOT):
     """Adds the history-only half of corpus A and writes labels.json."""
     def git(*a): subprocess.run(["git", *a], cwd=ROOT, check=True, capture_output=True)
@@ -19,12 +20,17 @@ def build(ROOT):
         os.makedirs(os.path.dirname(full), exist_ok=True)
         body = ["import os", "", "# legacy configuration, later removed"]
         v = item["value"]
+        # The same keyword-bearing names the tree plants use. Every history plant
+        # used to be `CREDENTIAL = "..."`, which no keyword-gated rule can match,
+        # so history recall measured the entropy tier and nothing else -- a named
+        # rule scoring zero there said nothing about the rule.
+        key = gen_corpus.KEYNAMES.get(item["kind"], "credential")
         if "\n" in v:
             first = len(body) + 2
-            body.append('PRIVATE_KEY = """'); body.extend(v.split("\n")); body.append('"""')
+            body.append(f'{key} = """'); body.extend(v.split("\n")); body.append('"""')
             line = first
         else:
-            body.append(f'CREDENTIAL = "{v}"')
+            body.append(gen_corpus.emb_py(key, v))
             line = len(body)
         open(full, "w").write("\n".join(body) + "\n")
         git("add", rel); git("commit", "-qm", f"add legacy config {i}")
