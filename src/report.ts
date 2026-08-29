@@ -29,12 +29,26 @@ export interface ReportOptions {
  * Lives here rather than in cli.ts so the extension can say the same sentence
  * without pulling the CLI's entry point into its bundle.
  */
-export function describeScope(
-  count: number,
-  noun: string,
-  generatedExcluded = 0,
-  suppressed = 0
-): string {
+/**
+ * Everything a scan skipped or held back, for the scope sentence.
+ *
+ * An options object rather than positional arguments. It was
+ * (count, noun, generatedExcluded, suppressed) and two more clauses were coming;
+ * a six-argument call whose middle three are zeros is a call nobody can read,
+ * and adding a clause in the wrong position is a silent miscount rather than a
+ * type error.
+ */
+export interface ScopeNotes {
+  /** Files skipped by the generated-file group. */
+  generatedExcluded?: number;
+  /** Findings dropped by an inline secretloop:allow / gitleaks:allow. */
+  suppressed?: number;
+  /** Files skipped because their realpath is outside the scan root. */
+  outsideExcluded?: number;
+}
+
+export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
+  const { generatedExcluded = 0, suppressed = 0, outsideExcluded = 0 } = notes;
   const base =
     count === 0
       ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
@@ -54,6 +68,12 @@ export function describeScope(
   // the callers pinned against it are unaffected.
   if (suppressed > 0) {
     out += `; ${suppressed} finding(s) suppressed by inline directives`;
+  }
+  // A scan that silently read through a symlink and out of the directory it was
+  // pointed at would be the worst of both: content from outside reported under
+  // a path inside, with nothing saying so.
+  if (outsideExcluded > 0) {
+    out += `; ${outsideExcluded} file(s) excluded (symlinks resolving outside the scan root)`;
   }
   return out;
 }

@@ -203,14 +203,14 @@ test("listFilesWithExclusions reports the generated count alongside the files", 
 test("describeScope carries the disclosure and stays byte-identical without it", () => {
   assert.strictEqual(describeScope(214, "file"), "214 file(s)");
   assert.strictEqual(
-    describeScope(214, "file", 12),
+    describeScope(214, "file", { generatedExcluded: 12 }),
     "214 file(s); 12 generated file(s) excluded by default (--include-generated to scan them)"
   );
   assert.strictEqual(
     describeScope(0, "file"),
     "0 file(s) — nothing was scanned, so this is not a clean result"
   );
-  assert.match(describeScope(0, "file", 3), /not a clean result; 3 generated file\(s\) excluded/);
+  assert.match(describeScope(0, "file", { generatedExcluded: 3 }), /not a clean result; 3 generated file\(s\) excluded/);
 });
 
 // ---------------------------------------------------------------------------

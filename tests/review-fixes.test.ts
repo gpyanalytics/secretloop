@@ -185,7 +185,7 @@ test("a zero-count enumeration says it is not a clean result in every format", (
 });
 
 test("the generated-file disclosure reaches JSON and SARIF, not only text", () => {
-  const scope = describeScope(214, "file", 12);
+  const scope = describeScope(214, "file", { generatedExcluded: 12 });
   const opts = { redact: true, root: "/repo", scope, scannedCount: 214, scopeNoun: "file" };
   const json = JSON.parse(render([], "json", opts));
   const sarif = JSON.parse(render([], "sarif", opts));
@@ -311,13 +311,13 @@ test("loadBaseline reports the filename and the reason", () => {
 suite("rider — R2: inline suppressions are counted and disclosed");
 
 test("describeScope appends the suppression clause only when nonzero", () => {
-  assert.strictEqual(describeScope(10, "file", 0, 0), "10 file(s)");
+  assert.strictEqual(describeScope(10, "file", { generatedExcluded: 0, suppressed: 0 }), "10 file(s)");
   assert.strictEqual(
-    describeScope(10, "file", 0, 3),
+    describeScope(10, "file", { generatedExcluded: 0, suppressed: 3 }),
     "10 file(s); 3 finding(s) suppressed by inline directives"
   );
   // The three-argument form stays byte-identical, so the existing pins hold.
-  assert.strictEqual(describeScope(10, "file", 2), describeScope(10, "file", 2, 0));
+  assert.strictEqual(describeScope(10, "file", { generatedExcluded: 2 }), describeScope(10, "file", { generatedExcluded: 2, suppressed: 0 }));
 });
 
 test("a scan counts findings dropped by secretloop:allow and gitleaks:allow", () => {
