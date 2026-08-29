@@ -52,6 +52,19 @@ const DOC_SAMPLE = [
   // scoped to stripe-secret-key: the generic assignment rule matches the same
   // span, so exempting one rule only changes which rule reports the sample.
   /^(?:sk|rk)_(?:live|test)_4eC39HqLyjWDarjtT1zdp7dc$/,
+  // The jwt.io demo token, matched on its PAYLOAD segment.
+  //
+  // Anchoring on the payload rather than the whole string or the signature is
+  // the whole point: the signature is derived from header + payload + secret,
+  // so swapping HS256 for HS512 produces a different signature and the same
+  // sample. The payload is
+  // {"sub":"1234567890","name":"John Doe","iat":1516239022} -- the claims that
+  // make it recognisable, carried by every copy of it in every tutorial.
+  //
+  // A re-encoded payload with the claims reordered defeats this, and that is
+  // accepted. The target is the published sample that people paste into code,
+  // not every string someone could construct to look like it.
+  /eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ/,
 ];
 
 /**
@@ -935,6 +948,14 @@ export const rules: SecretRule[] = [
     regex: /\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g,
     fullMatch: true,
     keywords: ["eyJ"],
+    // The pattern is untouched; this is the sample exemption, the same one
+    // aws-access-key carries for AWS's published key. It has to be here rather
+    // than only in isDocumentationSample because that function is consulted by
+    // the entropy pass alone -- a named rule filters through its own allowlist,
+    // so the jwt.io sample would have been dropped one tier down and reported
+    // by this rule instead, which is where 10 of 13 benchmark false positives
+    // came from.
+    allowlist: [...DOC_SAMPLE],
     severity: "high",
   },
   {
