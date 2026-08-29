@@ -1,5 +1,13 @@
 import { test, suite, finish, assert } from "./harness";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
 import { homedir, tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
@@ -624,6 +632,204 @@ test("the repo-root walk cannot escape an allowed root", () => {
     setAllowedRoots(saved);
     rmSync(outer, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+suite("mcp-core — symlink containment");
+
+/**
+ * A workspace with an unreachable neighbour, and the plumbing to point at it.
+ *
+ * The outside file carries two planted strings: a credential, which redaction
+ * would mask even if it leaked, and an ordinary marker, which nothing would
+ * mask. The marker is what proves the file's *content* never travelled — a
+ * redacted leak is still a leak of everything around it.
+ */
+const OUTSIDE_MARKER = "MARKER_OUTSIDE_ONLY_9f3a";
+
+function withWorkspace(
+  fn: (ctx: { base: string; allowed: string; outside: string; outsideCred: string }) => void
+): void {
+  const base = mkdtempSync(path.join(tmpdir(), "secretloop-contain-"));
+  const saved = getAllowedRoots();
+  try {
+    const allowed = path.join(base, "allowed");
+    const outside = path.join(base, "outside");
+    mkdirSync(allowed, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const outsideCred = tokens(4)[3];
+    writeFileSync(
+      path.join(outside, "creds.txt"),
+      `token = "${outsideCred}"\n${OUTSIDE_MARKER}\n`,
+      "utf8"
+    );
+    writeFileSync(path.join(allowed, "ok.js"), "const a = 1;\n", "utf8");
+    setAllowedRoots([allowed]);
+    resetSessions();
+    fn({ base, allowed, outside, outsideCred });
+  } finally {
+    setAllowedRoots(saved);
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+/**
+ * The async twin of withWorkspace, with its own setup and teardown.
+ *
+ * Not a wrapper around the sync one: that version ran its `finally` — deleting
+ * the fixture and restoring the roots — the moment the async body hit its first
+ * await, so the tail of the test executed against a directory that no longer
+ * existed. It passed, which is worse than failing: the assertions that matter
+ * happened to sit before the first await, and moving one line would have turned
+ * a real check into a vacuous one silently.
+ */
+async function withWorkspaceAsync(
+  fn: (ctx: { base: string; allowed: string; outside: string; outsideCred: string }) => Promise<void>
+): Promise<void> {
+  const base = mkdtempSync(path.join(tmpdir(), "secretloop-contain-async-"));
+  const saved = getAllowedRoots();
+  try {
+    const allowed = path.join(base, "allowed");
+    const outside = path.join(base, "outside");
+    mkdirSync(allowed, { recursive: true });
+    mkdirSync(outside, { recursive: true });
+    const outsideCred = tokens(4)[3];
+    writeFileSync(
+      path.join(outside, "creds.txt"),
+      `token = "${outsideCred}"\n${OUTSIDE_MARKER}\n`,
+      "utf8"
+    );
+    writeFileSync(path.join(allowed, "ok.js"), "const a = 1;\n", "utf8");
+    setAllowedRoots([allowed]);
+    resetSessions();
+    await fn({ base, allowed, outside, outsideCred });
+  } finally {
+    setAllowedRoots(saved);
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+test("a file symlink pointing outside the root is dropped and disclosed", () => {
+  withWorkspace(({ allowed, outside }) => {
+    symlinkSync(path.join(outside, "creds.txt"), path.join(allowed, "inside-link.txt"));
+    const p = payload(record(toolScan({ path: allowed })));
+    assert.strictEqual(p.summary.total, 0, "the outside file's credential was reported");
+    assert.ok(
+      !p.findings.some((f: any) => f.file === "inside-link.txt"),
+      "a symlink resolving outside the workspace was scanned"
+    );
+    assert.strictEqual(p.scope.outsideExcluded, 1);
+    assert.match(
+      p.scope.statement,
+      /1 file\(s\) outside the workspace excluded \(symlinks resolving outside the allowed roots\)/,
+      `the drop was silent: ${p.scope.statement}`
+    );
+  });
+});
+
+test("a directory symlink pointing outside the root exposes nothing under it", () => {
+  withWorkspace(({ allowed, outside }) => {
+    symlinkSync(outside, path.join(allowed, "inside-dir"));
+    const p = payload(record(toolScan({ path: allowed })));
+    assert.strictEqual(p.summary.total, 0);
+    const files: string[] = p.findings.map((f: any) => f.file);
+    assert.ok(
+      !files.some((f) => f.startsWith("inside-dir")),
+      `the outside tree was walked: ${files.join(", ")}`
+    );
+    assert.ok(p.scope.outsideExcluded >= 1, "the drop was not disclosed");
+  });
+});
+
+test("a symlink resolving back INSIDE the root is scanned normally", () => {
+  // The rule is containment, not symlink avoidance. A link that stays inside
+  // the workspace is an ordinary file and must keep being scanned; a filter
+  // written as "skip symlinks" would pass every other test in this suite and
+  // quietly stop scanning legitimate files.
+  withWorkspace(({ allowed }) => {
+    const cred = tokens(6)[5];
+    mkdirSync(path.join(allowed, "real"), { recursive: true });
+    writeFileSync(path.join(allowed, "real", "conf.js"), `const t = "${cred}";\n`, "utf8");
+    symlinkSync(path.join(allowed, "real", "conf.js"), path.join(allowed, "linked-conf.js"));
+
+    const p = payload(record(toolScan({ path: allowed })));
+    const files: string[] = p.findings.map((f: any) => f.file);
+    assert.ok(files.includes("linked-conf.js"), `an in-workspace symlink was dropped: ${files}`);
+    assert.strictEqual(p.scope.outsideExcluded, 0, "an in-workspace symlink was counted as outside");
+  });
+});
+
+test("nothing from the outside file reaches any tool response — credential or plain content", async () => {
+  await withWorkspaceAsync(async ({ allowed, outside, outsideCred }) => {
+    symlinkSync(path.join(outside, "creds.txt"), path.join(allowed, "inside-link.txt"));
+    symlinkSync(outside, path.join(allowed, "inside-dir"));
+
+    const emittedHere: string[] = [];
+    const keep = (r: ToolResult) => {
+      emittedHere.push(JSON.stringify(r));
+      return r;
+    };
+
+    const scan = payload(keep(toolScan({ path: allowed })));
+    keep(toolListFindings({ path: allowed }));
+    for (const f of scan.findings) {
+      keep(toolGetFinding({ fingerprint: f.fingerprint, contextLines: MAX_CONTEXT_LINES }));
+    }
+    keep(await toolHistoryScan({ path: allowed }));
+
+    const haystack = emittedHere.join("\n");
+    assert.ok(haystack.length > 200, "nothing was captured; the search would pass vacuously");
+    assert.ok(!haystack.includes(outsideCred), "the outside credential crossed the boundary");
+    assert.ok(
+      !haystack.includes(OUTSIDE_MARKER),
+      "ordinary content from the outside file crossed the boundary"
+    );
+  });
+});
+
+test("retargeting a symlink after the scan does not serve the new target", () => {
+  // The seam a consented-verify flow has to revalidate across: enumerated
+  // inside, retargeted outside, then asked for context.
+  withWorkspace(({ allowed, outside }) => {
+    const cred = tokens(8)[7];
+    writeFileSync(path.join(allowed, "real.js"), `const t = "${cred}";\n`, "utf8");
+    symlinkSync(path.join(allowed, "real.js"), path.join(allowed, "link.js"));
+
+    const scan = payload(toolScan({ path: allowed }));
+    const viaLink = scan.findings.find((f: any) => f.file === "link.js");
+    assert.ok(viaLink, "the in-workspace symlink was not scanned to begin with");
+
+    // Now point it outside.
+    unlinkSync(path.join(allowed, "link.js"));
+    symlinkSync(path.join(outside, "creds.txt"), path.join(allowed, "link.js"));
+
+    const p = payload(record(toolGetFinding({ fingerprint: viaLink.fingerprint })));
+    assert.strictEqual(p.context, null, "context was served for a file now pointing outside");
+    assert.match(
+      p.contextOmittedReason,
+      /no longer resolves inside the workspace/,
+      "the omission was silent"
+    );
+    assert.ok(!JSON.stringify(p).includes(OUTSIDE_MARKER), "the new target's content was read");
+  });
+});
+
+test("git history cannot reach a symlink's target — it stores the link text", () => {
+  // Probed before writing any containment for history: git stores a symlink as
+  // a mode 120000 blob whose content is the target PATH, so `git log -p` shows
+  // "../outside/creds.txt" and never the file behind it. No containment check
+  // is applied to the history parser because there is nothing there to contain;
+  // this pins that, so the day it stops being true the suite says so.
+  withWorkspace(({ allowed, outside }) => {
+    symlinkSync(path.join(outside, "creds.txt"), path.join(allowed, "linked.txt"));
+    const git = (...args: string[]) => spawnSync("git", args, { cwd: allowed, encoding: "utf8" });
+    git("init", "-q", ".");
+    git("add", "-A");
+    git("-c", "user.email=f@example.invalid", "-c", "user.name=f", "commit", "-qm", "link");
+
+    const stored = spawnSync("git", ["ls-files", "-s"], { cwd: allowed, encoding: "utf8" }).stdout;
+    assert.match(stored, /^120000 /m, "git did not store this as a symlink; the fixture is wrong");
+  });
 });
 
 // ---------------------------------------------------------------------------

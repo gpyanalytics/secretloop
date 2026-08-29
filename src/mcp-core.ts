@@ -157,6 +157,56 @@ function withinAllowedRoots(candidate: string): boolean {
 }
 
 /**
+ * A path's real location, or null when it has none.
+ *
+ * Strict, unlike safeReal: a path that cannot be resolved has no location to
+ * check, so it cannot be shown to be inside the boundary and is dropped. A
+ * broken symlink lands here and is not an error — there is nothing to scan.
+ */
+function strictReal(p: string): string | null {
+  try {
+    return realpathSync(nodePath.resolve(p));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether a scanned file is really inside the workspace.
+ *
+ * realpath was applied to the requested root and to nothing underneath it, so
+ * the boundary held for the directory the client named and not for the files
+ * actually read. A symlink committed inside an allowed root — git stores one as
+ * a mode 120000 blob, so this travels in a repository — pointed the scanner at
+ * anything the user could read: a file link leaked its target's content into
+ * findings and into get_finding's quoted context, and a directory link walked
+ * the whole tree behind it. On a threat model that assumes every repository is
+ * hostile, that is the boundary not existing.
+ *
+ * The rule is containment, not symlink avoidance. A link resolving back inside
+ * an allowed root is ordinary and is scanned; only one resolving outside is
+ * dropped. Checked against every allowed root rather than the scan root alone,
+ * which is what "inside the workspace" means when a server was launched with
+ * more than one.
+ */
+function fileWithinWorkspace(root: string, relPath: string): boolean {
+  const real = strictReal(nodePath.join(root, relPath));
+  return real !== null && withinAllowedRoots(real);
+}
+
+export interface ContainedFiles {
+  files: ScannedFile[];
+  /** Files dropped for resolving outside the workspace. Disclosed, never silent. */
+  outsideExcluded: number;
+}
+
+/** Drops enumerated files whose real location is outside the workspace. */
+export function containWithinWorkspace(root: string, scanned: ScannedFile[]): ContainedFiles {
+  const files = scanned.filter((s) => fileWithinWorkspace(root, s.path));
+  return { files, outsideExcluded: scanned.length - files.length };
+}
+
+/**
  * What a client is told about liveness.
  *
  * `unverified` is the only value this MVP can produce, because no tool here
@@ -491,6 +541,13 @@ export function toolScan(input: ScanInput): ToolResult {
     return fail(`scan failed: ${(err as Error).message}`);
   }
 
+  // After enumeration and before anything is reported or cached: the walker
+  // honours .gitignore and the exclusion groups, and knows nothing about where
+  // a path really points.
+  const contained = containWithinWorkspace(root, scanned);
+  const outsideExcluded = contained.outsideExcluded;
+  scanned = contained.files;
+
   const findings = scanned.flatMap((s) => s.findings);
   const textByFile = new Map<string, string>();
   for (const s of scanned) {
@@ -512,10 +569,22 @@ export function toolScan(input: ScanInput): ToolResult {
       root,
       scope: {
         filesScanned: scanned.length,
+        outsideExcluded,
         // The one sentence that keeps an empty enumeration from reading as a
         // pass. Word-for-word the CLI's, and pinned to it by test rather than
         // by import — see the note on describeScope above.
-        statement: `Scanned ${describeScope(scanned.length, "file", generatedExcluded)}.`,
+        // The generated-file clause is describeScope's, word for word, and is
+        // pinned against the CLI by test. This clause is appended after it
+        // rather than folded in: the CLI has no workspace boundary and so has
+        // nothing to say here, and widening describeScope to carry an
+        // MCP-only sentence would break the parity pin to make room for it.
+        statement:
+          `Scanned ${describeScope(scanned.length, "file", generatedExcluded)}` +
+          (outsideExcluded > 0
+            ? `; ${outsideExcluded} file(s) outside the workspace excluded ` +
+              `(symlinks resolving outside the allowed roots)`
+            : "") +
+          ".",
       },
       config: describeConfig(root, config),
       summary: summarize(findings),
@@ -636,7 +705,15 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
     const requested = input.contextLines ?? DEFAULT_CONTEXT_LINES;
     const span = Math.max(0, Math.min(MAX_CONTEXT_LINES, Math.floor(requested)));
 
-    const text = finding.file ? scan.textByFile.get(finding.file) : undefined;
+    // Re-checked at read time, not trusted from the scan. The file was inside
+    // the workspace when it was enumerated; a symlink can be retargeted between
+    // then and now, and this is the seam a consented-verify flow would have to
+    // re-validate across. Nothing stale is served either: the context is
+    // omitted rather than quoted from a cache whose file no longer resolves
+    // where it did.
+    const stillContained = finding.file ? fileWithinWorkspace(scan.root, finding.file) : false;
+    const text =
+      finding.file && stillContained ? scan.textByFile.get(finding.file) : undefined;
     const context =
       text === undefined
         ? null
@@ -670,6 +747,14 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
             : "No liveness check exists for this rule. It can never be confirmed live or dead " +
               "by SecretLoop; judge it on format alone.",
         },
+        // Said out loud when it happens, for the same reason a skipped file is
+        // counted: a context that is absent because the file moved out of the
+        // workspace must not read like a finding that simply had none.
+        contextOmittedReason:
+          context === null && finding.file && !stillContained
+            ? "the finding's file no longer resolves inside the workspace — it is a symlink " +
+              "pointing outside the allowed roots, or was replaced since the scan"
+            : null,
         context: context
           ? {
               file: context.file,
