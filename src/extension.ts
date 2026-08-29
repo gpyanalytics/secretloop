@@ -558,12 +558,14 @@ async function scanWorkspace() {
 
   const config = configForFolder(root, setting<number>("entropyThreshold", 4.3));
   const buffers = openBuffers(root);
-  const { scanned, generatedExcluded } = scanWorkspaceScan(root, config, {
+  const { scanned, generatedExcluded, outsideExcluded } = scanWorkspaceScan(root, config, {
     textFor: (p) => buffers.get(p),
   });
   log(
     `SecretLoop: workspace scan covered ${scanned.length} file(s) under ${root}` +
-      (generatedExcluded > 0 ? `; ${generatedExcluded} generated file(s) excluded.` : ".")
+      (generatedExcluded > 0 ? `; ${generatedExcluded} generated file(s) excluded` : "") +
+      (outsideExcluded > 0 ? `; ${outsideExcluded} file(s) resolved outside the root` : "") +
+      "."
   );
 
   await verifyScan(scanned, "the workspace scan");
@@ -571,7 +573,7 @@ async function scanWorkspace() {
 
   const findings = scanned.flatMap((s) => s.findings);
   vscode.window.showInformationMessage(
-    workspaceScanSummary(findings, scanned.length, generatedExcluded)
+    workspaceScanSummary(findings, scanned.length, generatedExcluded, outsideExcluded)
   );
 }
 
@@ -597,11 +599,12 @@ function livenessCounts(findings: Finding[]): string {
 export function workspaceScanSummary(
   findings: Finding[],
   fileCount: number,
-  generatedExcluded = 0
+  generatedExcluded = 0,
+  outsideExcluded = 0
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
   // scan differently — the same reason workspace.ts exists at all.
-  const scope = describeScope(fileCount, "file", { generatedExcluded });
+  const scope = describeScope(fileCount, "file", { generatedExcluded, outsideExcluded });
   return findings.length > 0
     ? `SecretLoop: scanned ${scope}. ${livenessCounts(findings)}.`
     : `SecretLoop: no secrets found across ${scope}.`;
