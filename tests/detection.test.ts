@@ -1,5 +1,7 @@
 import { test, suite, finish, assert } from "./harness";
-import { scanText } from "../src/scanner";
+import { scanText, Finding } from "../src/scanner";
+import { rules } from "../src/rules";
+import { positiveSamples } from "./fixtures";
 
 /**
  * The 0.1.1 detection fixes, each attributed to a benchmark result.
@@ -70,6 +72,68 @@ test("the keyword gate is unchanged — punctuation alone is not a credential", 
   // credential keyword in front of it is still nothing.
   assert.deepStrictEqual(ids('const banner = "!!!===***<<<###>>>***===!!!"'), []);
   assert.deepStrictEqual(ids('const sep = "----------------------------------"'), []);
+});
+
+// ---------------------------------------------------------------------------
+suite("detection — Fix 2: the := separator");
+
+/**
+ * Benchmark: `aws_secret_access_key := "..."` scored 0/10 with named rules only,
+ * against 10/10 for the `=` form. `\s*[:=]\s*` consumes ONE character, so Go's
+ * short variable declaration leaves the `=` unconsumed and the match dies.
+ *
+ * The entropy pass covers it in the default tier, which is why this never
+ * surfaced: it is invisible to exactly the users who follow
+ * .secretloop.example.json's advice and turn the entropy pass off.
+ *
+ * Table-driven over every separator-bearing rule rather than the two the
+ * benchmark happened to plant. A bug in a shared idiom is present wherever the
+ * idiom is, and 22 rules carry it.
+ */
+const SEPARATOR_RULES = rules.filter((r) => /\[:=\]/.test(r.regex.source)).map((r) => r.id);
+
+/** Rewrites a fixture's separator, leaving keyword and value untouched. */
+function withSeparator(sample: string, sep: string): string {
+  return sample.replace(/\s*[:=]\s*/, ` ${sep} `);
+}
+
+test("every separator-bearing rule is found — the table cannot silently empty", () => {
+  assert.ok(
+    SEPARATOR_RULES.length >= 20,
+    `expected the separator idiom across many rules, found ${SEPARATOR_RULES.length}`
+  );
+  for (const id of SEPARATOR_RULES) {
+    assert.ok(positiveSamples[id], `${id} has no fixture to vary`);
+  }
+});
+
+for (const sep of ["=", ":", ":="]) {
+  test(`every separator-bearing rule matches \`key ${sep} value\``, () => {
+    const broken: string[] = [];
+    for (const id of SEPARATOR_RULES) {
+      const text = withSeparator(positiveSamples[id], sep);
+      // Named rules only: the entropy pass masks this bug in the default tier,
+      // which is the entire reason it survived to be found by a benchmark.
+      const found = scanText(text, {
+        filePath: "f.txt",
+        config: { ...require("../src/config").defaultConfig, entropyPassEnabled: false },
+      }).map((f: Finding) => f.ruleId);
+      if (!found.includes(id)) broken.push(id);
+    }
+    assert.deepStrictEqual(broken, [], `these rules do not match with \`${sep}\`: ${broken.join(", ")}`);
+  });
+}
+
+test("the two separator rules with fixed syntax are deliberately not varied", () => {
+  // gcp-service-account-key is `"private_key_id" : "..."` -- JSON, where `:=` is
+  // not a thing. azure-storage-account-key is `AccountKey=...` inside a
+  // connection string, where neither `:` nor `:=` is valid. Both are recorded
+  // here so the audit's two exclusions are visible rather than merely absent.
+  for (const id of ["gcp-service-account-key", "azure-storage-account-key"]) {
+    const r = rules.find((x) => x.id === id);
+    assert.ok(r, `${id} is missing`);
+    assert.ok(!/\[:=\]/.test(r!.regex.source), `${id} now uses the shared separator idiom; vary it`);
+  }
 });
 
 finish();
