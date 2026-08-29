@@ -440,6 +440,45 @@ changes, and nothing destructive.
   counts, never a value — the same accounting the extension writes to
   **View > Output > SecretLoop**.
 
+### Verifying a credential is live (`secretloop_verify`)
+
+The fifth tool is the only one that sends anything anywhere. It answers "does
+this credential still work?" the only way that question can be answered — by
+presenting it to its provider — so it is **opt-in, one-time, and approved by a
+human in a terminal**, never by the assistant and never by a tool argument.
+
+It takes two calls with a person in between:
+
+1. The assistant calls `secretloop_verify`. Nothing is transmitted. It returns
+   `CONSENT_REQUIRED` and writes a request to `~/.secretloop/pending/`.
+2. **You** run `secretloop approve <fingerprint>` in your own terminal. It shows
+   the provider, the file and line, the masked value, and states plainly that
+   the credential will leave the machine and that an MCP client asked for it.
+   You answer `y` or `N`. It refuses to run without an interactive terminal, so
+   it cannot be piped, scripted, or driven by an agent.
+3. The assistant calls `secretloop_verify` again, and the check runs.
+
+Approval is bound to **one** credential value, in one file, for one provider,
+for one use, and expires after five minutes. It commits to a SHA-256 of the
+exact bytes you were shown — so if the repository changes the value after you
+approve, nothing is sent and the result is `UNKNOWN`. Denial, expiry, a changed
+file, a retargeted symlink and a replay are all `UNKNOWN`; none of them is ever
+`DEAD`, because only a provider can say that.
+
+Responses disclose transmission explicitly:
+`"network": { "externalTransmission": true, "destination": "GitHub" }`.
+
+**The trust boundary is your OS user account.** The consent files hold hashes,
+never credentials, and are created mode `0600` — but any process running as you
+can read and write them. This protects you from a hostile repository and from an
+over-eager or compromised agent. It does not protect you from malware already
+running under your own account, and nothing on this machine could.
+
+As with the other tools, your client's approval dialog governs whether the
+assistant may *call* `secretloop_verify` — that is your client's control, and it
+is not SecretLoop's consent mechanism. Permitting the call only lets the
+assistant ask; the terminal prompt is what authorizes the transmission.
+
 Your client's own approval prompt — Copilot's **Allow** in Visual Studio 2022,
 **Confirm** in Visual Studio 2026, the equivalent in VS Code, Cursor and Claude
 — governs whether the agent may *call* these tools at all; it is your client's

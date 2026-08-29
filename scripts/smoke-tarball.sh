@@ -174,6 +174,7 @@ function fail(message) {
     "secretloop_history_scan",
     "secretloop_list_findings",
     "secretloop_scan",
+    "secretloop_verify",
   ];
   if (JSON.stringify(names) !== JSON.stringify(expected)) {
     fail("tools/list returned " + JSON.stringify(names));
@@ -224,11 +225,62 @@ function fail(message) {
   });
   if (still.error || still.result?.isError) fail("the allowed root stopped working");
 
+  // ---- consented verify: the request half, from the packed tarball ------
+  // Call one must ask and send nothing. The approval half needs a terminal by
+  // design, so it cannot run here — which is the property, not a gap.
+  const listed2 = await send("tools/list", {});
+  const names2 = (listed2.result?.tools ?? []).map((t) => t.name).sort();
+  if (names2.length !== 5 || !names2.includes("secretloop_verify")) {
+    fail("expected 5 tools including secretloop_verify, got " + JSON.stringify(names2));
+  }
+
+  const scanned = JSON.parse(
+    (await send("tools/call", { name: "secretloop_scan", arguments: { path: scanDir } }))
+      .result.content[0].text
+  );
+  const target = scanned.findings.find((f) => f.ruleId === "github-token");
+  if (!target) fail("smoke fixture produced no verifiable finding");
+
+  const asked = await send("tools/call", {
+    name: "secretloop_verify",
+    arguments: { path: scanDir, fingerprint: target.fingerprint },
+  });
+  if (asked.error || asked.result?.isError) {
+    fail("secretloop_verify errored: " + JSON.stringify(asked.error ?? asked.result));
+  }
+  const verifyText = asked.result.content[0].text;
+  const verdict = JSON.parse(verifyText);
+  if (verdict.state !== "CONSENT_REQUIRED") {
+    fail("expected CONSENT_REQUIRED from the first call, got " + verdict.state);
+  }
+  if (verdict.network !== null) fail("the request call reported network activity");
+  if (!/secretloop approve /.test(verdict.instruction ?? "")) {
+    fail("no approval instruction returned");
+  }
+  if (verifyText.includes(token)) fail("the credential crossed the stdio boundary");
+
+  // The request wrote a real pending record under ~/.secretloop, because the
+  // consent directory is deliberately NOT overridable from the environment:
+  // the client launches this server and therefore controls its env, so an
+  // override would be a client-controlled path to forged approvals. Clean up
+  // exactly the one record this run created, computed the same way the server
+  // computes it, rather than clearing a directory that may hold a real one.
+  const crypto = require("crypto");
+  const os = require("os");
+  const canonical = require("fs").realpathSync(scanDir);
+  const id = crypto
+    .createHash("sha256")
+    .update(`${canonical}\0${target.fingerprint}`, "utf8")
+    .digest("hex")
+    .slice(0, 32);
+  const rec = path.join(os.homedir(), ".secretloop", "pending", `${id}.json`);
+  require("fs").rmSync(rec, { force: true });
+
   require("fs").rmSync(outside, { recursive: true, force: true });
   server.kill();
   console.log(
-    "smoke: MCP round-trip ok — 4 tools, 1 finding, value redacted on the wire, " +
-      "roots notification ignored and boundary held"
+    "smoke: MCP round-trip ok — 5 tools, 1 finding, value redacted on the wire, " +
+      "roots notification ignored, boundary held, verify asked for consent"
   );
 })().catch((err) => fail(err.message));
 NODE

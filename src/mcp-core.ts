@@ -37,7 +37,26 @@ import { scanHistory, isGitRepo } from "./history";
 // Metadata only, and from verify-meta rather than verify: importing verify.ts
 // for a boolean would bundle eighteen provider transports and the AWS SDK into
 // a server with no verification tool. See src/verify-meta.ts.
+//
+// On this branch verify.ts is imported anyway, three lines down, because
+// secretloop_verify is the point of the branch -- but the metadata call site
+// stays pointed at verify-meta so mcp-layer and verify-consent do not quietly
+// diverge in a file both of them ship.
 import { hasVerifier } from "./verify-meta";
+import { isVerifiable, verificationProvider, verifyFindings } from "./verify";
+import { readTextFile } from "./walk";
+import { scanText } from "./scanner";
+import {
+  CONSENT_VERSION,
+  ConsentRecord,
+  commitmentOf,
+  consumeRecord,
+  deleteRecord,
+  isExpired,
+  readRecord,
+  recordId,
+  writeRecord,
+} from "./consent";
 
 /**
  * Two helpers that already exist, exported, in src/cli.ts — and are
@@ -1057,6 +1076,263 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
         : null,
       summary: summarize(findings),
       findings: returned.map(projectFinding),
+      authority: AUTHORITY,
+    },
+  };
+}
+
+// ---------------------------------------------------------------------------
+// secretloop_verify — the one privileged tool
+// ---------------------------------------------------------------------------
+
+/**
+ * The fetch the verifier uses, injectable for tests only.
+ *
+ * Never settable from a tool argument: an arbitrary destination is how a
+ * "verification" becomes an exfiltration channel. Providers come from
+ * verify.ts's own mapping and nowhere else.
+ */
+let verifyFetch: typeof fetch = (...args) => fetch(...args);
+
+export function setVerifyFetchForTests(f: typeof fetch): void {
+  verifyFetch = f;
+}
+
+/** Provider requests this process has actually made, for the audit and tests. */
+let outboundCount = 0;
+export function outboundRequestCount(): number {
+  return outboundCount;
+}
+export function resetOutboundCountForTests(): void {
+  outboundCount = 0;
+}
+
+export interface VerifyInput {
+  fingerprint: string;
+  path: string;
+}
+
+/**
+ * Re-resolves a finding from disk, ignoring every cache.
+ *
+ * The second call must not trust anything the first call remembered — the
+ * server may have restarted, and more to the point an in-memory finding is a
+ * snapshot of a file that has had time to change. So the file is read again,
+ * scanned again, and the finding is located by the fingerprint it produces now.
+ * If the credential moved, changed, or went away, no finding matches and there
+ * is nothing to verify.
+ *
+ * Containment is re-checked here too, because this is a fresh read of a path
+ * that a symlink could have retargeted since the scan.
+ */
+function resolveFindingFromDisk(
+  root: string,
+  relFile: string,
+  fingerprint: string,
+  config: SecretLoopConfig
+): { finding: Finding; fullText: string } | null {
+  if (!fileWithinWorkspace(root, relFile)) return null;
+  const text = readTextFile(root, relFile, config);
+  if (text === null) return null;
+  const finding = scanText(text, { config, filePath: relFile }).find(
+    (f) => f.fingerprint === fingerprint
+  );
+  return finding ? { finding, fullText: text } : null;
+}
+
+const CONSENT_INSTRUCTION = (fingerprint: string) =>
+  `Run \`secretloop approve ${fingerprint}\` in your terminal to authorize this one verification.`;
+
+/** Every non-verifying outcome is UNKNOWN. Never DEAD — that is a provider verdict. */
+function unknown(
+  reason: string,
+  extra: Record<string, unknown> = {}
+): { ok: true; payload: Record<string, unknown> } {
+  return {
+    ok: true,
+    payload: {
+      tool: "secretloop_verify",
+      state: "UNKNOWN",
+      reason,
+      network: null,
+      note:
+        "UNKNOWN means no verdict was reached. It does not mean the credential is " +
+        "inactive, and no credential was transmitted.",
+      authority: AUTHORITY,
+      ...extra,
+    },
+  };
+}
+
+export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
+  // Type validation first, before any filesystem access, on both arguments.
+  if (typeof input?.fingerprint !== "string" || input.fingerprint.trim().length === 0) {
+    return fail("fingerprint is required and must be a non-empty string.");
+  }
+  const resolved = resolveRoot(input.path);
+  if ("error" in resolved) return fail(resolved.error);
+  const { root } = resolved;
+
+  let config: SecretLoopConfig;
+  try {
+    config = loadConfig(root);
+  } catch (err) {
+    return fail((err as Error).message);
+  }
+
+  const id = recordId(input.fingerprint, root);
+  const record = readRecord(id);
+
+  // ---- Call 2: an approved record exists -----------------------------------
+  //
+  // Everything below is synchronous up to and including consumeRecord. That is
+  // load-bearing, not incidental: Node runs one turn at a time, so two verify
+  // calls racing each other cannot interleave inside a synchronous block, and
+  // the record is claimed before anything can await. A replay loses the rename
+  // rather than the credential being sent twice.
+  if (record && record.state === "approved") {
+    if (record.fingerprint !== input.fingerprint || record.path !== root) {
+      deleteRecord(id);
+      return unknown("consent does not match this finding", { fingerprint: input.fingerprint });
+    }
+    if (isExpired(record)) {
+      deleteRecord(id);
+      return unknown("consent expired", {
+        fingerprint: input.fingerprint,
+        provider: record.provider,
+        instruction: CONSENT_INSTRUCTION(input.fingerprint),
+      });
+    }
+
+    const current = resolveFindingFromDisk(root, record.file, input.fingerprint, config);
+    if (!current) {
+      deleteRecord(id);
+      return unknown("the finding no longer resolves in this workspace", {
+        fingerprint: input.fingerprint,
+        provider: record.provider,
+      });
+    }
+    if (commitmentOf(current.finding.value) !== record.commitment) {
+      deleteRecord(id);
+      return unknown("credential changed after consent", {
+        fingerprint: input.fingerprint,
+        provider: record.provider,
+      });
+    }
+    if (verificationProvider(current.finding.ruleId) !== record.provider) {
+      deleteRecord(id);
+      return unknown("provider does not match the approved consent", {
+        fingerprint: input.fingerprint,
+      });
+    }
+
+    // Claim it before the network. Losing here means another call already did.
+    if (!consumeRecord(id)) {
+      return unknown("consent already used", { fingerprint: input.fingerprint });
+    }
+
+    const finding = current.finding;
+    let sent = 0;
+    await verifyFindings(
+      [finding],
+      { fullText: current.fullText, fetchImpl: verifyFetch },
+      {
+        onOutbound: () => {
+          sent++;
+          outboundCount++;
+        },
+      }
+    );
+
+    const state =
+      finding.verifyStatus === "live"
+        ? "LIVE"
+        : finding.verifyStatus === "dead"
+          ? "DEAD"
+          : "UNKNOWN";
+    return {
+      ok: true,
+      payload: {
+        tool: "secretloop_verify",
+        state,
+        // verifyReason is a closed enum; verifyDetail stays off this surface,
+        // because it quotes provider response text an account owner controls.
+        reason: finding.verifyReason ?? (state === "UNKNOWN" ? "no verdict" : null),
+        provider: record.provider,
+        fingerprint: input.fingerprint,
+        checkedAt: new Date().toISOString(),
+        network:
+          sent > 0 ? { externalTransmission: true, destination: record.provider } : null,
+        authority: AUTHORITY,
+      },
+    };
+  }
+
+  // ---- Call 1: no usable consent yet ---------------------------------------
+  const cached = sessions.get(root);
+  if (!cached) {
+    return fail(
+      `No scan has been run for ${root} in this session, so there is nothing to verify. ` +
+        `Call secretloop_scan first.`
+    );
+  }
+  const known = cached.findings.find((f) => f.fingerprint === input.fingerprint);
+  if (!known) {
+    return fail(
+      `No finding with fingerprint ${input.fingerprint} in this session's scan of ${root}.`
+    );
+  }
+  if (!isVerifiable(known.ruleId)) {
+    // No record is written for something that could never be checked.
+    return fail(
+      `${known.ruleId} has no liveness check, so this finding can never be confirmed live ` +
+        `or dead. Judge it on format alone.`
+    );
+  }
+  const provider = verificationProvider(known.ruleId);
+  if (!provider) {
+    return fail(`No provider is named for ${known.ruleId}; SecretLoop will not contact an unnamed party.`);
+  }
+
+  // Re-read from disk rather than committing to the cached value: the commitment
+  // must describe what is in the file now, which is what the human will be shown.
+  const current = known.file
+    ? resolveFindingFromDisk(root, known.file, input.fingerprint, config)
+    : null;
+  if (!current) {
+    return fail(
+      `The finding no longer resolves in this workspace; re-run secretloop_scan before verifying.`
+    );
+  }
+
+  const pending: ConsentRecord = {
+    version: CONSENT_VERSION,
+    id,
+    state: "pending",
+    fingerprint: input.fingerprint,
+    path: root,
+    file: known.file ?? "",
+    line: current.finding.line,
+    ruleId: current.finding.ruleId,
+    provider,
+    commitment: commitmentOf(current.finding.value),
+    createdAt: new Date().toISOString(),
+  };
+  writeRecord(pending);
+
+  return {
+    ok: true,
+    payload: {
+      tool: "secretloop_verify",
+      state: "CONSENT_REQUIRED",
+      provider,
+      fingerprint: input.fingerprint,
+      instruction: CONSENT_INSTRUCTION(input.fingerprint),
+      network: null,
+      note:
+        "Nothing has been transmitted. Verification sends this credential to " +
+        `${provider}, so it requires a human to approve it in a terminal on this machine. ` +
+        "An assistant cannot grant this, and no tool argument can.",
       authority: AUTHORITY,
     },
   };

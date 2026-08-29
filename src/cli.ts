@@ -25,7 +25,9 @@ import { verifyFindings } from "./verify";
  */
 
 export interface Args {
-  command: "scan" | "staged" | "history" | "mask" | "help";
+  command: "scan" | "staged" | "history" | "mask" | "approve" | "help";
+  /** approve: the fingerprint to authorize. */
+  approveFingerprint?: string;
   format: OutputFormat;
   verify: boolean;
   redact: boolean;
@@ -64,7 +66,7 @@ const FORMATS: readonly OutputFormat[] = ["text", "json", "sarif"];
 const FAIL_ON_MODES: readonly Args["failOn"][] = ["any", "verified", "critical", "high", "never"];
 
 /** The commands the CLI answers to. */
-const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "mask", "help"];
+const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "mask", "approve", "help"];
 
 export function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -233,6 +235,8 @@ export function parseArgs(argv: string[]): Args {
       errors.push(`unknown command ${command}. Use one of: ${COMMANDS.join(", ")}.`);
     }
   }
+  // `approve` takes one positional, which is the only command that does.
+  if (args.command === "approve") args.approveFingerprint = loose[1];
   if (wantsHelp) args.command = "help";
 
   if (errors.length > 0 && !wantsHelp) args.errors = errors;
@@ -250,6 +254,7 @@ COMMANDS
   staged     Scan staged changes only (used by the pre-commit hook)
   history    Scan git history for secrets committed at any point
   mask       Read stdin, write it back with every secret replaced
+  approve    Authorize ONE credential verification requested by an MCP client
   help       Show this message
 
 OPTIONS
@@ -286,6 +291,7 @@ OPTIONS
 
 EXAMPLES
   kubectl logs pod | secretloop mask | pbcopy   # paste a log safely
+  secretloop approve <fingerprint>   # authorize one MCP verification
   secretloop scan --verify --format sarif -o results.sarif
   secretloop history --max-commits 500 --verify
   secretloop scan --baseline .secretloop-baseline.json --verify --fail-on verified
@@ -585,6 +591,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.command === "approve") {
+    process.exitCode = await runApprove(args.approveFingerprint);
+    return;
+  }
+
   const usageError = validateArgs(args);
   if (usageError) {
     process.stderr.write(`secretloop: ${usageError}\n`);
@@ -851,6 +862,136 @@ async function runMask(args: Args): Promise<number> {
   } else {
     process.stderr.write("secretloop: masked 0 finding(s).\n");
   }
+  return 0;
+}
+
+/**
+ * `secretloop approve <fingerprint>` — the human half of consented verification.
+ *
+ * This exists because an MCP client is not a person. A tool call asking to
+ * verify a credential is a request, and the authorization for it has to come
+ * from somewhere the client cannot reach: a terminal, on this machine, with a
+ * person reading the prompt. Nothing about this flow can be driven by an agent,
+ * which is the point rather than a limitation.
+ */
+async function runApprove(fingerprint: string | undefined): Promise<number> {
+  const consent = await import("./consent");
+  const { createHash } = await import("crypto");
+
+  if (!fingerprint) {
+    process.stderr.write(
+      "secretloop: approve requires a fingerprint.\nUsage: secretloop approve <fingerprint>\n"
+    );
+    return 2;
+  }
+
+  // A TTY is the control, not a courtesy. Without it there is no human reading
+  // the prompt, and `yes | secretloop approve` or a shell an agent drives would
+  // sail through a y/N that nobody saw.
+  if (!process.stdin.isTTY) {
+    process.stderr.write(
+      "secretloop: approve needs an interactive terminal. It authorizes sending a " +
+        "credential to a third party, so it cannot be piped, scripted, or run by an agent.\n"
+    );
+    return 2;
+  }
+
+  const matches = consent.findByFingerprint(fingerprint);
+  if (matches.length === 0) {
+    process.stderr.write(
+      `secretloop: no pending verification request for ${fingerprint}.\n` +
+        `Requests are created by an MCP client calling secretloop_verify, and expire.\n`
+    );
+    return 2;
+  }
+  if (matches.length > 1) {
+    process.stderr.write(
+      `secretloop: ${matches.length} pending requests share that fingerprint, in different ` +
+        `workspaces. Refusing rather than guessing which one you mean.\n`
+    );
+    return 2;
+  }
+  const record = matches[0];
+
+  if (consent.isExpired(record)) {
+    consent.deleteRecord(record.id);
+    process.stderr.write("secretloop: that request has expired. Ask the client to request it again.\n");
+    return 2;
+  }
+
+  // Re-read and revalidate the CURRENT finding. The record was written when the
+  // request arrived; what a person approves has to be what is in the file now.
+  const { loadConfig: load } = await import("./config");
+  const { readTextFile: readText } = await import("./walk");
+  const { scanText: scan } = await import("./scanner");
+  const { redactValue } = await import("./scanner");
+  const { verificationProvider: providerOf } = await import("./verify");
+
+  const rootError = validateRoot(record.path);
+  if (rootError) {
+    consent.deleteRecord(record.id);
+    process.stderr.write(`secretloop: ${rootError}\n`);
+    return 2;
+  }
+  let config;
+  try {
+    config = load(record.path);
+  } catch (err) {
+    process.stderr.write(`secretloop: ${(err as Error).message}\n`);
+    return 2;
+  }
+  const text = readText(record.path, record.file, config);
+  const finding =
+    text === null
+      ? undefined
+      : scan(text, { config, filePath: record.file }).find((f) => f.fingerprint === fingerprint);
+  if (!finding) {
+    consent.deleteRecord(record.id);
+    process.stderr.write(
+      "secretloop: that finding no longer resolves — the file or the credential has changed. " +
+        "Nothing was approved.\n"
+    );
+    return 2;
+  }
+  if (providerOf(finding.ruleId) !== record.provider) {
+    consent.deleteRecord(record.id);
+    process.stderr.write("secretloop: the provider for that finding has changed. Nothing was approved.\n");
+    return 2;
+  }
+
+  const commitment = createHash("sha256").update(finding.value, "utf8").digest("hex");
+
+  process.stdout.write(
+    `\nSecretLoop is asking permission to verify a credential.\n\n` +
+      `  provider:  ${record.provider}\n` +
+      `  location:  ${record.file}:${finding.line}\n` +
+      `  value:     ${redactValue(finding.value)}\n\n` +
+      `  The credential will LEAVE THIS MACHINE and be sent to ${record.provider}.\n` +
+      `  This was requested by an MCP client, not by you typing a command.\n` +
+      `  Approval is for this one check and expires in 5 minutes.\n\n`
+  );
+
+  const readline = await import("readline");
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const answer: string = await new Promise((resolve) =>
+    rl.question(`Send this credential to ${record.provider}? [y/N] `, (a) => {
+      rl.close();
+      resolve(a);
+    })
+  );
+
+  if (answer.trim().toLowerCase() !== "y") {
+    consent.deleteRecord(record.id);
+    process.stdout.write("Denied. Nothing was sent, and the request has been discarded.\n");
+    return 0;
+  }
+
+  // Commits to the CURRENT value, never the one the record was created with.
+  consent.approveRecord(record, commitment);
+  process.stdout.write(
+    `Approved for one verification, valid 5 minutes. Nothing has been sent yet — ` +
+      `the client's next secretloop_verify call performs the check.\n`
+  );
   return 0;
 }
 

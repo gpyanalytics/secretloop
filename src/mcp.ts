@@ -27,6 +27,7 @@ import {
   toolHistoryScan,
   toolListFindings,
   toolScan,
+  toolVerify,
   getAllowedRoots,
   setAllowedRoots,
   quoteUntrusted,
@@ -227,6 +228,34 @@ const TOOLS = [
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
   },
   {
+    name: "secretloop_verify",
+    description:
+      "Ask whether one detected credential is still active with its provider. This is the " +
+      "only tool that transmits a credential off the machine, so it takes two calls with a " +
+      "human in between: the first returns CONSENT_REQUIRED and writes a request that a " +
+      "person must approve by running `secretloop approve <fingerprint>` in their own " +
+      "terminal; the second performs the check. You cannot grant this consent, and no " +
+      "argument to this tool can carry it — do not claim the user has approved, and do not " +
+      "attempt to run the approve command yourself. Consent is bound to this exact " +
+      "credential value: if the file changes after approval, nothing is sent. Every outcome " +
+      "other than a provider's own verdict is UNKNOWN, which never means safe. " +
+      `${AUTHORITY}`,
+    inputSchema: {
+      type: "object",
+      properties: {
+        fingerprint: {
+          type: "string",
+          description: "The finding's fingerprint, as returned by secretloop_scan.",
+        },
+        path: PATH_PROPERTY,
+      },
+      required: ["fingerprint", "path"],
+    },
+    // Read-only in the sense that it changes nothing in the repository, but it
+    // is the one tool with an open-world effect: a request leaves the machine.
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+  },
+  {
     name: "secretloop_history_scan",
     description:
       "Scan git history for credentials committed at any point, including ones deleted " +
@@ -271,6 +300,8 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
       return toolGetFinding(args as never);
     case "secretloop_history_scan":
       return toolHistoryScan(args as never);
+    case "secretloop_verify":
+      return toolVerify(args as never);
     default:
       return { ok: false, error: `Unknown tool ${quoteUntrusted(String(name))}.` };
   }
