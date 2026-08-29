@@ -242,4 +242,57 @@ test("the extension alternation still anchors — dotted strings do not slip thr
   }
 });
 
+// ---------------------------------------------------------------------------
+suite("detection — C2: the relative-path filter no longer eats base64 keys");
+
+/**
+ * 0.1.1's relative-path filter was `^(?:[\w.-]+/)+[\w.-]+$`, which a 40-char
+ * base64 credential satisfies whenever it contains a slash and no + or =.
+ * Measured over 200k random keys: 23.12% were eaten, invisible to the entropy
+ * tier -- the tier that exists for credentials no named rule can catch.
+ *
+ * The replacement requires a path to look like one: an extension-bearing final
+ * segment, or an explicit ./ ../ / or drive-letter prefix. Measured at 0.823%.
+ */
+test("a base64 key with one slash is reported again", () => {
+  for (const v of [
+    "R6nK5HlG/ehNexnGZEP0Ccpjw5WdZMcjuKTWW8qj",
+    "AbCd3fGh/JkLmNoPqRsTuVwXyZ0123456789abcd",
+  ]) {
+    assert.ok(
+      findHighEntropyStrings(`secret = "${v}"`, 4.3).length > 0,
+      `still filtered as a path: ${v}`
+    );
+  }
+});
+
+test("genuine paths are still filtered", () => {
+  for (const p of [
+    "../node_modules/react-native/Libraries/ActionSheetIOS",
+    "../node_modules/react-native/third-party-podspecs/DoubleConversion.podspec",
+    "./src/components/Button/index.tsx",
+    "/usr/local/share/some-package/lib/thing.js",
+    "packages/core/src/client/transport.js",
+  ]) {
+    assert.strictEqual(
+      findHighEntropyStrings(`p = "${p}"`, 4.3).length,
+      0,
+      `a real path started firing: ${p}`
+    );
+  }
+});
+
+test("the known cost of the narrowing, pinned rather than hidden", () => {
+  // A relative path with no ./ prefix AND no file extension is now
+  // indistinguishable from a slash-bearing token, so it reports. Measured
+  // alternatives that catch it cost 1.802% of random keys against 0.823% --
+  // more than double the false-negative surface to remove one false positive
+  // shape. The trade is recorded here so it is a decision, not a surprise.
+  const bare = "react-native/Libraries/TurboModule/RCTExport";
+  assert.ok(
+    findHighEntropyStrings(`m = "${bare}"`, 4.3).length > 0,
+    "if this stops firing the predicate widened; re-measure the key-eating rate"
+  );
+});
+
 finish();
