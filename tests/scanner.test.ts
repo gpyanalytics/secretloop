@@ -37,7 +37,7 @@ test("detects a GitHub token by format", () => {
 });
 
 test("detects an AWS access key ID", () => {
-  const findings = scanText('AWS_KEY = "AKIA2Q7RZDXK4LM9PBWT"', 4.3);
+  const findings = scanText('AWS_KEY = "AKIAXXXXXXXXXXXXXXXX"', 4.3);
   assert.ok(findings.find((f) => f.ruleId === "aws-access-key"));
 });
 

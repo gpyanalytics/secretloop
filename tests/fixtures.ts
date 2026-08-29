@@ -26,7 +26,20 @@ const uuid = () => `${hex(8)}-${hex(4)}-${hex(4)}-${hex(4)}-${hex(12)}`;
 
 /** ruleId -> a snippet that rule must flag. */
 export const positiveSamples: Record<string, string> = {
-  "aws-access-key": "AKIA2Q7RZDXK4LM9PBWT",
+  // A visibly-fake sentinel rather than a gen()-produced value, which is the
+  // one place in this corpus where generating would be wrong. An AWS key ID is
+  // AKIA plus 16 uppercase alphanumerics with no separator, so a generated one
+  // is indistinguishable from a planted credential to anyone reading the file
+  // or grepping the repository -- and a secret scanner whose own fixtures read
+  // like live AWS keys invites exactly the report it exists to prevent.
+  //
+  // The run of X's is load-bearing in both directions: it has to still match
+  // aws-access-key, and it must NOT be on DOC_SAMPLE or any rule allowlist, or
+  // the fixture would prove the rule declines a value rather than finds one --
+  // which is what happened to AKIAIOSFODNN7EXAMPLE and why the note below
+  // exists. AKIAEXAMPLE... cannot be used for the same reason: DOC_SAMPLE
+  // matches /EXAMPLE/i. tests/rules.test.ts pins both halves.
+  "aws-access-key": "AKIAXXXXXXXXXXXXXXXX",
   // Generated, not AWS's published example. The doc sample used to sit here and
   // stopped working as a positive fixture the moment DOC_SAMPLE learned to
   // recognise it -- a rule that correctly declines a value cannot also be

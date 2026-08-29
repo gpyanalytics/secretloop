@@ -305,7 +305,7 @@ test("Google: a non-200 that is not API_KEY_INVALID is unknown", async () => {
 
 test("an AWS key with no secret key beside it is unknown/missing-pair", async () => {
   // Nothing an operator can fix by retrying, and nothing to go look at either.
-  const result = await verifyFinding(makeFinding("aws-access-key", "AKIA2Q7RZDXK4LM9PBWT"), {
+  const result = await verifyFinding(makeFinding("aws-access-key", "AKIAXXXXXXXXXXXXXXXX"), {
     fullText: "no secret key anywhere in this file",
     fetchImpl: mockFetch({ status: 200 }),
   });
