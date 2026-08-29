@@ -4,3 +4,11 @@ out/
 .vscode-test/
 .DS_Store
 **/.DS_Store
+
+# Python bytecode from bench/. Absent until 0.1.1, which is how three .pyc
+# files got committed: `npm run bench` writes bench/__pycache__/, a later
+# `git add -A` swept it in, and nothing here said no. They shipped nowhere --
+# .npmignore is an allowlist and .vscodeignore excludes bench/** -- but they
+# made every bench run dirty the working tree.
+__pycache__/
+*.pyc
