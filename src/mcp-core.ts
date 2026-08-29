@@ -72,18 +72,43 @@ import { isVerifiable } from "./verify";
  * so an assistant asking through MCP was told "Scanned 1 file(s)." about a
  * repository where a lockfile had been passed over.
  */
-export function describeScope(count: number, noun: string, generatedExcluded = 0): string {
-  const base =
+/**
+ * The clause list grows with the product: generated-file excludes, inline
+ * suppressions, symlinks resolving outside the scan root, and generic findings
+ * held back in fixture paths. A scope sentence reporting three of four is a
+ * scan that hid something, which is the one thing this sentence exists to
+ * prevent.
+ */
+export interface ScopeNotes {
+  generatedExcluded?: number;
+  suppressed?: number;
+  outsideExcluded?: number;
+  fixtureSuppressed?: number;
+}
+
+export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
+  const { generatedExcluded = 0, suppressed = 0, outsideExcluded = 0, fixtureSuppressed = 0 } = notes;
+  let out =
     count === 0
       ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
       : `${count} ${noun}(s)`;
   if (generatedExcluded > 0) {
-    return (
-      `${base}; ${generatedExcluded} generated file(s) excluded by default ` +
-      `(--include-generated to scan them)`
-    );
+    out +=
+      `; ${generatedExcluded} generated file(s) excluded by default ` +
+      `(--include-generated to scan them)`;
   }
-  return base;
+  if (suppressed > 0) {
+    out += `; ${suppressed} finding(s) suppressed by inline directives`;
+  }
+  if (outsideExcluded > 0) {
+    out += `; ${outsideExcluded} file(s) excluded (symlinks resolving outside the scan root)`;
+  }
+  if (fixtureSuppressed > 0) {
+    out +=
+      `; ${fixtureSuppressed} generic finding(s) suppressed in test/fixture paths ` +
+      `(--include-fixtures to report them)`;
+  }
+  return out;
 }
 
 /** Must stay identical to validateRoot in src/cli.ts. Exported for the pin test. */
@@ -514,11 +539,16 @@ export function toolScan(input: ScanInput): ToolResult {
   const include = input.include?.filter((g) => typeof g === "string" && g.length > 0) ?? [];
   let scanned: ScannedFile[];
   let generatedExcluded: number;
+  // The walker contains symlinks itself since 0.1.1, so this count comes from
+  // there. containWithinWorkspace below stays as the second layer: it is what
+  // get_finding re-checks against, where no walker runs.
+  let walkerOutsideExcluded = 0;
   try {
     if (include.length === 0) {
       const result = scanWorkspaceScan(root, config);
       scanned = result.scanned;
       generatedExcluded = result.generatedExcluded;
+      walkerOutsideExcluded = result.outsideExcluded;
     } else {
       // Same enumeration, then the project's own glob matcher over it. Writing a
       // second matcher here is how `*` would come to cross `/` in one place and
@@ -569,7 +599,7 @@ export function toolScan(input: ScanInput): ToolResult {
       root,
       scope: {
         filesScanned: scanned.length,
-        outsideExcluded,
+        outsideExcluded: walkerOutsideExcluded + outsideExcluded,
         // The one sentence that keeps an empty enumeration from reading as a
         // pass. Word-for-word the CLI's, and pinned to it by test rather than
         // by import — see the note on describeScope above.
@@ -578,13 +608,12 @@ export function toolScan(input: ScanInput): ToolResult {
         // rather than folded in: the CLI has no workspace boundary and so has
         // nothing to say here, and widening describeScope to carry an
         // MCP-only sentence would break the parity pin to make room for it.
-        statement:
-          `Scanned ${describeScope(scanned.length, "file", generatedExcluded)}` +
-          (outsideExcluded > 0
-            ? `; ${outsideExcluded} file(s) outside the workspace excluded ` +
-              `(symlinks resolving outside the allowed roots)`
-            : "") +
-          ".",
+        statement: `Scanned ${describeScope(scanned.length, "file", {
+          generatedExcluded,
+          suppressed: scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0),
+          outsideExcluded: walkerOutsideExcluded + outsideExcluded,
+          fixtureSuppressed: scanned.reduce((n, f) => n + (f.fixtureSuppressed ?? 0), 0),
+        })}.`,
       },
       config: describeConfig(root, config),
       summary: summarize(findings),
@@ -875,7 +904,7 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
   // shaped payload, and the only thing standing between them and being read
   // alike is this sentence.
   const statement = complete
-    ? `Scanned ${describeScope(commitsScanned, "commit", generatedExcluded)}.`
+    ? `Scanned ${describeScope(commitsScanned, "commit", { generatedExcluded })}.`
     : `Stopped after ${commitsScanned} commit(s) — ${
         stopReason === "timeout"
           ? `the ${timeoutMs}ms limit was reached`

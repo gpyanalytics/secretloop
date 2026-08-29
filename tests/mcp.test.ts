@@ -185,18 +185,27 @@ suite("mcp-core — parity with the CLI");
  * empty scan reading as a clean one.
  */
 test("describeScope matches the CLI's, word for word", () => {
-  // The third argument is 0.1.1's generated-file disclosure. It is in the
-  // matrix because the two-argument form alone did NOT catch this drift: the
-  // CLI gained a parameter that defaults to 0, so every two-argument call kept
-  // returning the same string and the pin stayed green while the MCP surface
-  // silently stopped disclosing skipped files.
+  // Every clause is in the matrix, not just the one that existed when the pin
+  // was written. The two-argument form alone did NOT catch the first drift --
+  // the CLI gained a defaulted parameter, every two-argument call kept
+  // returning the same string, and the pin stayed green while the MCP surface
+  // silently stopped disclosing skipped files. A pin that only exercises the
+  // arguments that existed yesterday fails the same way tomorrow.
+  const NOTES: Array<Record<string, number>> = [
+    {},
+    { generatedExcluded: 12 },
+    { suppressed: 3 },
+    { outsideExcluded: 2 },
+    { fixtureSuppressed: 7 },
+    { generatedExcluded: 1, suppressed: 2, outsideExcluded: 3, fixtureSuppressed: 4 },
+  ];
   for (const count of [0, 1, 2, 41, 855]) {
     for (const noun of ["file", "staged file", "commit"]) {
-      for (const excluded of [0, 1, 12]) {
+      for (const notes of NOTES) {
         assert.strictEqual(
-          mcpDescribeScope(count, noun, excluded),
-          cliDescribeScope(count, noun, excluded),
-          `drift at ${count} ${noun}, ${excluded} excluded`
+          mcpDescribeScope(count, noun, notes),
+          cliDescribeScope(count, noun, notes),
+          `drift at ${count} ${noun}, notes ${JSON.stringify(notes)}`
         );
       }
     }
@@ -719,9 +728,15 @@ test("a file symlink pointing outside the root is dropped and disclosed", () => 
       "a symlink resolving outside the workspace was scanned"
     );
     assert.strictEqual(p.scope.outsideExcluded, 1);
+    // The wording is the CLI's, not an MCP-private phrase any more. 0.1.1 gave
+    // the walker its own symlink containment, so the file is now dropped one
+    // layer earlier and disclosed through the shared scope sentence -- one
+    // wording, pinned against the CLI by the parity test above. MCP's own
+    // containment stays as the second layer; it is what get_finding re-checks
+    // against, where no walker runs.
     assert.match(
       p.scope.statement,
-      /1 file\(s\) outside the workspace excluded \(symlinks resolving outside the allowed roots\)/,
+      /1 file\(s\) excluded \(symlinks resolving outside the scan root\)/,
       `the drop was silent: ${p.scope.statement}`
     );
   });
