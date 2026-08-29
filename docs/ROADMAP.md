@@ -293,6 +293,32 @@ count.
 
 ---
 
+## Carried to 0.1.2 — from the external review of 0.1.1
+
+An outside read of `release-0.1.1` produced four publish blockers (all fixed in
+this release) and a tail that was deliberately not fixed with them. **The
+review's write-up is the spec for each of these**; the one-line summaries here
+exist so nobody has to rediscover them.
+
+Nothing below loses a finding relative to 0.1.0. They are ordered by what a
+user notices.
+
+| id | item | why it waited |
+|---|---|---|
+| P1-3 | The editor's workspace-scan summary carries the generated-file and symlink counts but not the inline-suppression or fixture-suppression counts. `WorkspaceScan` never grew the two fields `ScannedFile` already has. | Confined to one surface; the CLI is where CI reads, and the CLI discloses all six. Also: `scanWorkspace` hand-builds a scope string with different wording than `describeScope` produces a few lines later — fold both into one call. |
+| P3-1 | **The VSIX manifest pin has no automatic trigger, and packaging from a polluted `node_modules` ships it.** `scripts/vsix-manifest.txt` is an exact 7-file list and `smoke:vsix` diffs the archive against it, but nothing runs it: `prepublishOnly` covers npm only. Measured 29 Aug 2026: with 58 packages in `node_modules` that are in neither `package.json` nor `package-lock.json` (left by an `npm install` on another branch), `vsce package` puts **3,690 node_modules files** into the archive. `npm ci` removes them. | Wiring `prepackage`/`prepublish:vsce` to `smoke:vsix` is one line, but it fails today for that pre-existing reason, so the fix is the gate *plus* deciding what the gate should do about a dirty tree. See the corrected note in `.vscodeignore`. |
+| P2-1 | A symlink cycle in a non-git tree enumerates the same file once per depth: one credential in one file became 33 findings with 33 fingerprints, and the scope said `99 file(s)` for one real file. Containment is not breached; `walkDirectory` needs a realpath-visited set. | Non-git walk only, and the fingerprints are platform-dependent, which makes it a baseline-stability bug rather than a detection one. |
+| P2-2 | `VerificationCache` keys on `(ruleId, sha256(value))` and ignores the verification context, so an AWS access key ID present in two files — one with the paired secret key, one without — gets whichever verdict started first, and a `missing-pair` UNKNOWN is cached for five minutes over a credential that could have been proven LIVE. | Wrong in the tri-state's own direction, but it needs the same credential in two files with different neighbours. |
+| P2-3 | `mask` checks only the first 8000 bytes for NUL, so a file whose first NUL is later is decoded and written back with U+FFFD substitutions — neither the input nor a masked version of it. Same lossiness for any non-UTF-8 text. No secret escapes; offsets are computed on the decoded string. | Corruption, not disclosure. Fix is to scan the whole buffer and compare the re-encoded bytes. |
+| P2-4 | Four structural entropy filters can never fire, because the capture alphabet `[A-Za-z0-9+/=_\-.]` excludes `:` `;` `,` `\`: the data-URI, bare-URL and MAC filters, plus the drive-letter and backslash branches of the filesystem-path filter. The bare-URL one is already documented as unreachable in the comment beneath it and left in the list anyway. | Documentation and deletion. Dead entries in a filter list are a hazard because the next exception gets written next to one that has never run. |
+| P2-5 | The entropy tier cannot report an all-hex or all-digit credential at any length: `charsetDiversity === 2` raises the bar to 4.5 and hex tops out at `log2(16) = 4.0`. The 0.823% miss rate this release quotes is measured at 40 characters only — it is 4.1% at 32 and 96.5% at 20, against a `{20,}` minimum that advertises coverage the threshold cannot deliver. | Documentation. Named rules cover the known hex providers; a self-issued 64-hex service token is invisible to both tiers and the README should say so. |
+| P3-2 | `README.md` never mentions `mask` — not once. It is the headline new command of 0.1.1, it has a surprising default (`--entropy` off), and the README is also the npm page and the Marketplace listing. | |
+| P3-3 | `checkAllowValues` puts the offending pattern verbatim into its error message, and an `allowValues` entry is frequently the credential being allowed. Report the index instead. | |
+| P3-4 | `describeCommits` in `history.ts` is exported and has no caller in `src/`. It is also the one `git` spawn site that splices caller-derived strings into argv with no `--` separator. | |
+| P3-5 | Fixture-path suppression now drops generic-tier findings under `tests/`, `bench/` and `examples/` in the CI self-scan too, regardless of `.github/secretloop.ci.json`'s per-file exclusion list — so that file's careful scoping covers a smaller surface than its comment describes. Named rules still fire. | |
+
+---
+
 ## Permanently out of scope
 
 | idea | why not |

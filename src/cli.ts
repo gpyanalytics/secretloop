@@ -487,19 +487,38 @@ function unresolvedNote(unresolved: Finding[]): string {
   return lines.join("\n");
 }
 
-function scanFileList(
-  root: string,
-  files: string[],
-  config: SecretLoopConfig
-): { findings: Finding[]; texts: Map<string, string>; suppressed: number; fixtureSuppressed: number } {
+interface ScannedList {
+  findings: Finding[];
+  texts: Map<string, string>;
+  suppressed: number;
+  fixtureSuppressed: number;
+  /** Enumerated but never read: over the size cap, binary, or outside the root. */
+  oversized: number;
+  unreadable: number;
+  outside: number;
+}
+
+function scanFileList(root: string, files: string[], config: SecretLoopConfig): ScannedList {
+  let oversized = 0;
+  let unreadable = 0;
+  let outside = 0;
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
-  const scanned = scanFiles(root, files, config);
+  const scanned = scanFiles(root, files, config, {
+    onSkipped: (reason) => {
+      if (reason === "oversized") oversized++;
+      else if (reason === "outside") outside++;
+      else unreadable++;
+    },
+  });
   return {
     findings: scanned.flatMap((s) => s.findings),
     texts: new Map(scanned.map((s) => [s.path, s.text])),
     suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
     fixtureSuppressed: scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0),
+    oversized,
+    unreadable,
+    outside,
   };
 }
 
@@ -516,6 +535,21 @@ async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   if (args.command === "help") {
     process.stdout.write(HELP);
+    return;
+  }
+
+  // Before the mask dispatch, not after it.
+  //
+  // validateArgs reports args.errors first and is the only reader of them, so
+  // dispatching mask ahead of it threw every parse error away for the one
+  // command whose failure mode is an unmasked secret: `mask --entropoy` masked
+  // with the generic tier off and exited 0. Only the argv errors are checked
+  // here -- the combination rules below are about scan/history flags and have
+  // nothing to say about a transform.
+  const argError = args.errors?.[0];
+  if (argError) {
+    process.stderr.write(`secretloop: ${argError}\n`);
+    process.exitCode = 2;
     return;
   }
 
@@ -618,8 +652,14 @@ async function main(): Promise<void> {
     scope = describeScope(result.texts.size, scopeNoun, {
       generatedExcluded: listed.generatedExcluded,
       suppressed: result.suppressed,
-      outsideExcluded: listed.outsideExcluded,
+      // The read enforces containment too, and it can disagree with the walk
+      // if a link is retargeted between the two. Added to the walk's count
+      // rather than given a clause of its own: it is the same fact, and the
+      // sentence already names it.
+      outsideExcluded: listed.outsideExcluded + result.outside,
       fixtureSuppressed: result.fixtureSuppressed,
+      oversizedExcluded: result.oversized,
+      unreadableExcluded: result.unreadable,
     });
   }
 
@@ -701,8 +741,7 @@ async function main(): Promise<void> {
  */
 async function runMask(args: Args): Promise<number> {
   const { scanText, maskFindings } = await import("./scanner");
-  const { loadConfig, defaultConfig } = await import("./config");
-  const { findRepoRoot } = await import("./walk");
+  const { defaultConfig } = await import("./config");
 
   // The WHOLE input, before any scanning. A chunked scan cannot see a PEM block
   // that straddles two reads, and "it usually arrives in one chunk" is not a
@@ -711,15 +750,20 @@ async function runMask(args: Args): Promise<number> {
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   const buf = Buffer.concat(chunks);
 
-  let config;
-  try {
-    config = loadConfig(findRepoRoot(process.cwd()));
-  } catch {
-    // A malformed project config must not stop someone masking a log. Defaults
-    // mask more, never less, so failing open here is safe in the only direction
-    // that matters.
-    config = { ...defaultConfig };
-  }
+  // The defaults, and deliberately NOT the project config.
+  //
+  // This used to be loadConfig(findRepoRoot(process.cwd())), so whichever
+  // repository you happened to be standing in decided what got masked:
+  // `{"allowValues":[".*"]}` or an excludeRules list passed every credential
+  // through to stdout under "masked 0 finding(s)". The comment that stood here
+  // argued the fallback was safe because "defaults mask more, never less" --
+  // true of a MALFORMED config, and false of a valid one, which is the case
+  // that mattered.
+  //
+  // A stream piped through a scrubber is not that repository's findings. Rule
+  // selection here is a property of the transform, so it comes from one place
+  // that no file on disk can widen.
+  const config = { ...defaultConfig };
 
   if (buf.length > config.maxFileSizeBytes) {
     process.stderr.write(
@@ -743,6 +787,11 @@ async function runMask(args: Args): Promise<number> {
   const text = buf.toString("utf8");
   const findings = scanText(text, {
     config: { ...config, entropyPassEnabled: args.entropy, includeFixtures: true },
+    // A directive is a triage decision about a repository. This is a stream
+    // someone asked to be scrubbed, and honouring `# gitleaks:allow` on the
+    // line beside a credential put that credential on stdout unmasked and
+    // uncounted. See ScanOptions.honorInlineDirectives.
+    honorInlineDirectives: false,
   });
 
   const masked = maskFindings(text, findings);

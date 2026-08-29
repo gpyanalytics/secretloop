@@ -1,4 +1,4 @@
-import { readdirSync, statSync, readFileSync, realpathSync } from "fs";
+import { readdirSync, statSync, readFileSync, realpathSync, existsSync } from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
@@ -139,24 +139,69 @@ function walkDirectory(dir: string, root: string, acc: string[] = []): string[] 
   return acc;
 }
 
-/** Reads a file as text, returning null for binaries and oversized blobs. */
-export function readTextFile(root: string, relPath: string, config: SecretLoopConfig): string | null {
+/**
+ * Why a file that was in scope produced no text to scan.
+ *
+ * Three reasons rather than a boolean, because they do not share a remedy:
+ * `oversized` is answered by raising maxFileSizeBytes, `unreadable` by nothing
+ * the reader can do, and `outside` is the containment refusal that the walk
+ * already counts under its own clause. A single count would have to describe
+ * all three in one sentence and would name a fix for two of them that does not
+ * apply.
+ */
+export type SkipReason = "oversized" | "unreadable" | "outside";
+
+export type ReadResult = { text: string } | { skipped: SkipReason };
+
+/**
+ * Reads a file as text, or says why it could not.
+ *
+ * The reason is the whole point of this signature. `readTextFile` returned null
+ * for four different situations and the caller dropped the file without
+ * counting it, so a tree of 500 files where 480 were over the size cap reported
+ * "Scanned 20 file(s). No secrets found." -- a scan that could not look, printed
+ * in the words of one that found nothing. Every other skip this scanner
+ * performs is disclosed; this was the largest one and the only silent one.
+ */
+export function readTextFileResult(
+  root: string,
+  relPath: string,
+  config: SecretLoopConfig
+): ReadResult {
   // Enforced at the read as well as at the walk. A caller with its own file
   // list -- the staged set, or anything that never goes through listFiles --
   // would otherwise follow a link straight out of the root.
-  if (!isInsideRoot(root, relPath)) return null;
+  if (!isInsideRoot(root, relPath)) {
+    // isInsideRoot answers false for two different things: a path that resolves
+    // OUTSIDE the root, and one that does not resolve at all. Conflating them is
+    // right at the walk, where both mean "not a file this scan owns" -- and
+    // wrong here, because these land in different clauses. A file deleted
+    // between enumeration and read would otherwise be disclosed as a symlink
+    // escaping the scan root, which is the same class of overstatement as
+    // counting a node_modules skip against the generated-file group.
+    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "unreadable" };
+  }
   const full = path.join(root, relPath);
   try {
     const stat = statSync(full);
-    if (!stat.isFile()) return null;
-    if (stat.size > config.maxFileSizeBytes) return null;
+    if (!stat.isFile()) return { skipped: "unreadable" };
+    if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
     const buf = readFileSync(full);
     // A NUL byte in the first block is the standard heuristic for "binary".
-    if (buf.subarray(0, 8000).includes(0)) return null;
-    return buf.toString("utf8");
+    if (buf.subarray(0, 8000).includes(0)) return { skipped: "unreadable" };
+    return { text: buf.toString("utf8") };
   } catch {
-    return null;
+    return { skipped: "unreadable" };
   }
+}
+
+/**
+ * The same read, for callers that only need the text. Kept so the extension's
+ * own reader and the containment tests are unchanged by the reason above.
+ */
+export function readTextFile(root: string, relPath: string, config: SecretLoopConfig): string | null {
+  const result = readTextFileResult(root, relPath, config);
+  return "text" in result ? result.text : null;
 }
 
 /**

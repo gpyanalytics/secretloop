@@ -127,6 +127,22 @@ export interface ScanOptions {
    * dropped this way.
    */
   onFixtureSuppressed?: (count: number) => void;
+  /**
+   * Honour inline `secretloop:allow` / `gitleaks:allow` directives.
+   *
+   * Default true, which is every scanning caller: the working tree, the staged
+   * set and git history all read a repository, and a directive there is a
+   * triage decision a human made about that repository.
+   *
+   * `secretloop mask` and the editor's clipboard command pass false, because a
+   * stream someone piped through a scrubber is not that repository's findings.
+   * Honouring it there put a live credential on stdout under a summary reading
+   * "masked 0 finding(s)" -- a suppressed match never enters `findings`, so
+   * maskFindings had nothing to redact and nothing to count. The annotation
+   * exists precisely because the value beside it is real, which is what makes
+   * this the wrong default for a transform.
+   */
+  honorInlineDirectives?: boolean;
   /** Repo-relative path, used for fingerprints and reporting. */
   filePath?: string;
   /** Commit SHA when scanning history. */
@@ -146,7 +162,12 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
 
   const lowerText = text.toLowerCase();
   const lineStarts = computeLineStarts(text);
-  const ignoredLines = collectIgnoredLines(text);
+  // Collected, or deliberately empty. One site rather than a check at each of
+  // the two places `ignoredLines` is read: a guard that has to be repeated is a
+  // guard that can be half-applied, which is exactly how the fixture
+  // suppression first shipped covering one half of the generic tier.
+  const ignoredLines =
+    options.honorInlineDirectives === false ? NO_IGNORED_LINES : collectIgnoredLines(text);
   const suppressedSpans = new Set<number>();
 
   const findings: Finding[] = [];
@@ -548,6 +569,9 @@ function isPlaceholder(value: string): boolean {
  * being honoured silently re-reports a finding someone deliberately dismissed.
  */
 const IGNORE_DIRECTIVE = /(?:secretloop[:-](?:allow|ignore)|gitleaks:allow)/i;
+
+/** Shared empty set for `honorInlineDirectives: false`. Never written to. */
+const NO_IGNORED_LINES: ReadonlySet<number> = new Set<number>();
 
 function collectIgnoredLines(text: string): Set<number> {
   const ignored = new Set<number>();

@@ -135,19 +135,159 @@ test("help states the inversion rather than leaving it surprising", () => {
   assert.match(h, /--entropy/);
 });
 
-test("a project config's allowValues and excludeRules are honoured", () => {
+test("a project config cannot disable masking, whichever knob it reaches for", () => {
+  // This test used to assert the opposite, and the behaviour it pinned was the
+  // defect: config came from loadConfig(findRepoRoot(process.cwd())), so
+  // whichever repository you were standing in decided what got scrubbed.
+  // `{"allowValues":[".*"]}` in a cloned repo turned
+  // `kubectl logs prod | secretloop mask | pbcopy` into a passthrough that
+  // reported "masked 0 finding(s)".
+  //
+  // A stream piped through a scrubber is not that repository's findings. Rule
+  // selection is a property of the transform now, and no file on disk widens it.
+  const gh = positiveSamples["github-token"];
+  const input = `const t = "${gh}";\n`;
+  const hostile: Array<[string, unknown]> = [
+    ["allowValues matching everything", { allowValues: [".*"] }],
+    ["allowValues naming the value", { allowValues: [gh] }],
+    ["excludeRules disabling the rule", { excludeRules: ["github-token"] }],
+    ["entropyPassEnabled off", { entropyPassEnabled: false }],
+  ];
+  for (const [label, config] of hostile) {
+    const dir = mkdtempSync(path.join(tmpdir(), "secretloop-mask-"));
+    try {
+      writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify(config), "utf8");
+      const out = mask(input, [], dir);
+      assert.strictEqual(out.status, 0, `${label}: ${out.stderr}`);
+      assert.ok(
+        !out.stdout.includes(gh),
+        `${label} let the credential through to stdout:\n${out.stdout}`
+      );
+      assert.match(out.stdout, /\[REDACTED:github-token\]/, `${label} suppressed the mask`);
+      assert.match(out.stderr, /masked 1 finding\(s\)/, `${label} also suppressed the count`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("a malformed project config still does not stop a mask", () => {
+  // The fallback the old code needed is now the only path, so this cannot
+  // regress into reading the file again -- but a config that cannot be parsed
+  // must still not turn into a crash on someone's pipe.
+  const gh = positiveSamples["github-token"];
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-mask-"));
   try {
-    const gh = positiveSamples["github-token"];
-    writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify({ excludeRules: ["github-token"] }), "utf8");
+    writeFileSync(path.join(dir, ".secretloop.json"), "{ not json", "utf8");
     const out = mask(`const t = "${gh}";\n`, [], dir);
-    assert.strictEqual(out.stdout, `const t = "${gh}";\n`, "excludeRules was ignored");
-    writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify({ allowValues: [gh] }), "utf8");
-    const out2 = mask(`const t = "${gh}";\n`, [], dir);
-    assert.strictEqual(out2.stdout, `const t = "${gh}";\n`, "allowValues was ignored");
+    assert.strictEqual(out.status, 0, out.stderr);
+    assert.match(out.stdout, /\[REDACTED:github-token\]/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// ---------------------------------------------------------------------------
+suite("mask — an inline directive does not silence the scrubber");
+
+test("a trailing gitleaks:allow does not put the credential on stdout", () => {
+  // scanText honours secretloop:allow / gitleaks:allow on the matching line and
+  // the line below. A suppressed match never enters `findings`, so maskFindings
+  // had nothing to redact and the summary said "masked 0 finding(s)" -- the
+  // credential on stdout, described as an absence of them.
+  //
+  // The annotation exists BECAUSE the value beside it is real and someone
+  // accepted it, which is what makes honouring it here the wrong reading. It is
+  // a triage decision about a repository, and this is a stream.
+  const gh = positiveSamples["github-token"];
+  const out = mask(`token = "${gh}" # gitleaks:allow\n`);
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.ok(!out.stdout.includes(gh), `the credential reached stdout:\n${out.stdout}`);
+  assert.match(out.stdout, /\[REDACTED:github-token\]/);
+  assert.match(out.stderr, /masked 1 finding\(s\)/, "the mask happened but was not counted");
+  // The directive itself is content and is left alone; only its effect is gone.
+  assert.match(out.stdout, /# gitleaks:allow/);
+});
+
+test("the above-the-line form does not either", () => {
+  const gh = positiveSamples["github-token"];
+  const out = mask(`# secretloop:allow\ntoken = "${gh}"\n`);
+  assert.strictEqual(out.status, 0, out.stderr);
+  assert.ok(!out.stdout.includes(gh), `the credential reached stdout:\n${out.stdout}`);
+  assert.match(out.stdout, /\[REDACTED:github-token\]/);
+  assert.match(out.stderr, /masked 1 finding\(s\)/);
+});
+
+test("every directive spelling is neutralised, on both lines, for both tiers", () => {
+  const gh = positiveSamples["github-token"];
+  const blob = "Zr7Kq2Vh9Lm4Xt6Bn8WdQp1Sx3Tj5YcAb9Cd";
+  for (const directive of ["secretloop:allow", "secretloop-ignore", "gitleaks:allow"]) {
+    for (const [label, input] of [
+      ["same line", `token = "${gh}" // ${directive}\n`],
+      ["line above", `// ${directive}\ntoken = "${gh}"\n`],
+    ] as const) {
+      const out = mask(input);
+      assert.ok(
+        !out.stdout.includes(gh),
+        `${directive} (${label}) leaked the credential:\n${out.stdout}`
+      );
+    }
+    // The entropy tier reads the same set of ignored lines, so it has to be
+    // covered too -- the guard is one site precisely so these cannot diverge.
+    const entropyOut = mask(`blob = "${blob}" // ${directive}\n`, ["--entropy"]);
+    assert.ok(
+      !entropyOut.stdout.includes(blob),
+      `${directive} leaked an entropy-tier value:\n${entropyOut.stdout}`
+    );
+  }
+});
+
+test("scanning still honours directives — only mask opts out", () => {
+  // The guard is scoped to the transform. A repository scan that stopped
+  // honouring annotations would re-report every finding a team dismissed.
+  const gh = positiveSamples["github-token"];
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-mask-"));
+  try {
+    writeFileSync(path.join(dir, "app.js"), `const t = "${gh}"; // gitleaks:allow\n`, "utf8");
+    const res = spawnSync("node", [CLI, "scan", "--format", "json", "--path", dir], {
+      encoding: "utf8",
+    });
+    const d = JSON.parse(res.stdout);
+    assert.strictEqual(d.summary.total, 0, "scan stopped honouring inline directives");
+    assert.match(d.summary.scope, /1 finding\(s\) suppressed by inline directives/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+suite("mask — a malformed invocation is reported, not ignored");
+
+test("an unknown option exits 2 and masks nothing", () => {
+  // main() dispatched mask before validateArgs, and validateArgs is the only
+  // reader of args.errors -- so every parse error was discarded for the one
+  // command whose failure mode is an unmasked secret. `mask --entropoy` masked
+  // with the generic tier off and exited 0.
+  const gh = positiveSamples["github-token"];
+  const out = mask(`token = "${gh}"\n`, ["--entropoy", "--no-such-flag"]);
+  assert.strictEqual(out.status, 2, `expected exit 2, got ${out.status}`);
+  assert.strictEqual(out.stdoutBytes, 0, "a refused invocation still wrote to stdout");
+  assert.match(out.stderr, /unknown option --entropoy/);
+});
+
+test("a flag given no value is reported too", () => {
+  const out = mask("x\n", ["--format"]);
+  assert.strictEqual(out.status, 2);
+  assert.strictEqual(out.stdoutBytes, 0);
+  assert.match(out.stderr, /--format requires a value/);
+});
+
+test("the flags mask really takes still work", () => {
+  const blob = 'const x = "Zr7Kq2Vh9Lm4Xt6Bn8WdQp1Sx3Tj5YcAb9Cd";\n';
+  const on = mask(blob, ["--entropy"]);
+  assert.strictEqual(on.status, 0, on.stderr);
+  assert.match(on.stdout, /\[REDACTED:generic-high-entropy\]/);
+  assert.strictEqual(mask("x\n", ["--help"]).status, 0, "--help must still be answerable");
 });
 
 // ---------------------------------------------------------------------------
