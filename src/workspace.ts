@@ -81,6 +81,12 @@ export interface WorkspaceScan {
   scanned: ScannedFile[];
   /** Files the generated-file group kept out, for the scope disclosure. */
   generatedExcluded: number;
+  /**
+   * Files whose realpath resolved outside the scan root. Surfaced here because
+   * the editor discloses the same sentence the CLI does, and a count the walker
+   * produced but nothing carried is a skip nobody is told about.
+   */
+  outsideExcluded: number;
 }
 
 /**
@@ -98,6 +104,7 @@ export function scanWorkspaceScan(
   return {
     scanned: scanFiles(root, listed.files, config, options),
     generatedExcluded: listed.generatedExcluded,
+    outsideExcluded: listed.outsideExcluded,
   };
 }
 
