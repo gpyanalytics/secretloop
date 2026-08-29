@@ -5,8 +5,8 @@ def build(ROOT):
     """Adds the history-only half of corpus A and writes labels.json."""
     def git(*a): subprocess.run(["git", *a], cwd=ROOT, check=True, capture_output=True)
 
-    plan = json.load(open(os.path.join(ROOT, "_history_plan.json")))
-    tree_labels = json.load(open(os.path.join(ROOT, "_labels_tree.json")))["tree"]
+    plan = json.load(open(gen_corpus.scratch_path(ROOT, "_history_plan.json")))
+    tree_labels = json.load(open(gen_corpus.scratch_path(ROOT, "_labels_tree.json")))["tree"]
 
     git("init", "-q", ".")
     git("config", "user.email", "bench@example.invalid")
@@ -54,10 +54,11 @@ def build(ROOT):
       },
     }
     json.dump(labels, open(os.path.join(ROOT, "..", "labels.json"), "w"), indent=1)
-    os.remove(os.path.join(ROOT, "_history_plan.json"))
-    os.remove(os.path.join(ROOT, "_labels_tree.json"))
-    subprocess.run(["git", "add", "-A"], cwd=ROOT, capture_output=True)
-    subprocess.run(["git", "commit", "-qm", "drop generator scratch"], cwd=ROOT, capture_output=True)
+    # No git commands here any more. These live outside ROOT, so they were
+    # never added, never committed, and there is nothing to remove from the
+    # object store -- which was the whole reason the deletion commit existed.
+    os.remove(gen_corpus.scratch_path(ROOT, "_history_plan.json"))
+    os.remove(gen_corpus.scratch_path(ROOT, "_labels_tree.json"))
     return labels
 
 

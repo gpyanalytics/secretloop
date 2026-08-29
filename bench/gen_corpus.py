@@ -93,6 +93,24 @@ def is_fixture_dir(d):
 SEED = 20260829
 
 
+def scratch_path(ROOT, name):
+    """Where the generator keeps its own bookkeeping: beside the corpus, never in it.
+
+    _history_plan.json holds the ten history-only credentials in plaintext, and
+    it used to be written inside ROOT. gen_history's first commit is `git add
+    -A`, so the file went into the object store before the later `git rm` took
+    it out of the working tree -- leaving a clean tree and ten real credentials
+    in git history, which the history scan then found. They were counted as
+    false positives because the labels do not list them, and they capped corpus
+    A's history precision at 0.857 by construction.
+
+    A generator artifact is not a property of the code under test. Writing it
+    beside the corpus rather than inside it means no git command can reach it
+    and the measurement is of the scanner.
+    """
+    return os.path.join(os.path.dirname(os.path.abspath(ROOT)), name)
+
+
 def build(ROOT, seed=SEED):
     """Generates the tree half of corpus A. Returns the label rows.
 
@@ -184,12 +202,12 @@ def build(ROOT, seed=SEED):
         if l["label"] == "decoy" and is_fixture_dir(os.path.dirname(l["path"])):
             l["expected"] = "suppressed"
 
-    json.dump({"tree": labels, "history": []}, open(os.path.join(ROOT, "_labels_tree.json"), "w"), indent=1)
+    json.dump({"tree": labels, "history": []}, open(scratch_path(ROOT, "_labels_tree.json"), "w"), indent=1)
     # The history-only plants. Drawn from the same seeded stream and written
     # before returning, because gen_history reads this file -- generating them
     # lazily later would draw different values and silently change the corpus.
     json.dump([{"kind": k, "value": SECRETS[k]()} for k in history_only],
-              open(os.path.join(ROOT, "_history_plan.json"), "w"), indent=1)
+              open(scratch_path(ROOT, "_history_plan.json"), "w"), indent=1)
     return labels
 
 

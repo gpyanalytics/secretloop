@@ -1,19 +1,19 @@
 # Baseline
 
-## Current baseline — corpus repaired 29 August 2026
+## Current baseline — generator scratch moved out of the corpus, 29 August 2026
 
 Recorded by running `python3 bench/run.py --corpus-b <bugsnag-js>` against the
-build at the corpus-repair commit. Corpus A regenerated from seed 20260829; the
-regenerated labels match `bench/labels.json`.
+build at this commit. Corpus A regenerated from seed 20260829; the regenerated
+labels match `bench/labels.json`.
 
 ### Corpus A — 50 tree secrets, 120 decoys, 10 history-only
 
 | tier / scan | found | TP | FP decoy | FP other | detected | precision | recall | F1 |
 |---|---|---|---|---|---|---|---|---|
 | entropy-on tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
-| entropy-on history | 69 | 60 | 0 | 9 | 60/60 | 0.870 | 1.000 | 0.930 |
+| entropy-on history | 60 | 60 | 0 | 0 | 60/60 | 1.000 | 1.000 | 1.000 |
 | named-only tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
-| named-only history | 68 | 60 | 0 | 8 | 60/60 | 0.882 | 1.000 | 0.938 |
+| named-only history | 60 | 60 | 0 | 0 | 60/60 | 1.000 | 1.000 | 1.000 |
 
 ### Corpus B — bugsnag-js @ 5da3ae169c9ff716fa70d1388bb8e2157ca46ea6
 
@@ -22,9 +22,51 @@ positive.
 
 | | count |
 |---|---|
-| tree FPs | 151 (0.815 per KLOC) |
-| history FPs | 300 |
-| tree by rule | `generic-high-entropy` 87, `generic-api-key-assignment` 64 |
+| tree FPs | 4 (0.022 per KLOC) |
+| history FPs | 28 |
+| tree by rule | `generic-high-entropy` 4 |
+
+## What moved the history arms to 1.000
+
+`_history_plan.json` — the generator's own record of the ten history-only
+plants, with their values in plaintext — was written inside the corpus root.
+`gen_history`'s first commit is `git add -A`, so the file entered the object
+store before the later `git rm` removed it from the working tree. That left a
+clean tree and ten real credentials in git history, which the history scan
+found and the scorer counted as false positives because the labels do not list
+them.
+
+It was a measurement artifact rather than a scanner defect, and it was capping
+history precision by construction: exactly ten findings entropy-on, eight
+named-only. Both files now live beside the corpus rather than inside it, where
+no git command reaches them, and the deletion commit that existed only to undo
+the mistake is gone with it.
+
+| arm | precision before | after |
+|---|---|---|
+| entropy-on history | 0.857 | **1.000** |
+| named-only history | 0.882 | **1.000** |
+
+Recall was 1.000 on both arms before and after — nothing about detection
+changed, only what the corpus was asking the scanner to explain. Corpus B is
+untouched at 4 tree findings, as expected: it has no generator and no plan file.
+
+## Superseded — corpus repaired 29 August 2026
+
+The table below was current between the corpus repair and the change above.
+Its tree rows still hold; its history rows carry the plan-file artifact, and
+its corpus B rows predate the fixture-path suppression and the narrowed
+relative-path filter, which together took tree false positives from 151 to 4.
+
+| tier / scan | found | TP | FP decoy | FP other | detected | precision | recall | F1 |
+|---|---|---|---|---|---|---|---|---|
+| entropy-on tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
+| entropy-on history | 69 | 60 | 0 | 9 | 60/60 | 0.870 | 1.000 | 0.930 |
+| named-only tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
+| named-only history | 68 | 60 | 0 | 8 | 60/60 | 0.882 | 1.000 | 0.938 |
+
+Corpus B at that point: 151 tree FPs (0.815 per KLOC), 300 history FPs,
+`generic-high-entropy` 87 and `generic-api-key-assignment` 64.
 
 ## What the repair changed, and why the earlier numbers are not comparable
 
