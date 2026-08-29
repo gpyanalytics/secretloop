@@ -172,31 +172,17 @@ export function activate(context: vscode.ExtensionContext) {
      */
     vscode.commands.registerCommand("secretloop.maskClipboard", async () => {
       const text = await vscode.env.clipboard.readText();
-      const config = configForFolder(
-        requireWorkspaceRoot() ?? process.cwd(),
-        setting<number>("entropyThreshold", 4.3)
-      );
-      if (Buffer.byteLength(text, "utf8") > config.maxFileSizeBytes) {
-        vscode.window.showErrorMessage(
-          `SecretLoop: clipboard is too large to mask (limit ${config.maxFileSizeBytes} bytes). ` +
-            `Nothing was changed.`
-        );
+      const outcome = maskClipboardText(text);
+      if (outcome.kind === "too-large") {
+        vscode.window.showErrorMessage(`SecretLoop: ${outcome.message}`);
         return;
       }
-      // Same defaults as `secretloop mask`: named rules only. Masking every
-      // digest and UUID on the clipboard destroys what was being copied while
-      // protecting nothing.
-      const findings = scanText(text, {
-        config: { ...config, entropyPassEnabled: false, includeFixtures: true },
-      });
-      if (findings.length === 0) {
-        vscode.window.showInformationMessage("SecretLoop: no secrets found in the clipboard.");
+      if (outcome.kind === "nothing-found") {
+        vscode.window.showInformationMessage(`SecretLoop: ${outcome.message}`);
         return;
       }
-      await vscode.env.clipboard.writeText(maskFindings(text, findings));
-      vscode.window.showInformationMessage(
-        `SecretLoop: masked ${findings.length} secret(s) in the clipboard.`
-      );
+      await vscode.env.clipboard.writeText(outcome.masked);
+      vscode.window.showInformationMessage(`SecretLoop: ${outcome.message}`);
     }),
 
     vscode.commands.registerCommand("secretloop.resetPromptPreferences", async () => {
@@ -700,6 +686,56 @@ function workspaceConfig(document: vscode.TextDocument, threshold: number): Secr
 }
 
 /** The same resolution, for the commands that work on a folder rather than a document. */
+/**
+ * What masking the clipboard would do, decided without touching the clipboard.
+ *
+ * Split out from the command handler so the property can be tested at all: the
+ * handler's only remaining job is read, act, tell. Two defects lived in here
+ * and neither was reachable by a test while this was an inline closure.
+ */
+export type ClipboardMaskOutcome =
+  | { kind: "too-large"; message: string }
+  | { kind: "nothing-found"; message: string }
+  | { kind: "masked"; masked: string; count: number; message: string };
+
+export function maskClipboardText(text: string): ClipboardMaskOutcome {
+  // The defaults, not the workspace's config. What gets masked is a property of
+  // the transform, and a `.secretloop.json` carrying excludeRules or
+  // `allowValues: [".*"]` used to pass every credential on the clipboard
+  // through untouched under a toast reading "no secrets found". The CLI's
+  // `mask` made the same mistake; both now build their rule set from one place
+  // no file on disk can widen.
+  const config = { ...defaultConfig };
+  if (Buffer.byteLength(text, "utf8") > config.maxFileSizeBytes) {
+    return {
+      kind: "too-large",
+      message:
+        `clipboard is too large to mask (limit ${config.maxFileSizeBytes} bytes). ` +
+        `Nothing was changed.`,
+    };
+  }
+  // Same defaults as `secretloop mask`: named rules only. Masking every digest
+  // and UUID on the clipboard destroys what was being copied while protecting
+  // nothing.
+  const findings = scanText(text, {
+    config: { ...config, entropyPassEnabled: false, includeFixtures: true },
+    // A `# gitleaks:allow` beside a credential on the clipboard used to leave
+    // it there and then say "no secrets found" -- an affirmative claim, made
+    // about the exact case where the annotation exists BECAUSE the value
+    // beside it is real. See ScanOptions.honorInlineDirectives.
+    honorInlineDirectives: false,
+  });
+  if (findings.length === 0) {
+    return { kind: "nothing-found", message: "no secrets found in the clipboard." };
+  }
+  return {
+    kind: "masked",
+    masked: maskFindings(text, findings),
+    count: findings.length,
+    message: `masked ${findings.length} secret(s) in the clipboard.`,
+  };
+}
+
 function configForFolder(folderPath: string, threshold: number): SecretLoopConfig {
   try {
     const loaded = loadConfig(folderPath);

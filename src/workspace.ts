@@ -1,6 +1,6 @@
 import { Finding, scanText } from "./scanner";
 import { SecretLoopConfig } from "./config";
-import { listFilesWithExclusions, readTextFile } from "./walk";
+import { listFilesWithExclusions, readTextFileResult, SkipReason } from "./walk";
 import { VerificationCache, VerifyContext, verifyFindings } from "./verify";
 
 /**
@@ -40,6 +40,16 @@ export interface ScanFilesOptions {
    * falls back to disk.
    */
   textFor?: (relPath: string) => string | undefined;
+  /**
+   * Called once per file that was in scope but produced no text.
+   *
+   * The counterpart to onSuppressed and onFixtureSuppressed, and the last of
+   * the skips that was not disclosed. Only this layer sees a file disappear
+   * between the enumeration and the scan, so a caller handed the ScannedFile
+   * list cannot reconstruct how many were dropped -- and a scan that read 20 of
+   * 500 files reads exactly like one that had 20 files.
+   */
+  onSkipped?: (reason: SkipReason) => void;
 }
 
 /** Scans a caller-supplied list — the staged set, say — through the same guards. */
@@ -52,9 +62,17 @@ export function scanFiles(
   const scanned: ScannedFile[] = [];
   for (const relPath of files) {
     // An open buffer wins over disk, and is scanned whatever its size: it is
-    // what the user is actually looking at.
-    const text = options.textFor?.(relPath) ?? readTextFile(root, relPath, config);
-    if (text === null || text === undefined) continue;
+    // what the user is actually looking at -- and it is never a skip, because
+    // it is already text.
+    let text = options.textFor?.(relPath);
+    if (text === undefined) {
+      const read = readTextFileResult(root, relPath, config);
+      if (!("text" in read)) {
+        options.onSkipped?.(read.skipped);
+        continue;
+      }
+      text = read.text;
+    }
     let suppressed = 0;
     let fixtureSuppressed = 0;
     const findings = scanText(text, {

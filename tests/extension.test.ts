@@ -10,6 +10,7 @@ import {
   offersRotation,
   rotateActionTitle,
   workspaceScanSummary,
+  maskClipboardText,
   stagedScanNotice,
   PromptState,
 } from "../src/extension";
@@ -18,6 +19,7 @@ import { UNKNOWN_REASONS } from "../src/report";
 import { MigrationOutcome } from "../src/rotate";
 import { DiagnosticSeverity } from "./stubs/vscode";
 import { test, suite, finish, assert } from "./harness";
+import { positiveSamples } from "./fixtures";
 
 function finding(ruleId: string): Finding {
   return {
@@ -406,5 +408,70 @@ test("the staged warning does not file a checked credential under unverified", (
   assert.match(message, /\bdead\b|no longer active/i, message);
 });
 
+
+// ---------------------------------------------------------------------------
+suite("\nextension.ts — masking the clipboard");
+
+/**
+ * The command handler is read-act-tell; every decision is here. Both defects
+ * this covers lived inside an inline closure where no test could reach them.
+ */
+
+test("an inline directive does not leave the credential on the clipboard", () => {
+  const gh = positiveSamples["github-token"];
+  for (const input of [
+    `token = "${gh}" # gitleaks:allow`,
+    `# secretloop:allow\ntoken = "${gh}"`,
+    `token = "${gh}" // secretloop-ignore`,
+  ]) {
+    const outcome = maskClipboardText(input);
+    assert.strictEqual(
+      outcome.kind,
+      "masked",
+      `reported "${outcome.message}" and left the credential on the clipboard`
+    );
+    if (outcome.kind !== "masked") continue;
+    assert.ok(!outcome.masked.includes(gh), `the credential survived:\n${outcome.masked}`);
+    assert.strictEqual(outcome.count, 1);
+    assert.match(outcome.message, /masked 1 secret\(s\)/);
+  }
+});
+
+test('a suppressed credential is never reported as "no secrets found"', () => {
+  // The CLI said "masked 0 finding(s)", which is at least ambiguous. The editor
+  // said "no secrets found in the clipboard" -- an affirmative claim, made in
+  // the one case where the annotation is there BECAUSE the value is real.
+  const outcome = maskClipboardText(`token = "${positiveSamples["github-token"]}" # gitleaks:allow`);
+  assert.notStrictEqual(outcome.kind, "nothing-found");
+  assert.doesNotMatch(outcome.message, /no secrets found/);
+});
+
+test("clipboard masking uses the defaults, so no workspace config can widen it", () => {
+  // Structural: the handler takes no config argument and the function builds
+  // its own from defaultConfig, so there is no path for a `.secretloop.json`
+  // carrying excludeRules or `allowValues: [".*"]` to reach it. Previously it
+  // called configForFolder(requireWorkspaceRoot() ?? process.cwd(), ...).
+  assert.strictEqual(maskClipboardText.length, 1, "maskClipboardText grew a config parameter");
+  const { readFileSync } = require("fs") as typeof import("fs");
+  const src = readFileSync(require("path").join(__dirname, "..", "src", "extension.ts"), "utf8");
+  const body = src.slice(src.indexOf("export function maskClipboardText"));
+  const end = body.indexOf("\nfunction configForFolder");
+  assert.ok(end > 0, "maskClipboardText moved; this check needs re-anchoring");
+  assert.doesNotMatch(
+    body.slice(0, end),
+    /configForFolder|loadConfig/,
+    "clipboard masking reads a project config again"
+  );
+});
+
+test("an ordinary credential still masks, and clean text still reports nothing", () => {
+  // The other direction, so "always mask" cannot pass by masking everything.
+  const gh = positiveSamples["github-token"];
+  const masked = maskClipboardText(`const t = "${gh}";`);
+  assert.strictEqual(masked.kind, "masked");
+  const clean = maskClipboardText("const a = 1;\nconst b = 2;");
+  assert.strictEqual(clean.kind, "nothing-found");
+  assert.match(clean.message, /no secrets found/);
+});
 
 finish();

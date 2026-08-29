@@ -1,13 +1,30 @@
-# What ships in the VSIX: package.json, README.md, LICENSE, out/**, and the
-# production dependency tree in node_modules.
+# What ships in the VSIX: package.json, README.md, LICENSE, SECURITY.md,
+# docs/icon.png and out/**. The authority on that list is
+# scripts/vsix-manifest.txt, which scripts/smoke-vsix.sh diffs against the built
+# archive -- read that, not this file, for what actually ships.
 #
-# node_modules is not excluded because it does not need to be: esbuild inlines
-# both AWS SDKs into the bundles, vsce packages zero node_modules entries, and
-# they are devDependencies. An earlier note here claimed they had to ship for a
-# runtime dynamic import(); that was wrong.
+# node_modules is not listed here, and this file used to claim that was fine
+# because "vsce packages zero node_modules entries, and they are
+# devDependencies". The second half is true and the first half is not a
+# guarantee it buys. MEASURED, 29 August 2026: with 58 packages present in
+# node_modules that are in neither package.json nor package-lock.json -- left
+# behind by an `npm install` on another branch -- `npx vsce ls` lists 3,690
+# node_modules paths and `vsce package` puts every one of them in the archive.
+#
+# So what keeps node_modules out is not this file and not a property of vsce.
+# It is node_modules containing nothing but the devDependencies vsce skips,
+# which is what `npm ci` produces and what an `npm install` on a branch with
+# extra dependencies does not. The check that catches the difference is
+# scripts/smoke-vsix.sh, because it reads the archive; `vsce ls` sees it too.
+# Neither runs automatically. See docs/ROADMAP.md, 0.1.2.
 #
 # out/ is also required in full: hooks.ts resolves out/cli.js from
-# context.extensionPath to install the pre-commit hook.
+# context.extensionPath to install the pre-commit hook. Note that out/ is a
+# denylist entry's blind spot: any artifact another branch leaves there -- an
+# out/mcp.js, say -- is admitted by default. `vscode:prepublish` runs
+# `npm run clean` before `npm run bundle`, so a real package or publish starts
+# from an empty out/ and cannot ship one; `vsce ls` does NOT run prepublish and
+# will list whatever is on disk. The manifest diff is what catches the rest.
 
 # Development sources — only the compiled output in out/ is executed.
 src/**

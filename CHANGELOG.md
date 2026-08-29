@@ -112,11 +112,61 @@ No rule ID, keyword, entropy threshold or allowlist outside these five changed.
 - **Inline suppressions are counted and disclosed.** A scan that dropped
   findings to `secretloop:allow` or `gitleaks:allow` now says so:
   `; 3 finding(s) suppressed by inline directives`. The directives themselves
-  behave exactly as before.
+  behave exactly as before in a scan. `secretloop mask` no longer honours them
+  at all -- see *A directive cannot silence the scrubber* below.
+  **Scoped to the CLI.** The editor's workspace-scan summary carries the
+  generated-file and symlink counts but not this one or the fixture-suppression
+  count, so a workspace scan in VS Code still under-discloses relative to
+  `secretloop scan` on the same repository. Tracked for 0.1.2; the CLI is where
+  CI reads, which is why it went first.
 - **Staged scans fail loudly when git cannot answer.** `secretloop staged`
   treated a failed `git diff --cached` as an empty index, so a locked index
   during a pre-commit hook exited 0 on a scan that never ran. It now exits 2 and
   says why.
+
+### Masking, and what a scan admits it did not read
+
+Four fixes from an external review of this release. The first three are why
+0.1.1 had not been published; the fourth is what let one of them stay invisible.
+
+- **A directive cannot silence the scrubber.** `secretloop mask` and the
+  editor's *Mask Secrets in Clipboard* scanned through the same path a repository
+  scan uses, so an inline `# gitleaks:allow` beside a credential suppressed the
+  match -- and a suppressed match never enters the finding list, so there was
+  nothing to redact and nothing to count. The credential went to stdout under a
+  summary reading `masked 0 finding(s)`; the editor left it on the clipboard and
+  said *no secrets found in the clipboard*. The annotation is there precisely
+  because the value beside it is real, which is what makes honouring it in a
+  transform the wrong reading: it is a triage decision about a repository, and a
+  stream someone piped through a scrubber is not that repository's findings.
+  Scanning is unchanged and still honours every directive it always did.
+
+- **A project config cannot disable masking.** Both mask paths built their
+  configuration from the repository you happened to be standing in, so a
+  `.secretloop.json` carrying `"allowValues": [".*"]` or an `excludeRules` list
+  turned `kubectl logs prod | secretloop mask | pbcopy` into a passthrough,
+  again reporting zero. Rule selection for masking now comes from the shipped
+  defaults and nothing on disk widens it. A malformed config still cannot stop a
+  mask, which was the only property the old fallback was defending.
+
+- **A scan says how many files it could not read.** Files skipped for exceeding
+  `maxFileSizeBytes`, for looking binary, or for being unreadable at the read
+  were dropped without being counted, and the scanned count is the number of
+  files that survived -- so a tree of 500 files where 480 sat over the size cap
+  reported `Scanned 20 file(s). No secrets found.` Every other skip this scanner
+  performs already named itself; this was the last silent one and, on a real
+  repository, the largest. Two new clauses, in text, JSON and SARIF alike:
+  `; 12 file(s) not scanned — larger than maxFileSizeBytes (raise it in
+  .secretloop.json to cover them)` and `; 3 file(s) not scanned — binary or
+  unreadable`. Kept apart because only one of them names a fix. A file supplied
+  from an unsaved editor buffer is scanned, not counted as a skip.
+
+- **`mask` reports a malformed invocation.** `main()` dispatched the mask
+  command before the argument check, and that check is the only reader of what
+  the parser collected -- so every parse error was discarded for the one command
+  whose failure mode is an unmasked secret. `secretloop mask --entropoy` masked
+  with the generic tier off and exited 0. Argument errors are now reported
+  before any command runs, and mask exits 2 having written nothing.
 
 ### Corrections
 - **A non-zero exit says what it means.** `--fail-on` prints to stderr when it
