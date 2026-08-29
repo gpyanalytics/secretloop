@@ -29,18 +29,43 @@ working tree 239 → 150 findings (30 grouped entries).
 
 ### Detection
 
-Four fixes, each attributed to a specific benchmark result and each requiring
-before/after corpus evidence before it lands. Written up by the session that
-measures them — this entry is a placeholder so the scope is fixed in advance and
-cannot quietly grow:
+Four fixes, each found by benchmarking against gitleaks 8.30.1 and TruffleHog
+3.97.1 on a labelled corpus of 60 planted credentials and 120 decoys. The
+benchmark ships as `bench/` — `npm run bench` reproduces every number below.
 
-- password-punctuation capture class
-- `:=` separator audit
-- jwt.io documentation-sample filter
-- hashed-asset dot fix
+- **Passwords containing punctuation are now detected.** The generic
+  assignment rule's capture class allowed only `A-Za-z0-9_-/+=.`, so
+  `password = "p4ss!w@rd#value"` was invisible to the one rule whose keyword
+  list names passwords twice. Measured in isolation: 10 of 10 detected when the
+  passwords were alphanumeric, 2 of 10 once punctuation was added.
+- **`key := "value"` is now detected.** The separator pattern consumed a single
+  character, so Go's short variable declaration left the `=` unmatched and the
+  rule did not fire — measured at 0 of 10 against 10 of 10 for the `=` form. All
+  103 rules were audited rather than the two the benchmark happened to plant;
+  22 shared the defect and all 22 are fixed. The entropy pass had been covering
+  it, so this only ever affected people who turned the entropy pass off, which
+  is what the example config recommends for a noisy codebase.
+- **The jwt.io demo token is recognised as a documentation sample.** The token
+  every JWT tutorial pastes was reported as a credential. It is matched on its
+  payload — the `John Doe` demo claims — so changing the algorithm in the header
+  does not defeat it.
+- **Hashed bundle filenames no longer look like secrets.** `main.<hash>.chunk.js`
+  slipped past the filter written to catch exactly that shape, because the
+  filter's stem could not contain a dot.
 
-<!-- The measuring session replaces this list with the fixes as landed, each
-     with its before/after numbers. Nothing else in 0.1.1 touches detection. -->
+Measured on the benchmark corpus, working tree, before → after:
+
+| tier | precision | recall |
+|---|---|---|
+| default (entropy on) | 0.768 → 1.000 | 0.860 → 1.000 |
+| named rules only | 0.808 → 1.000 | 0.840 → 1.000 |
+
+Every planted credential is now found, and no decoy is reported. On 185 KLOC of
+real code with no known secrets, the false-positive count moved from 150 to 151:
+one new finding, a code expression in a test fixture, from the widened password
+class.
+
+No rule ID, keyword, entropy threshold or allowlist outside these four changed.
 
 ### Honesty about what was and was not looked at
 - **Redaction hardened for short secrets.** Masking revealed the first and last
