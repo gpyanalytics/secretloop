@@ -2,9 +2,11 @@
 
 ## 0.1.1 — unreleased
 
-Precision and honesty. No detection rule changed.
+Precision and honesty, plus four narrowly-scoped detection fixes found by
+benchmarking against gitleaks and TruffleHog. Every other rule, rule ID and
+threshold is unchanged.
 
-### Fewer findings, same detection
+### Fewer findings
 - **Generated files are skipped by default** — lockfiles (`*.lock`, including
   CocoaPods `Podfile.lock`), Gradle and Maven wrappers, Xcode project files and
   SARIF reports. Scan them anyway with `--include-generated`, which bypasses
@@ -24,6 +26,21 @@ Precision and honesty. No detection rule changed.
 
 On bugsnag-js at `5da3ae1`: history 855 → 299 findings (82 grouped entries);
 working tree 239 → 150 findings (30 grouped entries).
+
+### Detection
+
+Four fixes, each attributed to a specific benchmark result and each requiring
+before/after corpus evidence before it lands. Written up by the session that
+measures them — this entry is a placeholder so the scope is fixed in advance and
+cannot quietly grow:
+
+- password-punctuation capture class
+- `:=` separator audit
+- jwt.io documentation-sample filter
+- hashed-asset dot fix
+
+<!-- The measuring session replaces this list with the fixes as landed, each
+     with its before/after numbers. Nothing else in 0.1.1 touches detection. -->
 
 ### Honesty about what was and was not looked at
 - **Redaction hardened for short secrets.** Masking revealed the first and last

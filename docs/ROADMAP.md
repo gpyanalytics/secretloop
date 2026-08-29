@@ -268,6 +268,31 @@ observed.
 
 ---
 
+## Detection freeze lifted for 0.1.1 — 29 August 2026
+
+0.1.1 was written under a detection freeze: excludes and reporting could change,
+rule matching could not. That freeze is **deliberately lifted before publish**,
+because a benchmark against gitleaks 8.30.1 and TruffleHog 3.97.1 on a seeded
+corpus produced four attributable detection defects, and 0.1.1 is still
+unpublished — npm serves 0.1.0 and no `v0.1.1` tag exists, so its detection
+behavior is still amendable. Once published it would not be, and the fixes would
+have to become 0.1.2.
+
+The lift is **scope-limited to exactly four fixes**: the password-punctuation
+capture class, the `:=` separator audit, the jwt.io documentation-sample filter,
+and the hashed-asset dot fix. Every other rule, rule ID, keyword, entropy
+threshold and allowlist stays frozen — rule IDs in particular, because they are
+baseline identity and changing one invalidates every `excludeRules` entry and
+every accepted finding in every user config. Each fix requires before/after
+evidence on the benchmark corpus, and a fix that cannot show it does not land.
+
+This is not a reopening of detector coverage. `Detector parity with TruffleHog`
+below remains out of scope: these four are corrections to rules that already
+exist and already claim to match what they miss, not new detectors chasing a
+count.
+
+---
+
 ## Permanently out of scope
 
 | idea | why not |
