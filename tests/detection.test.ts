@@ -136,4 +136,65 @@ test("the two separator rules with fixed syntax are deliberately not varied", ()
   }
 });
 
+// ---------------------------------------------------------------------------
+suite("detection — Fix 3: the jwt.io documentation sample");
+
+/**
+ * Benchmark: 10 of secretloop's 13 corpus-A false positives were one string --
+ * the jwt.io demo token, planted 10 times as a decoy. gitleaks reports it too.
+ *
+ * Anchored on the PAYLOAD, not the signature and not the whole string. The
+ * signature is derived from header + payload + secret, so swapping HS256 for
+ * HS512 changes it and a signature match stops working; the payload is the
+ * `{"sub":"1234567890","name":"John Doe","iat":1516239022}` that every copy of
+ * the sample carries and that makes it recognisable in the first place. A
+ * re-encoded payload with the claims reordered would defeat this, and that is
+ * accepted: the target is the published sample, not every possible imitation.
+ */
+const JWT_DEMO_HEADER = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9";
+const JWT_DEMO_PAYLOAD = "eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ";
+const JWT_DEMO_SIG = "SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c";
+const JWT_DEMO = `${JWT_DEMO_HEADER}.${JWT_DEMO_PAYLOAD}.${JWT_DEMO_SIG}`;
+
+test("the doc sample is dropped on the named path", () => {
+  assert.deepStrictEqual(ids(`const token = "${JWT_DEMO}";`), []);
+});
+
+test("the doc sample is dropped on the entropy path too", () => {
+  // A sample the named rule declines still has the randomness of a real token,
+  // so without the entropy pass consulting the same list it is simply reported
+  // one tier down instead of not at all.
+  const found = scanText(`const token = "${JWT_DEMO}";`, {
+    filePath: "f.txt",
+    config: { ...require("../src/config").defaultConfig, excludeRules: ["jwt"] },
+  }).map((f: Finding) => f.ruleId);
+  assert.deepStrictEqual(found, [], `entropy reported the doc sample: ${found.join(",")}`);
+});
+
+test("a different header still identifies it as the sample", () => {
+  // The point of anchoring on the payload: this variant has a different header
+  // and therefore a different signature, and is still the documentation sample.
+  const alg512 = "eyJhbGciOiJIUzUxMiIsInR5cCI6IkpXVCJ9";
+  const other = `${alg512}.${JWT_DEMO_PAYLOAD}.${gen(43, alnum, 17)}`;
+  assert.deepStrictEqual(ids(`const token = "${other}";`), []);
+});
+
+test("a same-shape JWT that is NOT the sample still reports", () => {
+  const realish = `${JWT_DEMO_HEADER}.eyJ${gen(69, alnum, 11)}.${gen(43, alnum, 13)}`;
+  assert.ok(
+    ids(`const token = "${realish}";`).includes("jwt"),
+    "the filter swallowed a JWT that is not the documentation sample"
+  );
+});
+
+test("the jwt rule itself is unchanged", () => {
+  const r = rules.find((x) => x.id === "jwt");
+  assert.ok(r, "jwt rule missing");
+  assert.strictEqual(
+    r!.regex.source,
+    "\\beyJ[A-Za-z0-9_-]{10,}\\.eyJ[A-Za-z0-9_-]{10,}\\.[A-Za-z0-9_-]{10,}\\b",
+    "fix 3 was supposed to change the sample list, not the rule"
+  );
+});
+
 finish();
