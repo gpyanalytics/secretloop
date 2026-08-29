@@ -5,8 +5,8 @@ build against it, and prints precision, recall and F1 for both detection tiers
 on the working tree and on git history.
 
 ```bash
-npm run bundle && npm run bench                      # corpus A only
-python3 bench/run.py --corpus-b /path/to/bugsnag-js  # + the real-noise corpus
+npm run bundle && npm run bench                          # corpus A only
+python3 bench/run.py --corpus-b /path/to/real-noise-repo  # + the real-noise corpus
 ```
 
 Corpus A is **generated, not committed**. A checked-in tree of credential-shaped

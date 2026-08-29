@@ -2,9 +2,9 @@
 
 ## Current baseline — generator scratch moved out of the corpus, 29 August 2026
 
-Recorded by running `python3 bench/run.py --corpus-b <bugsnag-js>` against the
-build at this commit. Corpus A regenerated from seed 20260829; the regenerated
-labels match `bench/labels.json`.
+Recorded by running `python3 bench/run.py --corpus-b /path/to/real-noise-repo`
+against the build at this commit. Corpus A regenerated from seed 20260829; the
+regenerated labels match `bench/labels.json`.
 
 ### Corpus A — 50 tree secrets, 120 decoys, 10 history-only
 
@@ -15,7 +15,7 @@ labels match `bench/labels.json`.
 | named-only tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
 | named-only history | 60 | 60 | 0 | 0 | 60/60 | 1.000 | 1.000 | 1.000 |
 
-### Corpus B — bugsnag-js @ 5da3ae169c9ff716fa70d1388bb8e2157ca46ea6
+### Corpus B — the real-noise repository, at its pinned commit
 
 2012 tracked files, 185.4 KLOC, no known secrets — every finding is a false
 positive.

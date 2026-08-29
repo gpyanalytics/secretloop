@@ -59,7 +59,7 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
 
   // URLs and paths, added in 0.1.1. The three above them cover a *bare* URL and
   // an *absolute* path, and between them they missed 148 of 362 entropy
-  // findings on the bugsnag-js benchmark. Two reasons, both structural:
+  // findings on the real-noise corpus. Two reasons, both structural:
   //
   //  - The capture alphabet has no ":", so "https://host/x" is never captured
   //    whole. What reaches here is the "//host/x" remainder, which the

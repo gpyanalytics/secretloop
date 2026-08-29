@@ -286,8 +286,8 @@ function locationOf(f: Finding): string {
  *
  * Purely a rendering concern, and confined to the text report on purpose. One
  * leaked value copied into forty files is one thing to rotate, and printing it
- * forty times buries the other findings underneath it — on the bugsnag-js
- * benchmark the single worst value accounts for 43 of the occurrences in the
+ * forty times buries the other findings underneath it — on the real-noise
+ * corpus the single worst value accounts for 43 of the occurrences in the
  * post-exclusion set.
  *
  * What this deliberately does NOT do: change how many findings there are. The
