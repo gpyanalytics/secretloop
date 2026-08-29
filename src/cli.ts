@@ -874,22 +874,113 @@ async function runMask(args: Args): Promise<number> {
  * person reading the prompt. Nothing about this flow can be driven by an agent,
  * which is the point rather than a limitation.
  */
-async function runApprove(fingerprint: string | undefined): Promise<number> {
+/**
+ * Everything the approval prompt prints, made safe to print.
+ *
+ * The prompt is the trust anchor of the whole consent design: it is the one
+ * moment a human decides whether a credential leaves the machine, and it renders
+ * two strings that came out of a scanned repository -- the file path, and the
+ * masked value, whose visible characters are the credential's own bytes. A
+ * filename may contain ESC on every filesystem this runs on; verified, not
+ * assumed, by creating one.
+ *
+ * That is enough to forge the decision. `ESC[2K ESC[1G` erases the line and
+ * returns the cursor, so a path can overwrite the location it was supposed to
+ * disclose; a newline can scroll the real question off the top and leave a
+ * fake one where a person expects to read it. Neither changes what is sent --
+ * the record is re-resolved from disk and the commitment is over the current
+ * value -- which is exactly why it is dangerous: the machine does the right
+ * thing while the human approves a different sentence than the one they read.
+ *
+ * Whole escape sequences are removed first and leftover control bytes become
+ * "?": stripping the bytes in the other order would leave `[2K` sitting in the
+ * text as visible garbage, and turning ESC into "?" first would do the same.
+ * A visible "?" is the honest rendering -- something was there, it was not
+ * printable, and it is not being hidden.
+ *
+ * The length cap is part of the same defence. A 4,000-character path scrolls
+ * the question away without needing a single control byte.
+ */
+const DISPLAY_MAX = 160;
+
+export function sanitizeForDisplay(text: string): string {
+  const stripped = String(text)
+    // CSI: ESC [ params intermediates final
+    .replace(/\u001b\[[0-9;:<=>?]*[ -/]*[@-~]/g, "")
+    // OSC and the other ESC-introduced forms, terminated by BEL or ST
+    .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
+    .replace(/\u001b[@-Z\\-_]/g, "")
+    // whatever is left that a terminal would still act on
+    .replace(/[\u0000-\u001f\u007f]/g, "?");
+  return stripped.length > DISPLAY_MAX
+    ? `${stripped.slice(0, DISPLAY_MAX)}... (${stripped.length} characters, truncated)`
+    : stripped;
+}
+
+/**
+ * The prompt's side of the world, injectable so the decision can be tested.
+ *
+ * runApprove had no tests at all, which for the component that decides whether
+ * a credential is transmitted is the wrong thing to have no tests for. Nothing
+ * here is a test-only branch: the default implementation below is the real one,
+ * and a test supplies a different terminal rather than a different code path.
+ */
+export interface ApproveIO {
+  isTTY: boolean;
+  out(text: string): void;
+  err(text: string): void;
+  ask(prompt: string): Promise<string>;
+}
+
+export function terminalIO(
+  input: NodeJS.ReadableStream = process.stdin,
+  output: NodeJS.WritableStream = process.stdout
+): ApproveIO {
+  return {
+    get isTTY() {
+      return Boolean(process.stdin.isTTY);
+    },
+    out: (text) => void output.write(text),
+    err: (text) => void process.stderr.write(text),
+    ask: async (prompt) => {
+      const readline = await import("readline");
+      const rl = readline.createInterface({ input, output });
+      return new Promise<string>((resolve) => {
+        let settled = false;
+        const done = (answer: string) => {
+          if (settled) return;
+          settled = true;
+          rl.close();
+          resolve(answer);
+        };
+        // Ctrl-D closes the stream without ever calling back, and the promise
+        // used to wait forever -- a hung terminal with a pending approval
+        // record still on disk. An input that ends is an answer, and the answer
+        // is no.
+        rl.on("close", () => done(""));
+        rl.question(prompt, done);
+      });
+    },
+  };
+}
+
+export async function runApprove(
+  fingerprint: string | undefined,
+  io: ApproveIO = terminalIO()
+): Promise<number> {
   const consent = await import("./consent");
   const { createHash } = await import("crypto");
 
   if (!fingerprint) {
-    process.stderr.write(
-      "secretloop: approve requires a fingerprint.\nUsage: secretloop approve <fingerprint>\n"
-    );
+    io.err("secretloop: approve requires a fingerprint.\nUsage: secretloop approve <fingerprint>\n");
     return 2;
   }
 
   // A TTY is the control, not a courtesy. Without it there is no human reading
   // the prompt, and `yes | secretloop approve` or a shell an agent drives would
   // sail through a y/N that nobody saw.
-  if (!process.stdin.isTTY) {
-    process.stderr.write(
+  if (!io.isTTY) {
+    io.err(
       "secretloop: approve needs an interactive terminal. It authorizes sending a " +
         "credential to a third party, so it cannot be piped, scripted, or run by an agent.\n"
     );
@@ -898,14 +989,17 @@ async function runApprove(fingerprint: string | undefined): Promise<number> {
 
   const matches = consent.findByFingerprint(fingerprint);
   if (matches.length === 0) {
-    process.stderr.write(
-      `secretloop: no pending verification request for ${fingerprint}.\n` +
+    // The fingerprint is the caller's string and is echoed back; sanitized for
+    // the same reason the display fields are, since `secretloop approve` is a
+    // command a person is talked into pasting.
+    io.err(
+      `secretloop: no pending verification request for ${sanitizeForDisplay(fingerprint)}.\n` +
         `Requests are created by an MCP client calling secretloop_verify, and expire.\n`
     );
     return 2;
   }
   if (matches.length > 1) {
-    process.stderr.write(
+    io.err(
       `secretloop: ${matches.length} pending requests share that fingerprint, in different ` +
         `workspaces. Refusing rather than guessing which one you mean.\n`
     );
@@ -915,7 +1009,7 @@ async function runApprove(fingerprint: string | undefined): Promise<number> {
 
   if (consent.isExpired(record)) {
     consent.deleteRecord(record.id);
-    process.stderr.write("secretloop: that request has expired. Ask the client to request it again.\n");
+    io.err("secretloop: that request has expired. Ask the client to request it again.\n");
     return 2;
   }
 
@@ -930,14 +1024,14 @@ async function runApprove(fingerprint: string | undefined): Promise<number> {
   const rootError = validateRoot(record.path);
   if (rootError) {
     consent.deleteRecord(record.id);
-    process.stderr.write(`secretloop: ${rootError}\n`);
+    io.err(`secretloop: ${sanitizeForDisplay(rootError)}\n`);
     return 2;
   }
   let config;
   try {
     config = load(record.path);
   } catch (err) {
-    process.stderr.write(`secretloop: ${(err as Error).message}\n`);
+    io.err(`secretloop: ${sanitizeForDisplay((err as Error).message)}\n`);
     return 2;
   }
   const text = readText(record.path, record.file, config);
@@ -947,7 +1041,7 @@ async function runApprove(fingerprint: string | undefined): Promise<number> {
       : scan(text, { config, filePath: record.file }).find((f) => f.fingerprint === fingerprint);
   if (!finding) {
     consent.deleteRecord(record.id);
-    process.stderr.write(
+    io.err(
       "secretloop: that finding no longer resolves — the file or the credential has changed. " +
         "Nothing was approved.\n"
     );
@@ -955,40 +1049,41 @@ async function runApprove(fingerprint: string | undefined): Promise<number> {
   }
   if (providerOf(finding.ruleId) !== record.provider) {
     consent.deleteRecord(record.id);
-    process.stderr.write("secretloop: the provider for that finding has changed. Nothing was approved.\n");
+    io.err("secretloop: the provider for that finding has changed. Nothing was approved.\n");
     return 2;
   }
 
   const commitment = createHash("sha256").update(finding.value, "utf8").digest("hex");
 
-  process.stdout.write(
+  // Every field sanitized, including the provider: it is pinned to an internal
+  // table by the check above, but a field that is safe today because of a check
+  // somewhere else is one refactor away from not being.
+  io.out(
     `\nSecretLoop is asking permission to verify a credential.\n\n` +
-      `  provider:  ${record.provider}\n` +
-      `  location:  ${record.file}:${finding.line}\n` +
-      `  value:     ${redactValue(finding.value)}\n\n` +
-      `  The credential will LEAVE THIS MACHINE and be sent to ${record.provider}.\n` +
+      `  provider:  ${sanitizeForDisplay(record.provider)}\n` +
+      `  location:  ${sanitizeForDisplay(record.file)}:${finding.line}\n` +
+      `  value:     ${sanitizeForDisplay(redactValue(finding.value))}\n\n` +
+      `  The credential will LEAVE THIS MACHINE and be sent to ` +
+      `${sanitizeForDisplay(record.provider)}.\n` +
       `  This was requested by an MCP client, not by you typing a command.\n` +
       `  Approval is for this one check and expires in 5 minutes.\n\n`
   );
 
-  const readline = await import("readline");
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const answer: string = await new Promise((resolve) =>
-    rl.question(`Send this credential to ${record.provider}? [y/N] `, (a) => {
-      rl.close();
-      resolve(a);
-    })
-  );
+  // The question is the last thing written before the read, with nothing
+  // between them. Anything printed after it would be text a person sees while
+  // the cursor already sits on the y/N line, i.e. a second sentence competing
+  // with the one they are answering.
+  const answer = await io.ask(`Send this credential to ${sanitizeForDisplay(record.provider)}? [y/N] `);
 
   if (answer.trim().toLowerCase() !== "y") {
     consent.deleteRecord(record.id);
-    process.stdout.write("Denied. Nothing was sent, and the request has been discarded.\n");
+    io.out("Denied. Nothing was sent, and the request has been discarded.\n");
     return 0;
   }
 
   // Commits to the CURRENT value, never the one the record was created with.
   consent.approveRecord(record, commitment);
-  process.stdout.write(
+  io.out(
     `Approved for one verification, valid 5 minutes. Nothing has been sent yet — ` +
       `the client's next secretloop_verify call performs the check.\n`
   );
