@@ -82,6 +82,16 @@ def main():
     if not os.path.exists(CLI):
         sys.exit("bench: out/cli.js not found — run `npm run bundle` first.")
 
+    # A benchmark that silently measures a stale bundle reports the previous
+    # build's numbers as the current build's. That happened once during the
+    # 0.1.1 detection work: a rule was edited, the benchmark run, and the
+    # unchanged score read as "the fix did nothing".
+    newest_src = max(os.path.getmtime(os.path.join(REPO, "src", f))
+                     for f in os.listdir(os.path.join(REPO, "src")) if f.endswith(".ts"))
+    if newest_src > os.path.getmtime(CLI):
+        sys.exit("bench: out/cli.js is older than src/ — run `npm run bundle` first, "
+                 "or you will measure the previous build.")
+
     dest = tempfile.mkdtemp(prefix="secretloop-bench-")
     try:
         root, labels = build_corpus(dest)

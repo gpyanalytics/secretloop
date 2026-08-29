@@ -940,8 +940,22 @@ export const rules: SecretRule[] = [
     generic: true,
     fingerprintStrategy: "keyword",
     description: "Generic API key / secret assignment",
+    // The capture class carries password punctuation, which it did not until
+    // 0.1.1. A benchmark planted 60 credentials of eight kinds and this rule
+    // missed 7 of 7 passwords; a controlled run isolated the cause to the
+    // alphabet alone -- 10/10 detected when the passwords were alphanumeric,
+    // 2/10 once !@#$% was added. Human-chosen passwords are the one credential
+    // kind a generator does not produce, so this is the class that most needed
+    // to be wide and was narrowest.
+    //
+    // Only the class widened. The keyword alternation in front is untouched, so
+    // this still only looks at values a line has already labelled a credential,
+    // and the value is still bracketed by quotes -- widening cannot run past
+    // the closing quote. $ { } entering the class means the regex can now match
+    // a shell or template expansion it previously could not see; isPlaceholder's
+    // EXPANSION guard is what stops those, and tests/detection.test.ts holds it.
     regex:
-      /(?:api[_.-]?key|apikey|secret[_.-]?key|access[_.-]?token|auth[_.-]?token|client[_.-]?secret|private[_.-]?key|passwd|password)["']?\s*[:=]\s*["']([A-Za-z0-9_\-/+=.]{16,})["']/gi,
+      /(?:api[_.-]?key|apikey|secret[_.-]?key|access[_.-]?token|auth[_.-]?token|client[_.-]?secret|private[_.-]?key|passwd|password)["']?\s*[:=]\s*["']([A-Za-z0-9_\-/+=.!@#$%^&*()\[\]{}<>?,;:~]{16,})["']/gi,
     fullMatch: false,
     keywords: ["key", "secret", "token", "password", "passwd"],
     entropy: 3.5,
