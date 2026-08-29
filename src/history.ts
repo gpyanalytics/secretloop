@@ -27,6 +27,8 @@ export interface HistoryScanOptions {
   onGeneratedExcluded?: (count: number) => void;
   /** Findings the diff dropped to an inline directive, for the disclosure. */
   onSuppressed?: (count: number) => void;
+  /** Generic findings dropped because the diff's file is test/fixture material. */
+  onFixtureSuppressed?: (count: number) => void;
   /**
    * Aborts the scan and kills the git process.
    *
@@ -165,6 +167,7 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
           const partial = parser.finish();
           options.onGeneratedExcluded?.(parser.generatedExcludedCount());
           options.onSuppressed?.(parser.suppressedCount());
+          options.onFixtureSuppressed?.(parser.fixtureSuppressedCount());
           return resolve(partial);
         }
         if (code !== 0) return reject(new Error(describeGitFailure(code, signal, stderr)));
@@ -172,6 +175,7 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
         const all = parser.finish();
         options.onGeneratedExcluded?.(parser.generatedExcludedCount());
         options.onSuppressed?.(parser.suppressedCount());
+        options.onFixtureSuppressed?.(parser.fixtureSuppressedCount());
         resolve(all);
       } catch (err) {
         // The trailing flush parses too, and on a repository small enough to
@@ -234,6 +238,7 @@ export class LogPatchParser {
   /** Distinct paths the generated group kept out, for the scope disclosure. */
   private readonly generatedSkipped = new Set<string>();
   private suppressed = 0;
+  private fixtureSuppressed = 0;
 
   // Buffers consecutive added lines per hunk so multi-line secrets like PEM
   // blocks are scanned as one body rather than line by line.
@@ -253,6 +258,7 @@ export class LogPatchParser {
       filePath: this.currentFile,
       commit: this.commit.sha,
       onSuppressed: (n: number) => (this.suppressed += n),
+      onFixtureSuppressed: (n: number) => (this.fixtureSuppressed += n),
     });
     for (const f of local) {
       f.line = buf.firstLine + f.line - 1;
@@ -351,6 +357,11 @@ export class LogPatchParser {
   /** Findings dropped by an inline directive while parsing the diff. */
   suppressedCount(): number {
     return this.suppressed;
+  }
+
+  /** Generic findings dropped for sitting in a test or fixture path. */
+  fixtureSuppressedCount(): number {
+    return this.fixtureSuppressed;
   }
 }
 

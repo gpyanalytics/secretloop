@@ -7,7 +7,30 @@ import {
   Severity,
 } from "./rules";
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
-import { SecretLoopConfig, defaultConfig, createFingerprint, FingerprintStrategy } from "./config";
+import {
+  SecretLoopConfig,
+  defaultConfig,
+  createFingerprint,
+  FingerprintStrategy,
+  isFixturePath,
+} from "./config";
+
+/**
+ * The entropy pass's rule id.
+ *
+ * Named because it is NOT in rules.ts: the entropy pass synthesises findings
+ * rather than matching a SecretRule, so `genericRuleIds` -- built from
+ * rules.filter(r => r.generic) -- does not contain it. Anything reasoning about
+ * "the generic tier" that consults genericRuleIds alone covers half of it, which
+ * is exactly how the fixture suppression first shipped suppressing
+ * generic-api-key-assignment and nothing else.
+ */
+export const ENTROPY_RULE_ID = "generic-high-entropy";
+
+/** Both halves of the generic tier: the shape rules and the entropy pass. */
+export function isGenericTier(ruleId: string): boolean {
+  return ruleId === ENTROPY_RULE_ID || genericRuleIds.has(ruleId);
+}
 
 export type ConfidenceTier = "verified-live" | "format-match" | "entropy-heuristic";
 
@@ -98,6 +121,12 @@ export interface ScanOptions {
    * disclosure whose whole purpose is not to overstate.
    */
   onSuppressed?: (count: number) => void;
+  /**
+   * Called with the number of generic-tier findings dropped because this file
+   * sits in a test, fixture or example path. Named provider rules are never
+   * dropped this way.
+   */
+  onFixtureSuppressed?: (count: number) => void;
   /** Repo-relative path, used for fingerprints and reporting. */
   filePath?: string;
   /** Commit SHA when scanning history. */
@@ -172,7 +201,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   findings.length = 0;
   findings.push(...merged);
 
-  if (config.entropyPassEnabled && !excluded.has("generic-high-entropy")) {
+  if (config.entropyPassEnabled && !excluded.has(ENTROPY_RULE_ID)) {
     for (const hit of findHighEntropyStrings(text, config.entropyThreshold)) {
       if (isPlaceholder(hit.value)) continue;
       // A published sample has the randomness of a real key, so the named rules
@@ -193,7 +222,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
 
       findings.push(
         buildFinding({
-          ruleId: "generic-high-entropy",
+          ruleId: ENTROPY_RULE_ID,
           description: `High-entropy string (entropy ${hit.entropy.toFixed(2)})`,
           value: hit.value,
           startIndex: hit.index,
@@ -207,6 +236,26 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   }
 
   if (suppressedSpans.size > 0) options.onSuppressed?.(suppressedSpans.size);
+
+  // Generic-tier findings in test and fixture paths, dropped and counted.
+  //
+  // Applied here rather than in the walker because this is the only layer that
+  // knows both which rule matched and where the file is -- and because every
+  // caller reaches the scanner through it, so the working tree, the staged set
+  // and git history behave the same without three copies of the rule.
+  //
+  // Named rules are exempt by construction: a `ghp_` committed to a test file
+  // is a leaked credential, and the noise this addresses is entirely generic.
+  let fixtureSuppressed = 0;
+  if (!config.includeFixtures && options.filePath && isFixturePath(options.filePath)) {
+    for (let i = findings.length - 1; i >= 0; i--) {
+      if (isGenericTier(findings[i].ruleId)) {
+        findings.splice(i, 1);
+        fixtureSuppressed++;
+      }
+    }
+    if (fixtureSuppressed > 0) options.onFixtureSuppressed?.(fixtureSuppressed);
+  }
 
   const sorted = findings.sort((a, b) => a.startIndex - b.startIndex);
   if (options.filePath) assignFingerprints(sorted, text, options.filePath);

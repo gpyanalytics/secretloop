@@ -43,6 +43,8 @@ export interface Args {
    * they always have.
    */
   includeGenerated: boolean;
+  /** Report generic-tier findings in test, fixture and example paths. */
+  includeFixtures: boolean;
   /**
    * Everything wrong with the argv this was parsed from, in the order it was
    * found. validateArgs reports the first, so a malformed invocation exits 2
@@ -69,6 +71,7 @@ export function parseArgs(argv: string[]): Args {
     root: process.cwd(),
     failOn: "any",
     includeGenerated: false,
+    includeFixtures: false,
   };
   const errors: string[] = [];
 
@@ -128,6 +131,9 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--include-generated":
         args.includeGenerated = true;
+        break;
+      case "--include-fixtures":
+        args.includeFixtures = true;
         break;
       case "--help":
       case "-h":
@@ -239,6 +245,9 @@ OPTIONS
                            wrappers, Xcode project files, SARIF reports). Does
                            not re-enable node_modules, package-lock.json or
                            minified bundles, which are never scanned.
+  --include-fixtures       Also report generic-tier findings in test, fixture
+                           and example paths. Named provider rules already fire
+                           there; this is only about the generic tiers.
   --format <text|json|sarif>   Output format (default: text)
   -o, --output <file>      Write the report to a file instead of stdout
   --no-redact              Print full secret values (dangerous in CI logs)
@@ -448,7 +457,7 @@ function scanFileList(
   root: string,
   files: string[],
   config: SecretLoopConfig
-): { findings: Finding[]; texts: Map<string, string>; suppressed: number } {
+): { findings: Finding[]; texts: Map<string, string>; suppressed: number; fixtureSuppressed: number } {
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
   const scanned = scanFiles(root, files, config);
@@ -456,6 +465,7 @@ function scanFileList(
     findings: scanned.flatMap((s) => s.findings),
     texts: new Map(scanned.map((s) => [s.path, s.text])),
     suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
+    fixtureSuppressed: scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0),
   };
 }
 
@@ -498,6 +508,7 @@ async function main(): Promise<void> {
   // exclusions are a different array and are untouched, so no flag can widen
   // the scan beyond what it has always been able to reach.
   if (args.includeGenerated) config.generatedExcludePaths = [];
+  if (args.includeFixtures) config.includeFixtures = true;
 
   let findings: Finding[];
   let texts = new Map<string, string>();
@@ -517,6 +528,7 @@ async function main(): Promise<void> {
     let commitsScanned = 0;
     let generatedExcluded = 0;
     let suppressed = 0;
+    let fixtureSuppressed = 0;
     findings = await scanHistory({
       config,
       repoRoot: root,
@@ -525,8 +537,9 @@ async function main(): Promise<void> {
       onProgress: (commits) => (commitsScanned = commits),
       onGeneratedExcluded: (count) => (generatedExcluded = count),
       onSuppressed: (count) => (suppressed = count),
+      onFixtureSuppressed: (count) => (fixtureSuppressed = count),
     });
-    scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed });
+    scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed, fixtureSuppressed });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
   } else {
@@ -555,6 +568,7 @@ async function main(): Promise<void> {
       generatedExcluded: listed.generatedExcluded,
       suppressed: result.suppressed,
       outsideExcluded: listed.outsideExcluded,
+      fixtureSuppressed: result.fixtureSuppressed,
     });
   }
 
