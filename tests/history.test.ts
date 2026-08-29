@@ -1,7 +1,13 @@
-import { parseLogPatch, scanHistory, describeGitFailure } from "../src/history";
+import {
+  parseLogPatch,
+  scanHistory,
+  describeGitFailure,
+  validateRevRange,
+  InvalidRevRangeError,
+} from "../src/history";
 import { defaultConfig, mergeConfig } from "../src/config";
 import { test, suite, finish, assert } from "./harness";
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
@@ -419,5 +425,180 @@ function childCount(): number {
   const res = spawnSync("bash", ["-c", "pgrep -f 'git log -p' | wc -l"], { encoding: "utf8" });
   return Number(res.stdout.trim()) || 0;
 }
+
+suite("\nhistory.ts — revRange never becomes a git option");
+
+/**
+ * `revRange` is pushed into `git log`'s argv as its own element.
+ *
+ * spawn is called with an array and no shell, so there is nothing to inject a
+ * command into -- and that is not enough, because git parses its own arguments
+ * and `git log --output=<path>` writes a file. The CLI happens to be covered
+ * already: parseArgs refuses a flag-shaped value for every option, a rule added
+ * so `--format --verify` would stop swallowing the next flag. That is a
+ * usability fix standing in for a security guard, one edit away from not being
+ * one, and it protects exactly one caller.
+ *
+ * The guard belongs here, at the shared spawn site, so a caller that does not
+ * go through parseArgs is covered by the same code.
+ */
+
+const CLI_BIN = path.join(__dirname, "..", "out", "cli.js");
+
+/** Records every git argv this process produces, without preventing it. */
+function watchingSpawns<T>(body: () => T): { argvs: string[][]; value: T } {
+  const cp = require("child_process");
+  const realSpawn = cp.spawn;
+  const realSpawnSync = cp.spawnSync;
+  const argvs: string[][] = [];
+  cp.spawn = (...a: any[]) => (argvs.push(a[1] ?? []), realSpawn(...a));
+  cp.spawnSync = (...a: any[]) => (argvs.push(a[1] ?? []), realSpawnSync(...a));
+  try {
+    return { argvs, value: body() };
+  } finally {
+    cp.spawn = realSpawn;
+    cp.spawnSync = realSpawnSync;
+  }
+}
+
+const HOSTILE: Array<[string, unknown]> = [
+  ["writes a file", "--output=/tmp/secretloop-revrange-should-not-exist"],
+  ["short option", "-n999999"],
+  ["upload-pack", "--upload-pack=/bin/sh"],
+  ["exec", "--exec=/bin/sh"],
+  ["bare separator", "--"],
+  ["shell metacharacters", "main..HEAD; rm -rf /"],
+  ["command substitution", "HEAD..$(id)"],
+  ["pathspec magic", ":(literal)secrets"],
+  ["rev:path", "HEAD:.env"],
+  ["an embedded space", "main..HEAD --all"],
+  ["a newline", "main..HEAD\n--output=/tmp/x"],
+  ["a glob", "refs/heads/*"],
+  ["empty", ""],
+  ["not a string", 42],
+];
+
+test("every option-shaped range is refused before git starts", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
+    git("add", "app.js");
+    git("commit", "-qm", "one");
+
+    for (const [label, value] of HOSTILE) {
+      const { argvs, value: promise } = watchingSpawns(() =>
+        scanHistory({ config: mergeConfig({}), repoRoot: dir, revRange: value as string })
+      );
+      let threw: unknown = null;
+      try {
+        await promise;
+      } catch (err) {
+        threw = err;
+      }
+      assert.ok(
+        threw instanceof InvalidRevRangeError,
+        `${label} was accepted: ${threw === null ? "no error" : String(threw)}`
+      );
+      // The assertion is on argv, not on "no process ran": callers legitimately
+      // ask git for the repository root before this point, with arguments the
+      // caller cannot influence.
+      const reached = argvs.filter((a) => a.includes(String(value)) || a.includes("log"));
+      assert.deepStrictEqual(reached, [], `${label} reached git's argv: ${JSON.stringify(argvs)}`);
+    }
+  });
+});
+
+test("the file git would have written does not exist", async () => {
+  const target = "/tmp/secretloop-revrange-should-not-exist";
+  rmSync(target, { force: true });
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
+    git("add", "app.js");
+    git("commit", "-qm", "one");
+    await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      revRange: `--output=${target}`,
+    }).then(
+      () => assert.ok(false, "the scan completed instead of refusing"),
+      (err) => assert.ok(err instanceof InvalidRevRangeError)
+    );
+    // And that git really would have written it, so the guard is measured
+    // against a live capability rather than a supposed one.
+    spawnSync("git", ["log", "--oneline", `--output=${target}.proof`], { cwd: dir });
+    assert.ok(
+      existsSync(`${target}.proof`),
+      "git no longer writes --output files; re-derive the guard's justification"
+    );
+    rmSync(`${target}.proof`, { force: true });
+  });
+  assert.ok(!existsSync(target), "the guard let git write a file");
+});
+
+test("the shapes real rev-ranges take are still accepted", async () => {
+  for (const range of [
+    "main..HEAD",
+    "origin/main..HEAD",
+    "HEAD~3",
+    "HEAD~5..HEAD",
+    "v1.0.0..v2.0.0",
+    "refs/heads/topic",
+    "a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0",
+    "HEAD^..HEAD",
+    "main...topic",
+    "^main",
+    "HEAD@{2}",
+    "@{upstream}..HEAD",
+    "my-branch_2..HEAD",
+  ]) {
+    assert.strictEqual(validateRevRange(range), null, `${range} is legitimate and was refused`);
+  }
+});
+
+test("a valid range still reaches git and still scans", async () => {
+  await withRepo(async (dir, git) => {
+    // Three commits, the token in the middle one, so HEAD~2..HEAD is both a
+    // real range and one that has to reach git for the token to be found.
+    writeFileSync(path.join(dir, "base.js"), "const a = 1;\n");
+    git("add", "base.js");
+    git("commit", "-qm", "base");
+    writeFileSync(path.join(dir, "app.js"), `const t = "${TOKEN}";\n`);
+    git("add", "app.js");
+    git("commit", "-qm", "add token");
+    writeFileSync(path.join(dir, "b.js"), "const b = 2;\n");
+    git("add", "b.js");
+    git("commit", "-qm", "third");
+
+    const { argvs, value: promise } = watchingSpawns(() =>
+      scanHistory({ config: mergeConfig({}), repoRoot: dir, revRange: "HEAD~2..HEAD" })
+    );
+    const findings = await promise;
+    assert.ok(
+      argvs.some((a) => a.includes("HEAD~2..HEAD")),
+      `the range never reached git's argv: ${JSON.stringify(argvs)}`
+    );
+    assert.ok(
+      findings.some((f) => f.ruleId === "github-token"),
+      "a valid range stopped finding what it used to find"
+    );
+  });
+});
+
+test("the CLI turns the refusal into exit 2 and names the flag", async () => {
+  await withRepo(async (dir, git) => {
+    writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
+    git("add", "app.js");
+    git("commit", "-qm", "one");
+    // A value the argument parser accepts -- it does not begin with "-" -- so
+    // this exercises the spawn-site guard rather than parseArgs.
+    const res = spawnSync(
+      "node",
+      [CLI_BIN, "history", "--path", dir, "--rev-range", "main..HEAD; rm -rf /"],
+      { encoding: "utf8" }
+    );
+    assert.strictEqual(res.status, 2, `expected exit 2, got ${res.status}: ${res.stderr}`);
+    assert.match(res.stderr, /--rev-range/, `the message does not name the flag: ${res.stderr}`);
+    assert.strictEqual(res.stdout, "", "a refused scan printed a report");
+  });
+});
 
 finish();

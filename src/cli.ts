@@ -13,7 +13,7 @@ import {
 } from "./config";
 import { listFilesWithExclusions, filterGenerated, getStagedFiles, findRepoRoot } from "./walk";
 import { scanFiles } from "./workspace";
-import { scanHistory, isGitRepo } from "./history";
+import { scanHistory, isGitRepo, InvalidRevRangeError } from "./history";
 import { render, OutputFormat, sortFindings, UNKNOWN_REASONS, describeScope } from "./report";
 import { verifyFindings } from "./verify";
 
@@ -547,16 +547,28 @@ async function main(): Promise<void> {
     let generatedExcluded = 0;
     let suppressed = 0;
     let fixtureSuppressed = 0;
-    findings = await scanHistory({
-      config,
-      repoRoot: root,
-      maxCommits: args.maxCommits,
-      revRange: args.revRange,
-      onProgress: (commits) => (commitsScanned = commits),
-      onGeneratedExcluded: (count) => (generatedExcluded = count),
-      onSuppressed: (count) => (suppressed = count),
-      onFixtureSuppressed: (count) => (fixtureSuppressed = count),
-    });
+    try {
+      findings = await scanHistory({
+        config,
+        repoRoot: root,
+        maxCommits: args.maxCommits,
+        revRange: args.revRange,
+        onProgress: (commits) => (commitsScanned = commits),
+        onGeneratedExcluded: (count) => (generatedExcluded = count),
+        onSuppressed: (count) => (suppressed = count),
+        onFixtureSuppressed: (count) => (fixtureSuppressed = count),
+      });
+    } catch (err) {
+      // scanHistory refuses a range git would read as an option. Caught here so
+      // the message names the flag the person typed rather than the parameter
+      // the scanner calls it -- the guard is shared, the vocabulary is not.
+      if (err instanceof InvalidRevRangeError) {
+        process.stderr.write(`secretloop: --rev-range ${err.revRange} was refused: ${err.message}\n`);
+        process.exitCode = 2;
+        return;
+      }
+      throw err;
+    }
     scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed, fixtureSuppressed });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
