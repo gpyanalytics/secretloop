@@ -76,10 +76,20 @@ export const rules: SecretRule[] = [
     severity: "critical",
   },
   {
+    // The separator here is (?::=|[:=]), shared by 22 rules. It was [:=], which
+    // consumes ONE character, so Go's `key := "..."` left the `=` unmatched and
+    // the rule silently did not fire -- measured at 0/10 against 10/10 for the
+    // `=` form, with the entropy pass covering it in the default tier. That is
+    // the worst shape a detection bug can take: invisible unless you follow the
+    // example config's advice and turn entropy off.
+    //
+    // Not `:?=`, which was the obvious repair and is wrong: it matches `=` and
+    // `:=` but not a bare `:`, so every YAML and JSON credential this rule set
+    // finds today would have stopped matching. Verified before choosing.
     id: "aws-secret-key",
     description: "AWS Secret Access Key",
     regex:
-      /(?:aws[_.-]?secret[_.-]?(?:access[_.-]?)?key|aws[_.-]?secret)["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{40})["']?/gi,
+      /(?:aws[_.-]?secret[_.-]?(?:access[_.-]?)?key|aws[_.-]?secret)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9/+=]{40})["']?/gi,
     fullMatch: false,
     keywords: ["aws_secret", "aws-secret", "awssecret", "aws.secret"],
     entropy: 3.5,
@@ -89,7 +99,7 @@ export const rules: SecretRule[] = [
   {
     id: "aws-session-token",
     description: "AWS Session Token",
-    regex: /(?:aws[_.-]?session[_.-]?token)["']?\s*[:=]\s*["']?([A-Za-z0-9/+=]{100,})["']?/gi,
+    regex: /(?:aws[_.-]?session[_.-]?token)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9/+=]{100,})["']?/gi,
     fullMatch: false,
     keywords: ["aws_session_token", "aws-session-token"],
     severity: "high",
@@ -313,7 +323,7 @@ export const rules: SecretRule[] = [
   {
     id: "plaid-secret",
     description: "Plaid API Secret",
-    regex: /(?:plaid[_.-]?secret)["']?\s*[:=]\s*["']?([a-f0-9]{30})["']?/gi,
+    regex: /(?:plaid[_.-]?secret)["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{30})["']?/gi,
     fullMatch: false,
     keywords: ["plaid"],
     severity: "high",
@@ -440,7 +450,7 @@ export const rules: SecretRule[] = [
   {
     id: "twilio-auth-token",
     description: "Twilio Auth Token",
-    regex: /(?:twilio[_.-]?(?:auth[_.-]?)?token)["']?\s*[:=]\s*["']?([a-f0-9]{32})["']?/gi,
+    regex: /(?:twilio[_.-]?(?:auth[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{32})["']?/gi,
     fullMatch: false,
     keywords: ["twilio"],
     severity: "critical",
@@ -472,7 +482,7 @@ export const rules: SecretRule[] = [
   {
     id: "postmark-server-token",
     description: "Postmark Server Token",
-    regex: /(?:postmark[_.-]?(?:server[_.-]?)?token)["']?\s*[:=]\s*["']?([a-f0-9-]{36})["']?/gi,
+    regex: /(?:postmark[_.-]?(?:server[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([a-f0-9-]{36})["']?/gi,
     fullMatch: false,
     keywords: ["postmark"],
     severity: "high",
@@ -540,7 +550,7 @@ export const rules: SecretRule[] = [
   {
     id: "heroku-api-key",
     description: "Heroku API Key",
-    regex: /(?:heroku[_.-]?(?:api[_.-]?)?key)["']?\s*[:=]\s*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']?/gi,
+    regex: /(?:heroku[_.-]?(?:api[_.-]?)?key)["']?\s*(?::=|[:=])\s*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']?/gi,
     fullMatch: false,
     keywords: ["heroku"],
     severity: "critical",
@@ -548,7 +558,7 @@ export const rules: SecretRule[] = [
   {
     id: "cloudflare-api-token",
     description: "Cloudflare API Token",
-    regex: /(?:cloudflare|cf)[_.-]?api[_.-]?(?:token|key)["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{37,40})["']?/gi,
+    regex: /(?:cloudflare|cf)[_.-]?api[_.-]?(?:token|key)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9_-]{37,40})["']?/gi,
     fullMatch: false,
     keywords: ["cloudflare", "cf_api"],
     entropy: 3.5,
@@ -573,7 +583,7 @@ export const rules: SecretRule[] = [
   {
     id: "vercel-token",
     description: "Vercel API Token",
-    regex: /(?:vercel[_.-]?(?:api[_.-]?)?token)["']?\s*[:=]\s*["']?([A-Za-z0-9]{24})["']?/gi,
+    regex: /(?:vercel[_.-]?(?:api[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9]{24})["']?/gi,
     fullMatch: false,
     keywords: ["vercel"],
     entropy: 3.4,
@@ -582,7 +592,7 @@ export const rules: SecretRule[] = [
   {
     id: "netlify-token",
     description: "Netlify Access Token",
-    regex: /(?:netlify[_.-]?(?:auth[_.-]?|access[_.-]?)?token)["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{40,64})["']?/gi,
+    regex: /(?:netlify[_.-]?(?:auth[_.-]?|access[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9_-]{40,64})["']?/gi,
     fullMatch: false,
     keywords: ["netlify"],
     entropy: 3.5,
@@ -656,7 +666,7 @@ export const rules: SecretRule[] = [
     id: "snowflake-credentials",
     fingerprintStrategy: "context",
     description: "Snowflake account password",
-    regex: /(?:snowflake[_.-]?password)["']?\s*[:=]\s*["']([^"'\s]{8,})["']/gi,
+    regex: /(?:snowflake[_.-]?password)["']?\s*(?::=|[:=])\s*["']([^"'\s]{8,})["']/gi,
     fullMatch: false,
     keywords: ["snowflake"],
     severity: "critical",
@@ -690,7 +700,7 @@ export const rules: SecretRule[] = [
   {
     id: "datadog-api-key",
     description: "Datadog API Key",
-    regex: /(?:datadog|dd)[_.-]?(?:api[_.-]?)?key["']?\s*[:=]\s*["']?([a-f0-9]{32})["']?/gi,
+    regex: /(?:datadog|dd)[_.-]?(?:api[_.-]?)?key["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{32})["']?/gi,
     fullMatch: false,
     keywords: ["datadog", "dd_api", "dd-api"],
     severity: "high",
@@ -730,7 +740,7 @@ export const rules: SecretRule[] = [
   {
     id: "codecov-token",
     description: "Codecov Upload Token",
-    regex: /(?:codecov[_.-]?token)["']?\s*[:=]\s*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']?/gi,
+    regex: /(?:codecov[_.-]?token)["']?\s*(?::=|[:=])\s*["']?([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})["']?/gi,
     fullMatch: false,
     keywords: ["codecov"],
     severity: "medium",
@@ -738,7 +748,7 @@ export const rules: SecretRule[] = [
   {
     id: "buildkite-token",
     description: "Buildkite Agent Token",
-    regex: /(?:buildkite[_.-]?(?:agent[_.-]?)?token)["']?\s*[:=]\s*["']?([A-Za-z0-9]{40,})["']?/gi,
+    regex: /(?:buildkite[_.-]?(?:agent[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9]{40,})["']?/gi,
     fullMatch: false,
     keywords: ["buildkite"],
     severity: "high",
@@ -746,7 +756,7 @@ export const rules: SecretRule[] = [
   {
     id: "circleci-token",
     description: "CircleCI Personal Token",
-    regex: /(?:circle[_.-]?ci[_.-]?token|CIRCLE_TOKEN)["']?\s*[:=]\s*["']?([a-f0-9]{40})["']?/gi,
+    regex: /(?:circle[_.-]?ci[_.-]?token|CIRCLE_TOKEN)["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{40})["']?/gi,
     fullMatch: false,
     keywords: ["circle"],
     severity: "high",
@@ -812,7 +822,7 @@ export const rules: SecretRule[] = [
   {
     id: "algolia-admin-key",
     description: "Algolia Admin API Key",
-    regex: /(?:algolia[_.-]?(?:admin[_.-]?)?(?:api[_.-]?)?key)["']?\s*[:=]\s*["']?([a-f0-9]{32})["']?/gi,
+    regex: /(?:algolia[_.-]?(?:admin[_.-]?)?(?:api[_.-]?)?key)["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{32})["']?/gi,
     fullMatch: false,
     keywords: ["algolia"],
     severity: "high",
@@ -836,7 +846,7 @@ export const rules: SecretRule[] = [
   {
     id: "okta-api-token",
     description: "Okta API Token",
-    regex: /(?:okta[_.-]?(?:api[_.-]?)?token)["']?\s*[:=]\s*["']?(00[A-Za-z0-9_-]{40})["']?/gi,
+    regex: /(?:okta[_.-]?(?:api[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?(00[A-Za-z0-9_-]{40})["']?/gi,
     fullMatch: false,
     keywords: ["okta"],
     severity: "critical",
@@ -844,7 +854,7 @@ export const rules: SecretRule[] = [
   {
     id: "auth0-client-secret",
     description: "Auth0 Client Secret",
-    regex: /(?:auth0[_.-]?client[_.-]?secret)["']?\s*[:=]\s*["']?([A-Za-z0-9_-]{40,})["']?/gi,
+    regex: /(?:auth0[_.-]?client[_.-]?secret)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9_-]{40,})["']?/gi,
     fullMatch: false,
     keywords: ["auth0"],
     severity: "critical",
@@ -852,7 +862,7 @@ export const rules: SecretRule[] = [
   {
     id: "pusher-secret",
     description: "Pusher App Secret",
-    regex: /(?:pusher[_.-]?(?:app[_.-]?)?secret)["']?\s*[:=]\s*["']?([a-f0-9]{20})["']?/gi,
+    regex: /(?:pusher[_.-]?(?:app[_.-]?)?secret)["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{20})["']?/gi,
     fullMatch: false,
     keywords: ["pusher"],
     severity: "high",
@@ -860,7 +870,7 @@ export const rules: SecretRule[] = [
   {
     id: "segment-write-key",
     description: "Segment Write Key",
-    regex: /(?:segment[_.-]?write[_.-]?key)["']?\s*[:=]\s*["']?([A-Za-z0-9]{32})["']?/gi,
+    regex: /(?:segment[_.-]?write[_.-]?key)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9]{32})["']?/gi,
     fullMatch: false,
     keywords: ["segment"],
     severity: "medium",
@@ -887,7 +897,7 @@ export const rules: SecretRule[] = [
   {
     id: "twitch-client-secret",
     description: "Twitch Client Secret",
-    regex: /(?:twitch[_.-]?client[_.-]?secret)["']?\s*[:=]\s*["']?([a-z0-9]{30})["']?/gi,
+    regex: /(?:twitch[_.-]?client[_.-]?secret)["']?\s*(?::=|[:=])\s*["']?([a-z0-9]{30})["']?/gi,
     fullMatch: false,
     keywords: ["twitch"],
     severity: "high",
@@ -895,7 +905,7 @@ export const rules: SecretRule[] = [
   {
     id: "spotify-client-secret",
     description: "Spotify Client Secret",
-    regex: /(?:spotify[_.-]?client[_.-]?secret)["']?\s*[:=]\s*["']?([a-f0-9]{32})["']?/gi,
+    regex: /(?:spotify[_.-]?client[_.-]?secret)["']?\s*(?::=|[:=])\s*["']?([a-f0-9]{32})["']?/gi,
     fullMatch: false,
     keywords: ["spotify"],
     severity: "medium",
@@ -955,7 +965,7 @@ export const rules: SecretRule[] = [
     // a shell or template expansion it previously could not see; isPlaceholder's
     // EXPANSION guard is what stops those, and tests/detection.test.ts holds it.
     regex:
-      /(?:api[_.-]?key|apikey|secret[_.-]?key|access[_.-]?token|auth[_.-]?token|client[_.-]?secret|private[_.-]?key|passwd|password)["']?\s*[:=]\s*["']([A-Za-z0-9_\-/+=.!@#$%^&*()\[\]{}<>?,;:~]{16,})["']/gi,
+      /(?:api[_.-]?key|apikey|secret[_.-]?key|access[_.-]?token|auth[_.-]?token|client[_.-]?secret|private[_.-]?key|passwd|password)["']?\s*(?::=|[:=])\s*["']([A-Za-z0-9_\-/+=.!@#$%^&*()\[\]{}<>?,;:~]{16,})["']/gi,
     fullMatch: false,
     keywords: ["key", "secret", "token", "password", "passwd"],
     entropy: 3.5,
