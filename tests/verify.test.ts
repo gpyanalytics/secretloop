@@ -539,4 +539,135 @@ test("a rule with no verifier is never counted as outbound", async () => {
   assert.deepStrictEqual(sent, []);
 });
 
+suite("\nverify.ts — concurrent misses share one request");
+
+/**
+ * The TTL cache only helps once a result exists.
+ *
+ * Two verifies of the same credential issued before either returns are both
+ * misses, so both reach the provider. Nothing was ever wrong about the count --
+ * onOutbound fires twice because two requests really do leave -- but a
+ * workspace scan verifies a whole scan at concurrency 5, and one credential
+ * copied into five files is the ordinary case rather than the unusual one.
+ *
+ * A second request for a credential already in flight now awaits the first.
+ */
+
+/** A fetch that answers only when released, so overlap is deterministic. */
+function gatedFetch(): { fetch: typeof fetch; calls: () => number; release: () => void } {
+  let calls = 0;
+  const waiters: Array<() => void> = [];
+  const fetchImpl = (async () => {
+    calls++;
+    await new Promise<void>((resolve) => waiters.push(resolve));
+    return { status: 200, json: async () => ({}), text: async () => "", headers: { get: () => null } } as any;
+  }) as typeof fetch;
+  return {
+    fetch: fetchImpl,
+    calls: () => calls,
+    release: () => waiters.splice(0).forEach((w) => w()),
+  };
+}
+
+test("two concurrent verifies of the same credential make one request", async () => {
+  const gate = gatedFetch();
+  const cache = new VerificationCache();
+  const context = { fullText: "", fetchImpl: gate.fetch };
+  let outbound = 0;
+  const bump = () => void outbound++;
+
+  const a = cache.verify(makeFinding("github-token", "ghp_shared"), context, bump);
+  const b = cache.verify(makeFinding("github-token", "ghp_shared"), context, bump);
+  // Both started before either could finish; releasing now lets them settle.
+  gate.release();
+  const [ra, rb] = await Promise.all([a, b]);
+
+  assert.strictEqual(gate.calls(), 1, "the credential left this machine twice");
+  assert.strictEqual(outbound, 1, "the outbound record disagrees with what was sent");
+  assert.deepStrictEqual(ra, rb, "the second caller got a different answer than the first");
+});
+
+test("two concurrent verifies of different credentials make two requests", async () => {
+  const gate = gatedFetch();
+  const cache = new VerificationCache();
+  const context = { fullText: "", fetchImpl: gate.fetch };
+  let outbound = 0;
+  const bump = () => void outbound++;
+
+  const a = cache.verify(makeFinding("github-token", "ghp_one"), context, bump);
+  const b = cache.verify(makeFinding("github-token", "ghp_two"), context, bump);
+  gate.release();
+  await Promise.all([a, b]);
+
+  assert.strictEqual(gate.calls(), 2, "dedup collapsed two different credentials into one check");
+  assert.strictEqual(outbound, 2);
+});
+
+test("a verify after the first settles still hits the TTL cache", async () => {
+  const gate = gatedFetch();
+  const cache = new VerificationCache();
+  const context = { fullText: "", fetchImpl: gate.fetch };
+  let outbound = 0;
+  const bump = () => void outbound++;
+
+  const first = cache.verify(makeFinding("github-token", "ghp_shared"), context, bump);
+  gate.release();
+  await first;
+  await cache.verify(makeFinding("github-token", "ghp_shared"), context, bump);
+
+  assert.strictEqual(gate.calls(), 1, "the in-flight map replaced the result cache instead of fronting it");
+  assert.strictEqual(outbound, 1);
+});
+
+test("a network failure is a result, and is cached like any other", async () => {
+  let calls = 0;
+  const failing = (async () => {
+    calls++;
+    throw new Error("socket hang up");
+  }) as typeof fetch;
+  const cache = new VerificationCache();
+  const context = { fullText: "", fetchImpl: failing };
+
+  const first = await cache.verify(makeFinding("github-token", "ghp_flaky"), context);
+  assert.strictEqual(first?.status, "unknown", "a thrown request must not read as a verdict");
+  assert.strictEqual(first?.reason, "network");
+  await cache.verify(makeFinding("github-token", "ghp_flaky"), context);
+  assert.strictEqual(calls, 1, "unknown/network is a result and the TTL cache holds it");
+});
+
+test("a request that fails after the response still frees the key", async () => {
+  // The failure mode an in-flight map introduces: a rejected promise left in
+  // the map turns one transient failure into a permanent one, because every
+  // later caller awaits a failure that already happened.
+  //
+  // Reaching it takes care. verifyFinding catches everything, so it never
+  // rejects, and a test that throws inside a verifier proves nothing about
+  // this map — the first version of this test did exactly that and passed with
+  // the fix deliberately broken. What can still reject is the bookkeeping
+  // AFTER the response: the clock the cache stamps its entry with.
+  let ticks = 0;
+  const cache = new VerificationCache(1000, () => {
+    ticks++;
+    if (ticks === 1) throw new Error("clock failed");
+    return 0;
+  });
+  let calls = 0;
+  const counting = (async () => {
+    calls++;
+    return { status: 200, json: async () => ({}), text: async () => "", headers: { get: () => null } } as any;
+  }) as typeof fetch;
+  const context = { fullText: "", fetchImpl: counting };
+  const finding = makeFinding("github-token", "ghp_poison");
+
+  let firstFailed = false;
+  await cache.verify(finding, context).catch(() => (firstFailed = true));
+  assert.ok(firstFailed, "the fixture did not produce a rejected request; the test would be vacuous");
+
+  // Same key. If the map still holds the rejected promise, this rejects too and
+  // the credential is never checked again for the life of the process.
+  const second = await cache.verify(finding, context).catch(() => "still poisoned");
+  assert.notStrictEqual(second, "still poisoned", "the key stayed occupied by a failed request");
+  assert.strictEqual(calls, 2, "the retry never reached the provider");
+});
+
 finish();

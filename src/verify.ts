@@ -176,6 +176,19 @@ const DEFAULT_CACHE_TTL_MS = 5 * 60_000;
 export class VerificationCache {
   private readonly entries = new Map<string, { result: VerificationResult | null; expiresAt: number }>();
 
+  /**
+   * Requests that have left but not yet answered, keyed exactly as the results
+   * are — the same hash, never the plaintext.
+   *
+   * The result cache can only help once a result exists. Two verifies of one
+   * credential issued before either returns are both misses, so both used to
+   * reach the provider. The count was never wrong — onOutbound fired twice
+   * because two requests really did leave — but a workspace scan verifies at
+   * concurrency 5, and one credential copied into five files is the ordinary
+   * case rather than the unusual one.
+   */
+  private readonly inFlight = new Map<string, Promise<VerificationResult | null>>();
+
   constructor(
     private readonly ttlMs: number = DEFAULT_CACHE_TTL_MS,
     private readonly now: () => number = Date.now
@@ -190,11 +203,28 @@ export class VerificationCache {
     const hit = this.entries.get(key);
     if (hit && hit.expiresAt > this.now()) return hit.result;
 
+    // Joining an outstanding request is not an outbound call, so onMiss does
+    // not fire here. The record counts what left the machine, and nothing does.
+    const pending = this.inFlight.get(key);
+    if (pending) return pending;
+
     // Only a miss reaches the provider, so only a miss is an outbound call.
     onMiss?.(finding);
-    const result = await verifyFinding(finding, context);
-    this.entries.set(key, { result, expiresAt: this.now() + this.ttlMs });
-    return result;
+    const request = verifyFinding(finding, context)
+      .then((result) => {
+        this.entries.set(key, { result, expiresAt: this.now() + this.ttlMs });
+        return result;
+      })
+      // Cleared however it settles. A rejected promise left in the map would
+      // turn one transient failure into a permanent one: every later caller
+      // would await a failure that had already happened, and the credential
+      // would never be re-checked. The entries map is what caches an answer;
+      // this map only ever holds a question.
+      .finally(() => {
+        this.inFlight.delete(key);
+      });
+    this.inFlight.set(key, request);
+    return request;
   }
 
   /** Cache keys, so a test can assert no plaintext secret is retained. */
