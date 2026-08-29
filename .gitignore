@@ -12,3 +12,9 @@ out/
 # made every bench run dirty the working tree.
 __pycache__/
 *.pyc
+
+# Benchmark output that must never be committed. PRIVATE-FINDINGS.md records
+# possible-real credentials found while measuring the false-positive rate on
+# other people's repositories, for responsible disclosure by a human. It is
+# ignored rather than absent so the file has one known name and one known place.
+PRIVATE-FINDINGS.md
