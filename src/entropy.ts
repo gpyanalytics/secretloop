@@ -74,7 +74,20 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   // padding and "+" cannot appear in any segment these accept.
   /^\/\/[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\//,                  // protocol-relative URL
   /^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+\/[\w./-]*$/,              // host/path with no scheme
-  /^(?:[\w.-]+\/)+[\w.-]+$/,                                   // relative filesystem path
+  // Relative filesystem path -- narrowed in 0.1.1 after it was measured eating
+  // credentials. It was `^(?:[\w.-]+/)+[\w.-]+$`, which any 40-character base64
+  // key satisfies as soon as it contains a slash and no + or =: 23.12% of 200k
+  // random keys, invisible to the tier that exists for credentials no named
+  // rule can catch.
+  //
+  // A path now has to look like one -- an extension-bearing final segment, or an
+  // explicit ./ ../ / or drive-letter prefix. That is 0.823% of the same keys.
+  //
+  // The cost, measured and accepted: a relative path with neither a prefix nor
+  // an extension (`react-native/Libraries/TurboModule/RCTExport`) reports again.
+  // Predicates that catch it -- adding a >=3-separator arm -- cost 1.802%, more
+  // than doubling the false-negative surface to remove one false-positive shape.
+  /^(?:(?:[\w.-]+\/)+[\w-]+\.[A-Za-z][A-Za-z0-9]{0,9}|(?:\.{1,2}\/|\/|[A-Za-z]:[\\/])[\w.-]+(?:\/[\w.-]+)*)$/,
 ];
 
 function isStructuralFalsePositive(value: string): boolean {
