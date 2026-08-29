@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.1 — 2026-08-29
+## 0.1.1 — unreleased
 
 Precision and honesty, plus four narrowly-scoped detection fixes found by
 benchmarking against gitleaks and TruffleHog. Every other rule, rule ID and
