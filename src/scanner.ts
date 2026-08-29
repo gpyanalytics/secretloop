@@ -596,6 +596,27 @@ export function lineOf(index: number, lineStarts: number[]): number {
  * does not, because prefix plus suffix is the pair that reconstructs a short
  * secret.
  */
+/**
+ * The text with every finding replaced by [REDACTED:<ruleId>].
+ *
+ * Right to left, so each remaining span's offsets stay valid -- the same reason
+ * secretFreeContext works backwards. Sorted here rather than trusting the
+ * caller: scanText returns findings sorted by start offset, and a transform
+ * that silently corrupts its output if that ever changes is not worth the saved
+ * line.
+ *
+ * Shared by `secretloop mask` and the editor's clipboard command so the two
+ * cannot disagree about what masking means.
+ */
+export function maskFindings(text: string, findings: Finding[]): string {
+  return [...findings]
+    .sort((a, b) => b.startIndex - a.startIndex)
+    .reduce(
+      (acc, f) => acc.slice(0, f.startIndex) + `[REDACTED:${f.ruleId}]` + acc.slice(f.endIndex),
+      text
+    );
+}
+
 export function redactValue(value: string): string {
   if (value.length <= 8) return "*".repeat(value.length);
   if (value.length < 16) return `${value.slice(0, 2)}${"*".repeat(value.length - 2)}`;

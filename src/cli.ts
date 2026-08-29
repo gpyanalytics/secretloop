@@ -25,7 +25,7 @@ import { verifyFindings } from "./verify";
  */
 
 export interface Args {
-  command: "scan" | "staged" | "history" | "help";
+  command: "scan" | "staged" | "history" | "mask" | "help";
   format: OutputFormat;
   verify: boolean;
   redact: boolean;
@@ -45,6 +45,8 @@ export interface Args {
   includeGenerated: boolean;
   /** Report generic-tier findings in test, fixture and example paths. */
   includeFixtures: boolean;
+  /** mask: also mask generic high-entropy strings. Off by default -- see HELP. */
+  entropy: boolean;
   /**
    * Everything wrong with the argv this was parsed from, in the order it was
    * found. validateArgs reports the first, so a malformed invocation exits 2
@@ -60,7 +62,7 @@ const FORMATS: readonly OutputFormat[] = ["text", "json", "sarif"];
 const FAIL_ON_MODES: readonly Args["failOn"][] = ["any", "verified", "critical", "high", "never"];
 
 /** The commands the CLI answers to. */
-const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "help"];
+const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "mask", "help"];
 
 export function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -72,6 +74,7 @@ export function parseArgs(argv: string[]): Args {
     failOn: "any",
     includeGenerated: false,
     includeFixtures: false,
+    entropy: false,
   };
   const errors: string[] = [];
 
@@ -134,6 +137,9 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--include-fixtures":
         args.includeFixtures = true;
+        break;
+      case "--entropy":
+        args.entropy = true;
         break;
       case "--help":
       case "-h":
@@ -237,6 +243,7 @@ COMMANDS
   scan       Scan the working tree (default)
   staged     Scan staged changes only (used by the pre-commit hook)
   history    Scan git history for secrets committed at any point
+  mask       Read stdin, write it back with every secret replaced
   help       Show this message
 
 OPTIONS
@@ -245,6 +252,11 @@ OPTIONS
                            wrappers, Xcode project files, SARIF reports). Does
                            not re-enable node_modules, package-lock.json or
                            minified bundles, which are never scanned.
+  --entropy                mask: also mask generic high-entropy strings.
+                           OFF by default, which is the opposite of a scan.
+                           Masking every digest, UUID and hash in a log
+                           destroys the log's usefulness while protecting
+                           nothing -- those are not credentials.
   --include-fixtures       Also report generic-tier findings in test, fixture
                            and example paths. Named provider rules already fire
                            there; this is only about the generic tiers.
@@ -261,6 +273,7 @@ OPTIONS
                            The 'verified' mode requires --verify.
 
 EXAMPLES
+  kubectl logs pod | secretloop mask | pbcopy   # paste a log safely
   secretloop scan --verify --format sarif -o results.sarif
   secretloop history --max-commits 500 --verify
   secretloop scan --baseline .secretloop-baseline.json --verify --fail-on verified
@@ -485,6 +498,11 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (args.command === "mask") {
+    process.exitCode = await runMask(args);
+    return;
+  }
+
   const usageError = validateArgs(args);
   if (usageError) {
     process.stderr.write(`secretloop: ${usageError}\n`);
@@ -636,6 +654,77 @@ async function main(): Promise<void> {
     );
   }
   process.exitCode = gate.fail ? 1 : 0;
+}
+
+/**
+ * `secretloop mask` — stdin in, the same text out with every secret replaced.
+ *
+ * A transform, not a gate: it exits 0 whether or not it found anything, because
+ * a filter in the middle of a pipe that fails the pipeline is not a filter.
+ *
+ * Masked text is the ONLY thing on stdout. The summary goes to stderr, so
+ * `... | secretloop mask | pbcopy` puts the masked text on the clipboard and
+ * nothing else. That split is the whole ergonomic point of the command.
+ */
+async function runMask(args: Args): Promise<number> {
+  const { scanText, maskFindings } = await import("./scanner");
+  const { loadConfig, defaultConfig } = await import("./config");
+  const { findRepoRoot } = await import("./walk");
+
+  // The WHOLE input, before any scanning. A chunked scan cannot see a PEM block
+  // that straddles two reads, and "it usually arrives in one chunk" is not a
+  // property worth relying on for a redaction tool.
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
+  const buf = Buffer.concat(chunks);
+
+  let config;
+  try {
+    config = loadConfig(findRepoRoot(process.cwd()));
+  } catch {
+    // A malformed project config must not stop someone masking a log. Defaults
+    // mask more, never less, so failing open here is safe in the only direction
+    // that matters.
+    config = { ...defaultConfig };
+  }
+
+  if (buf.length > config.maxFileSizeBytes) {
+    process.stderr.write(
+      `secretloop: input is too large to mask (${buf.length} bytes, limit ${config.maxFileSizeBytes}). ` +
+        `Nothing was written — masking a stream this size would mean scanning it in pieces, ` +
+        `and a secret split across two pieces would pass through unmasked.\n`
+    );
+    return 2;
+  }
+  // The same NUL heuristic readTextFile uses. Refusing is the point: passing
+  // binary through unchanged would look like it had been masked.
+  if (buf.subarray(0, 8000).includes(0)) {
+    process.stderr.write(
+      "secretloop: input looks binary (NUL byte near the start). Nothing was written — " +
+        "SecretLoop cannot mask what it cannot read as text, and passing it through " +
+        "unchanged would look like it had been.\n"
+    );
+    return 2;
+  }
+
+  const text = buf.toString("utf8");
+  const findings = scanText(text, {
+    config: { ...config, entropyPassEnabled: args.entropy, includeFixtures: true },
+  });
+
+  const masked = maskFindings(text, findings);
+
+  process.stdout.write(masked);
+
+  if (findings.length > 0) {
+    const byRule = new Map<string, number>();
+    for (const f of findings) byRule.set(f.ruleId, (byRule.get(f.ruleId) ?? 0) + 1);
+    const detail = [...byRule.entries()].sort().map(([r, n]) => `${r} x${n}`).join(", ");
+    process.stderr.write(`secretloop: masked ${findings.length} finding(s): ${detail}\n`);
+  } else {
+    process.stderr.write("secretloop: masked 0 finding(s).\n");
+  }
+  return 0;
 }
 
 // Only run the CLI when invoked as a program. Without this guard, importing

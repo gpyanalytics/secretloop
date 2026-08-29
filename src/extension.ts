@@ -1,5 +1,5 @@
 import * as vscode from "vscode";
-import { scanText, Finding } from "./scanner";
+import { scanText, maskFindings, Finding } from "./scanner";
 import {
   loadConfig,
   mergeConfig,
@@ -161,6 +161,44 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("secretloop.setAwsAdminCredentials", () =>
       promptForAwsAdminCredentials(context)
     ),
+    /**
+     * Mask the clipboard, on demand and only on demand.
+     *
+     * The clipboard is read HERE and nowhere else in this extension: no
+     * listener, no interval, no read on activation. A secret scanner that
+     * watched the clipboard would be indistinguishable from the thing it warns
+     * about, so the restriction is structural rather than a promise, and
+     * tests/mask.test.ts greps the source to hold it.
+     */
+    vscode.commands.registerCommand("secretloop.maskClipboard", async () => {
+      const text = await vscode.env.clipboard.readText();
+      const config = configForFolder(
+        requireWorkspaceRoot() ?? process.cwd(),
+        setting<number>("entropyThreshold", 4.3)
+      );
+      if (Buffer.byteLength(text, "utf8") > config.maxFileSizeBytes) {
+        vscode.window.showErrorMessage(
+          `SecretLoop: clipboard is too large to mask (limit ${config.maxFileSizeBytes} bytes). ` +
+            `Nothing was changed.`
+        );
+        return;
+      }
+      // Same defaults as `secretloop mask`: named rules only. Masking every
+      // digest and UUID on the clipboard destroys what was being copied while
+      // protecting nothing.
+      const findings = scanText(text, {
+        config: { ...config, entropyPassEnabled: false, includeFixtures: true },
+      });
+      if (findings.length === 0) {
+        vscode.window.showInformationMessage("SecretLoop: no secrets found in the clipboard.");
+        return;
+      }
+      await vscode.env.clipboard.writeText(maskFindings(text, findings));
+      vscode.window.showInformationMessage(
+        `SecretLoop: masked ${findings.length} secret(s) in the clipboard.`
+      );
+    }),
+
     vscode.commands.registerCommand("secretloop.resetPromptPreferences", async () => {
       // Scoped to prompt state only: the persisted decline and this session's
       // flags. Stored credentials, baselines and the enableLiveVerification
