@@ -303,10 +303,14 @@ exist so nobody has to rediscover them.
 Nothing below loses a finding relative to 0.1.0. They are ordered by what a
 user notices.
 
+**P3-1 is closed** — `smoke:vsix` now runs from `prepackage`, `prepublish:vsce`
+and `prepublish:ovsx`, and the VSIX must be built from a clean checkout. The
+reasoning is in `scripts/smoke-vsix.sh`; the short version is that vsce packages
+whatever `node_modules` holds, so only `npm ci` guarantees the archive.
+
 | id | item | why it waited |
 |---|---|---|
 | P1-3 | The editor's workspace-scan summary carries the generated-file and symlink counts but not the inline-suppression or fixture-suppression counts. `WorkspaceScan` never grew the two fields `ScannedFile` already has. | Confined to one surface; the CLI is where CI reads, and the CLI discloses all six. Also: `scanWorkspace` hand-builds a scope string with different wording than `describeScope` produces a few lines later — fold both into one call. |
-| P3-1 | **The VSIX manifest pin has no automatic trigger, and packaging from a polluted `node_modules` ships it.** `scripts/vsix-manifest.txt` is an exact 7-file list and `smoke:vsix` diffs the archive against it, but nothing runs it: `prepublishOnly` covers npm only. Measured 29 Aug 2026: with 58 packages in `node_modules` that are in neither `package.json` nor `package-lock.json` (left by an `npm install` on another branch), `vsce package` puts **3,690 node_modules files** into the archive. `npm ci` removes them. | Wiring `prepackage`/`prepublish:vsce` to `smoke:vsix` is one line, but it fails today for that pre-existing reason, so the fix is the gate *plus* deciding what the gate should do about a dirty tree. See the corrected note in `.vscodeignore`. |
 | P2-1 | A symlink cycle in a non-git tree enumerates the same file once per depth: one credential in one file became 33 findings with 33 fingerprints, and the scope said `99 file(s)` for one real file. Containment is not breached; `walkDirectory` needs a realpath-visited set. | Non-git walk only, and the fingerprints are platform-dependent, which makes it a baseline-stability bug rather than a detection one. |
 | P2-2 | `VerificationCache` keys on `(ruleId, sha256(value))` and ignores the verification context, so an AWS access key ID present in two files — one with the paired secret key, one without — gets whichever verdict started first, and a `missing-pair` UNKNOWN is cached for five minutes over a credential that could have been proven LIVE. | Wrong in the tri-state's own direction, but it needs the same credential in two files with different neighbours. |
 | P2-3 | `mask` checks only the first 8000 bytes for NUL, so a file whose first NUL is later is decoded and written back with U+FFFD substitutions — neither the input nor a masked version of it. Same lossiness for any non-UTF-8 text. No secret escapes; offsets are computed on the decoded string. | Corruption, not disclosure. Fix is to scan the whole buffer and compare the re-encoded bytes. |

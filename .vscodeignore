@@ -14,9 +14,23 @@
 # So what keeps node_modules out is not this file and not a property of vsce.
 # It is node_modules containing nothing but the devDependencies vsce skips,
 # which is what `npm ci` produces and what an `npm install` on a branch with
-# extra dependencies does not. The check that catches the difference is
-# scripts/smoke-vsix.sh, because it reads the archive; `vsce ls` sees it too.
-# Neither runs automatically. See docs/ROADMAP.md, 0.1.2.
+# extra dependencies does not.
+#
+# So: BUILD THE VSIX FROM A CLEAN CHECKOUT, never from a working tree.
+#
+#   git worktree add --detach ../secretloop-release HEAD
+#   cd ../secretloop-release && npm ci && npm run package
+#
+# A sibling directory, not /tmp: a checkout under /private/tmp makes `vsce ls`
+# return zero files and `vsce package` fail on a missing entrypoint that is
+# present. Measured; see the note in scripts/smoke-vsix.sh.
+#
+# scripts/smoke-vsix.sh is the check that catches the difference, because it
+# reads the archive rather than these rules; `vsce ls` shows it too. It now runs
+# automatically from `prepackage`, `prepublish:vsce` and `prepublish:ovsx`, the
+# VSIX-side counterpart to `prepublishOnly` -> smoke:tarball on the npm side.
+# If it fails and every unexpected path is under node_modules, the checkout is
+# contaminated -- fix the checkout, not this file.
 #
 # out/ is also required in full: hooks.ts resolves out/cli.js from
 # context.extensionPath to install the pre-commit hook. Note that out/ is a

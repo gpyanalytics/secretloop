@@ -19,6 +19,56 @@
 #   - out/cli.js missing. hooks.ts copies it out of the installed extension to
 #     install the pre-commit hook, so an extension without it installs a hook
 #     that cannot run.
+#
+# ---------------------------------------------------------------------------
+# WIRED, and where from
+# ---------------------------------------------------------------------------
+#
+# package.json runs this from `prepackage`, `prepublish:vsce` and
+# `prepublish:ovsx` -- every entry point that produces or ships a VSIX. It is
+# the VSIX-side counterpart to `prepublishOnly` -> smoke:tarball, which has
+# gated the npm side since 026a2de. CI does not package, so npm's pre-hooks are
+# where the gate belongs; adding it to CI instead would leave `npm run package`
+# on a developer's machine ungated, which is the path a Marketplace publish
+# actually takes.
+#
+# ---------------------------------------------------------------------------
+# BUILD THE VSIX FROM A CLEAN CHECKOUT. This is not a style preference.
+# ---------------------------------------------------------------------------
+#
+#   git worktree add --detach ../secretloop-release HEAD
+#   cd ../secretloop-release && npm ci && npm run package
+#
+# NOT under /tmp, and this is measured rather than superstition. In a checkout
+# at /private/tmp/... `npx vsce ls` returns ZERO files -- not package.json, not
+# the readme -- and `vsce package` then fails with "Extension entrypoint(s)
+# missing" naming a file that is sitting right there. The same checkout at
+# ../secretloop-release lists 23 and packages cleanly. Removing .vscodeignore,
+# .gitignore, .npmignore and .git one at a time changes nothing under /tmp, so
+# it is not an ignore rule. macOS resolves /tmp through a symlink to
+# /private/tmp, which is the likeliest cause and was not chased further. A
+# sibling directory costs nothing and avoids the whole question.
+#
+# vsce packages whatever is in node_modules, and it decides what to include by
+# walking the dependency tree on disk rather than by trusting package.json.
+# Every dependency this project declares is a devDependency, which vsce skips --
+# so a node_modules containing ONLY what the lockfile describes yields the
+# 7-file archive scripts/vsix-manifest.txt pins. A node_modules containing
+# anything else does not, and nothing in .vscodeignore prevents it.
+#
+# Measured, 29 August 2026: with 58 packages present in node_modules that were
+# in neither package.json nor package-lock.json -- left behind by an
+# `npm install` on another branch of the same repository -- `vsce package` put
+# 3,690 node_modules files into the archive. `npm ci` deletes node_modules and
+# installs exactly the lockfile, which is the only operation that guarantees
+# the tree vsce walks is the tree the lockfile describes.
+#
+# So this script failing is not necessarily a bug in the ignore rules. Read the
+# diff first: if every unexpected path is under node_modules, the checkout is
+# contaminated and the fix is a clean one, not a change to .vscodeignore. The
+# gate is deliberately not relaxed to tolerate that -- a dirty tree is exactly
+# what it exists to catch, and the same 3,690 files would otherwise have gone to
+# the Marketplace.
 set -euo pipefail
 
 repo="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
