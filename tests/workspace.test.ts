@@ -1,4 +1,5 @@
-import { scanWorkspaceFiles, scanFiles, verifyScannedFiles } from "../src/workspace";
+import { scanWorkspaceFiles, scanFiles } from "../src/workspace";
+import { verifyScannedFiles } from "../src/workspace-verify";
 import { mergeConfig } from "../src/config";
 import { test, suite, finish, assert } from "./harness";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";

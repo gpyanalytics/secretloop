@@ -34,7 +34,10 @@ import {
 import { listFilesWithExclusions, findRepoRoot } from "./walk";
 import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
 import { scanHistory, isGitRepo } from "./history";
-import { isVerifiable } from "./verify";
+// Metadata only, and from verify-meta rather than verify: importing verify.ts
+// for a boolean would bundle eighteen provider transports and the AWS SDK into
+// a server with no verification tool. See src/verify-meta.ts.
+import { hasVerifier } from "./verify-meta";
 
 /**
  * Two helpers that already exist, exported, in src/cli.ts — and are
@@ -341,6 +344,58 @@ function neutralizeBreakout(text: string): string {
   return text.replace(new RegExp(UNTRUSTED_TAG, "gi"), "untrusted_repository_content_neutralised");
 }
 
+/**
+ * Quotes a fragment of repository-derived or caller-supplied text for use
+ * inside an error message.
+ *
+ * wrapUntrusted below handles the results path: a window of file text, framed
+ * and labelled. Errors were the hole. A refusal reaches a model through exactly
+ * the same channel a result does, and `No finding with fingerprint <X>` puts X
+ * in front of the model with SecretLoop's own voice around it -- an injection
+ * surface that bypasses the wrapper by never going through it. Every error
+ * string in this file that can carry a value the server did not author now
+ * routes through here.
+ *
+ * Three things happen, and each is load-bearing:
+ *
+ *  - Control bytes become spaces. An error message is written to a terminal by
+ *    some clients, so ANSI escapes in a path could repaint what the operator
+ *    reads; NUL and the C0 range have no legitimate place in a rev-range, a
+ *    fingerprint or a directory name.
+ *  - The text is capped. An error is not a data channel, and a caller that
+ *    sends a megabyte fingerprint should not get a megabyte of it back.
+ *  - The closing tag is neutralised, by the same function and for the same
+ *    reason as in the results path.
+ */
+const UNTRUSTED_FRAGMENT_CAP = 200;
+
+export function quoteUntrusted(text: string): string {
+  const flat = String(text).replace(/[\u0000-\u001F\u007F]/g, " ");
+  const capped =
+    flat.length > UNTRUSTED_FRAGMENT_CAP
+      ? `${flat.slice(0, UNTRUSTED_FRAGMENT_CAP)}... (${flat.length} characters, truncated)`
+      : flat;
+  return `<${UNTRUSTED_TAG}>${neutralizeBreakout(capped)}</${UNTRUSTED_TAG}>`;
+}
+
+/**
+ * Quotes known untrusted substrings inside a message this file did not compose.
+ *
+ * validateRoot's wording is pinned to the CLI's, word for word, by a parity
+ * test -- so its messages cannot be rebuilt here to put the path somewhere
+ * safer. Quoting in place keeps SecretLoop's own prose readable as SecretLoop's
+ * and puts the delimiters exactly around the part a repository chose.
+ */
+export function quoteWithin(message: string, ...untrusted: (string | undefined)[]): string {
+  let out = message;
+  for (const fragment of untrusted) {
+    if (!fragment) continue;
+    if (!out.includes(fragment)) continue;
+    out = out.split(fragment).join(quoteUntrusted(fragment));
+  }
+  return out;
+}
+
 export interface WrappedContext {
   file: string;
   firstLine: number;
@@ -476,13 +531,13 @@ function resolveRoot(requested: string): { root: string } | { error: string } {
     return { error: "path is required and must be a non-empty string." };
   }
   const problem = validateRoot(requested);
-  if (problem) return { error: problem };
+  if (problem) return { error: quoteWithin(problem, requested) };
 
   const real = safeReal(requested);
   if (!withinAllowedRoots(real)) {
     return {
       error:
-        `${requested} is outside the directories this server was started with ` +
+        `${quoteUntrusted(requested)} is outside the directories this server was started with ` +
         `(${allowedRoots.join(", ")}). Allowed directories are fixed at launch and cannot ` +
         `be changed by a client. Restart the server pointing at that directory if you ` +
         `intend to scan it.`,
@@ -532,8 +587,10 @@ export function toolScan(input: ScanInput): ToolResult {
     config = loadConfig(root);
   } catch (err) {
     // A malformed .secretloop.json is a refusal, never a clean scan. loadConfig
-    // already phrases these to name the file and the field.
-    return fail((err as Error).message);
+    // already phrases these to name the file and the field. Quoted whole: a
+    // JSON parse failure quotes the offending bytes back, so the message can
+    // carry a slice of the repository's own file.
+    return fail(quoteUntrusted((err as Error).message));
   }
 
   const include = input.include?.filter((g) => typeof g === "string" && g.length > 0) ?? [];
@@ -568,7 +625,7 @@ export function toolScan(input: ScanInput): ToolResult {
       scanned = scanFiles(root, files, config);
     }
   } catch (err) {
-    return fail(`scan failed: ${(err as Error).message}`);
+    return fail(`scan failed: ${quoteUntrusted((err as Error).message)}`);
   }
 
   // After enumeration and before anything is reported or cached: the walker
@@ -645,7 +702,7 @@ export function toolListFindings(input: ListInput): ToolResult {
   // repository, and only one of those is what a client would report.
   if (!cached) {
     return fail(
-      `No scan has been run for ${root} in this session, so there are no findings to list. ` +
+      `No scan has been run for ${quoteUntrusted(root)} in this session, so there are no findings to list. ` +
         `This is not a clean result — call secretloop_scan first.`
     );
   }
@@ -715,7 +772,7 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
     const cached = sessions.get(resolved.root);
     if (!cached) {
       return fail(
-        `No scan has been run for ${resolved.root} in this session — call secretloop_scan first.`
+        `No scan has been run for ${quoteUntrusted(resolved.root)} in this session — call secretloop_scan first.`
       );
     }
     scans = [cached];
@@ -769,8 +826,8 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
           // Metadata only — nothing here contacts a provider. Worth reporting
           // because "unverified and unverifiable" and "unverified but
           // checkable" are different situations with different next steps.
-          hasVerifier: isVerifiable(finding.ruleId),
-          verifierNote: isVerifiable(finding.ruleId)
+          hasVerifier: hasVerifier(finding.ruleId),
+          verifierNote: hasVerifier(finding.ruleId)
             ? "A liveness check exists for this rule, but no MCP tool runs it. " +
               "Liveness can only be established by the user running `secretloop scan --verify`."
             : "No liveness check exists for this rule. It can never be confirmed live or dead " +
@@ -802,7 +859,7 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
   }
 
   return fail(
-    `No finding with fingerprint ${input.fingerprint} in this session's scans. ` +
+    `No finding with fingerprint ${quoteUntrusted(input.fingerprint)} in this session's scans. ` +
       `Fingerprints change when a file's path or the secret itself changes — re-run secretloop_scan.`
   );
 }
@@ -848,18 +905,83 @@ function clamp(value: number | undefined, fallback: number, max: number): number
   return Math.min(floored, max);
 }
 
+/**
+ * The characters a rev-range may contain, and why the set stops where it does.
+ *
+ * `revRange` is pushed into `git log`'s argv as its own element. spawn is used
+ * without a shell, so there is no shell to inject into -- but git parses its
+ * own arguments, and `--output=/path/anywhere` makes `git log` write a file.
+ * That was reachable from any MCP client: a read-only server with an arbitrary
+ * file write in it. The value is caller-supplied and never checked.
+ *
+ * Allowed, each because real rev-ranges need it:
+ *
+ *   A-Za-z0-9   SHAs, branch and tag names
+ *   .           `a..b`, `a...b`, and dotted tags like `v1.2.3`
+ *   _ -         branch names (`my-branch`, `feature_x`)
+ *   /           `origin/main`, `refs/heads/x`
+ *   ^ ~         `HEAD^`, `HEAD~5`, and `^main` as an exclusion
+ *   @ { }       `@`, `HEAD@{2}`, `@{upstream}`
+ *
+ * Refused, each because something wants it:
+ *
+ *   a leading `-`  every option git has, `--output=` among them. Checked
+ *                  separately from the character class, because `-` is legal
+ *                  inside a branch name and illegal at the front of a range.
+ *   `:`            `rev:path`, and pathspec magic like `:(literal)`
+ *   `=`            belt to the leading-dash braces; no rev-range needs it
+ *   space, quotes, `$ ; | & \ * ? [ ]`, newline
+ *                  none appear in a rev-range, all appear in an attack, and a
+ *                  character with no legitimate use is free to refuse
+ *
+ * Deliberately a denylist-free allowlist: a new git option cannot become
+ * reachable by having been forgotten here.
+ */
+const REV_RANGE_SHAPE = /^[A-Za-z0-9._/^~@{}-]+$/;
+const REV_RANGE_MAX = 256;
+
+export function validateRevRange(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return "revRange must be a non-empty string when given. Omit it to scan all history.";
+  }
+  if (value.length > REV_RANGE_MAX) {
+    return `revRange is longer than ${REV_RANGE_MAX} characters. No git rev-range is this long.`;
+  }
+  if (value.startsWith("-")) {
+    return (
+      `revRange may not begin with "-": git would read it as an option rather than a range, ` +
+      `and some of its options write files. Received ${quoteUntrusted(value)}.`
+    );
+  }
+  if (!REV_RANGE_SHAPE.test(value)) {
+    return (
+      `revRange may contain only letters, digits and . _ - / ^ ~ @ { } -- the characters git ` +
+      `rev-ranges are made of. Received ${quoteUntrusted(value)}.`
+    );
+  }
+  return null;
+}
+
 export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> {
   const resolved = resolveRoot(input.path);
   if ("error" in resolved) return fail(resolved.error);
   const { root } = resolved;
 
-  if (!isGitRepo(root)) return fail(`${root} is not a git repository, so it has no history to scan.`);
+  // Before isGitRepo, which spawns `git rev-parse`. A bad range is a refusal,
+  // not something to discover after a process has already started.
+  if (input.revRange !== undefined) {
+    const problem = validateRevRange(input.revRange);
+    if (problem) return fail(problem);
+  }
+
+  if (!isGitRepo(root))
+    return fail(`${quoteUntrusted(root)} is not a git repository, so it has no history to scan.`);
 
   let config: SecretLoopConfig;
   try {
     config = loadConfig(root);
   } catch (err) {
-    return fail((err as Error).message);
+    return fail(quoteUntrusted((err as Error).message));
   }
 
   const maxCommits = clamp(input.maxCommits, HISTORY_MAX_COMMITS, HISTORY_MAX_COMMITS_CAP);
@@ -884,7 +1006,7 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
       signal: controller.signal,
     });
   } catch (err) {
-    return fail(`history scan failed: ${(err as Error).message}`);
+    return fail(`history scan failed: ${quoteUntrusted((err as Error).message)}`);
   } finally {
     clearTimeout(timer);
   }

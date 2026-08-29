@@ -21,7 +21,8 @@ import {
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
 import { setting, resolveSetting, describeOrigin, SETTINGS_NAMESPACE } from "./settings";
 import { UNKNOWN_REASONS, describeScope } from "./report";
-import { ScannedFile, scanFiles, scanWorkspaceScan, verifyScannedFiles } from "./workspace";
+import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
+import { verifyScannedFiles } from "./workspace-verify";
 import * as path from "path";
 
 

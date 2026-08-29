@@ -29,6 +29,7 @@ import {
   toolScan,
   getAllowedRoots,
   setAllowedRoots,
+  quoteUntrusted,
 } from "./mcp-core";
 
 /**
@@ -271,7 +272,7 @@ async function dispatch(name: string, args: Record<string, unknown>): Promise<To
     case "secretloop_history_scan":
       return toolHistoryScan(args as never);
     default:
-      return { ok: false, error: `Unknown tool ${name}.` };
+      return { ok: false, error: `Unknown tool ${quoteUntrusted(String(name))}.` };
   }
 }
 
@@ -340,7 +341,12 @@ async function main(): Promise<void> {
     } catch (err) {
       // A thrown handler is a refusal, not an empty result. Same rule as above:
       // whatever a client is told, it must not be able to read it as "clean".
-      result = { ok: false, error: `${name} failed: ${(err as Error)?.message ?? String(err)}` };
+      result = {
+        ok: false,
+        error:
+          `${quoteUntrusted(String(name))} failed: ` +
+          quoteUntrusted((err as Error)?.message ?? String(err)),
+      };
     }
     audit("tools/result", { tool: name, ...auditCounts(result) });
     return toContent(result);

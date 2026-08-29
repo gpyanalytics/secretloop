@@ -1,7 +1,6 @@
 import { Finding, scanText } from "./scanner";
 import { SecretLoopConfig } from "./config";
 import { listFilesWithExclusions, readTextFileResult, SkipReason } from "./walk";
-import { VerificationCache, VerifyContext, verifyFindings } from "./verify";
 
 /**
  * Scanning a tree, through one path for every caller.
@@ -124,51 +123,4 @@ export function scanWorkspaceScan(
     generatedExcluded: listed.generatedExcluded,
     outsideExcluded: listed.outsideExcluded,
   };
-}
-
-export interface VerifyScanOptions {
-  cache?: VerificationCache;
-  concurrency?: number;
-  /** Test hook: the context each finding was verified with. */
-  onContext?: (finding: Finding, context: VerifyContext) => void;
-}
-
-/**
- * Verifies a whole scan in one bounded pass, and reports what actually left.
- *
- * One pass rather than one per file: a workspace scan is the widest fan-out
- * this tool has, and the returned list is the record of how many credentials
- * were transmitted across the entire scan. A per-file count would understate it
- * in the one place accuracy matters most.
- *
- * Context is resolved per finding, since the AWS verifier reads the text of the
- * file its access key came from to find the secret key beside it.
- */
-export async function verifyScannedFiles(
-  scanned: ScannedFile[],
-  fetchImpl: typeof fetch,
-  options: VerifyScanOptions = {}
-): Promise<Finding[]> {
-  const findings = scanned.flatMap((s) => s.findings);
-  const texts = new Map(scanned.map((s) => [s.path, s.text]));
-  const sent: Finding[] = [];
-
-  await verifyFindings(
-    findings,
-    (finding) => {
-      const context: VerifyContext = {
-        fullText: texts.get(finding.file ?? "") ?? "",
-        fetchImpl,
-      };
-      options.onContext?.(finding, context);
-      return context;
-    },
-    {
-      cache: options.cache,
-      concurrency: options.concurrency,
-      onOutbound: (f) => sent.push(f),
-    }
-  );
-
-  return sent;
 }
