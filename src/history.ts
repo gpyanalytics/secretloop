@@ -76,8 +76,95 @@ export function isGitRepo(repoRoot: string): boolean {
  * it. `--unified=0` keeps only added lines, which is what we want: context
  * lines would re-report the same secret once per touching commit.
  */
+/**
+ * A rev-range that git will read as a revision and never as an option.
+ *
+ * `revRange` is pushed into `git log`'s argv as its own element. spawn is
+ * called with an array and no shell, so there is no shell to inject into --
+ * and that is not the whole risk, because git parses its own arguments and
+ * `git log --output=<path>` writes a file. Verified against real git, not
+ * reasoned about: the test alongside this asserts the file appears, so anyone
+ * loosening the set below sees what they are re-enabling.
+ *
+ * The guard lives here, at the spawn site, rather than in each caller. The CLI
+ * is already covered by accident -- parseArgs refuses a flag-shaped value for
+ * every option, a rule added so `--format --verify` would stop swallowing the
+ * next flag -- and a usability fix standing in for a security boundary is one
+ * edit away from not being one, and protects only the caller that goes through
+ * it.
+ *
+ * Allowed, each because real rev-ranges need it:
+ *
+ *   A-Za-z0-9   SHAs, branch and tag names
+ *   .           `a..b`, `a...b`, and dotted tags like `v1.2.3`
+ *   _ -         branch names (`my-branch`, `feature_x`)
+ *   /           `origin/main`, `refs/heads/x`
+ *   ^ ~         `HEAD^`, `HEAD~3`, and `^main` as an exclusion
+ *   @ { }       `@`, `HEAD@{2}`, `@{upstream}`
+ *
+ * Refused, each because something wants it:
+ *
+ *   a leading `-`  every option git has, `--output=` among them. Checked
+ *                  separately from the character class, because `-` is legal
+ *                  inside a branch name and never at the front of a range.
+ *   `:`            `rev:path`, and pathspec magic like `:(literal)`
+ *   `=`            belt to the leading-dash braces; no rev-range needs it
+ *   space, quotes, `$ ; | & \ * ? [ ]`, newline
+ *                  none appear in a rev-range, all appear in an attack, and a
+ *                  character with no legitimate use is free to refuse
+ *
+ * An allowlist rather than a denylist, so a git option added next year cannot
+ * become reachable by having been forgotten here.
+ */
+const REV_RANGE_SHAPE = /^[A-Za-z0-9._/^~@{}-]+$/;
+const REV_RANGE_MAX = 256;
+
+/** Thrown instead of spawning. Typed so a caller can name its own flag. */
+export class InvalidRevRangeError extends Error {
+  readonly revRange: string;
+  constructor(message: string, revRange: string) {
+    super(message);
+    this.name = "InvalidRevRangeError";
+    this.revRange = revRange;
+  }
+}
+
+export function validateRevRange(value: unknown): string | null {
+  if (typeof value !== "string" || value.length === 0) {
+    return "a revision range must be a non-empty string. Omit it to scan all history.";
+  }
+  if (value.length > REV_RANGE_MAX) {
+    return `a revision range longer than ${REV_RANGE_MAX} characters is not one.`;
+  }
+  if (value.startsWith("-")) {
+    return (
+      'a revision range may not begin with "-": git would read it as an option rather ' +
+      "than a range, and some of its options write files."
+    );
+  }
+  if (!REV_RANGE_SHAPE.test(value)) {
+    return (
+      "a revision range may contain only letters, digits and . _ - / ^ ~ @ { } — " +
+      "the characters git rev-ranges are made of."
+    );
+  }
+  return null;
+}
+
 export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
   const { config, repoRoot } = options;
+
+  // Before the argv is built, and so before anything spawns.
+  //
+  // Rejected rather than thrown. This function returns a promise, so a caller
+  // written as `scanHistory(...).catch(...)` would never see a synchronous
+  // throw -- one contract for every failure is worth more than saving a tick.
+  if (options.revRange !== undefined) {
+    const problem = validateRevRange(options.revRange);
+    if (problem) {
+      return Promise.reject(new InvalidRevRangeError(problem, String(options.revRange)));
+    }
+  }
 
   const args = [
     "log",
