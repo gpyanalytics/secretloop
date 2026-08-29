@@ -65,6 +65,20 @@ const DOC_SAMPLE = [
   // accepted. The target is the published sample that people paste into code,
   // not every string someone could construct to look like it.
   /eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ/,
+  // AWS's published documentation SECRET key -- the counterpart to
+  // AKIAIOSFODNN7EXAMPLE, which the /EXAMPLE/i pattern above already catches.
+  // This one carries no marker, so like Stripe's sample it has to be literal.
+  //
+  // It was invisible until 0.1.1 narrowed the relative-path structural filter:
+  // the value contains two slashes and no + or =, so that filter had been
+  // dropping it by accident rather than by intent. Narrowing did not create the
+  // false positive, it uncovered one that had never been recognised -- all 8 of
+  // the corpus's remaining entropy-tier false positives were this one string.
+  //
+  // In the shared list rather than scoped to aws-secret-key, for the reason the
+  // Stripe entry gives: the generic assignment rule and the entropy pass match
+  // the same span, so exempting one rule only changes which one reports it.
+  /^wJalrXUtnFEMI\/K7MDENG\/bPxRfiCYz9Qb7xTvKE$/,
 ];
 
 /**
