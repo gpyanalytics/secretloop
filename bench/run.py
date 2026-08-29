@@ -17,9 +17,9 @@ import gen_corpus, gen_history, score as scoring  # noqa: E402
 CLI = os.path.join(REPO, "out", "cli.js")
 
 
-def build_corpus(dest):
+def build_corpus(dest, seed=None):
     root = os.path.join(dest, "corpusA")
-    gen_corpus.build(root)
+    gen_corpus.build(root) if seed is None else gen_corpus.build(root, seed)
     labels = gen_history.build(root)
     return root, labels
 
@@ -77,6 +77,11 @@ def main():
     ap.add_argument("--tool", default="secretloop", choices=["secretloop"])
     ap.add_argument("--corpus-b", help="path to a real-noise checkout (all findings are FPs)")
     ap.add_argument("--json", help="write the full result object here")
+    ap.add_argument("--seed", type=int,
+                    help="regenerate corpus A with a different seed -- a HOLDOUT run. "
+                         "Skips the labels.json pin (a different seed means a different "
+                         "corpus by definition) and measures generalisation rather than "
+                         "the corpus the fixes were written against.")
     a = ap.parse_args()
 
     if not os.path.exists(CLI):
@@ -94,9 +99,12 @@ def main():
 
     dest = tempfile.mkdtemp(prefix="secretloop-bench-")
     try:
-        root, labels = build_corpus(dest)
+        root, labels = build_corpus(dest, a.seed)
         pinned = json.load(open(os.path.join(HERE, "labels.json")))
-        if labels != pinned:
+        if a.seed is not None:
+            print(f"HOLDOUT RUN — seed {a.seed}, not the committed corpus. "
+                  f"The labels.json pin is skipped by design.\n")
+        elif labels != pinned:
             sys.exit("bench: regenerated corpus does not match bench/labels.json — "
                      "the generator changed. Reconcile before trusting any score.")
         tree_sec, tree_dec, hist_sec = scoring.label_index(labels)

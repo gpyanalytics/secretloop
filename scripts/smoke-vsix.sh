@@ -85,19 +85,18 @@ case "$output" in
   *) fail "the archived out/cli.js did not print usage" ;;
 esac
 
-echo "smoke: checking nothing unintended rode along"
-strays="$(cd "$work/x" && find extension -type f \
-  ! -path 'extension/out/extension.js' \
-  ! -path 'extension/out/cli.js' \
-  ! -path 'extension/package.json' \
-  ! -path 'extension/README.md' \
-  ! -path 'extension/readme.md' \
-  ! -path 'extension/LICENSE.txt' \
-  ! -path 'extension/SECURITY.md' \
-  ! -path 'extension/docs/icon.png' | sort)"
-if [ -n "$strays" ]; then
-  echo "smoke: FAIL — unexpected files in the VSIX:" >&2
-  echo "$strays" | sed 's/^/  /' >&2
+echo "smoke: checking the archive against scripts/vsix-manifest.txt, exactly"
+# An exact list, not a list of things to ignore. The previous version excluded
+# known-good paths and passed anything it had not thought of, which is the same
+# denylist failure .vscodeignore itself has already shipped twice. A committed
+# manifest fails on a stray AND on a disappearance, and changing what ships now
+# requires editing a file that says what ships.
+actual="$(cd "$work/x" && find extension -type f | sort)"
+expected="$(sort "$repo/scripts/vsix-manifest.txt")"
+if [ "$actual" != "$expected" ]; then
+  echo "smoke: FAIL — VSIX contents do not match scripts/vsix-manifest.txt" >&2
+  diff <(echo "$expected") <(echo "$actual") | sed 's/^/  /' >&2
+  echo "  (< expected, > actual. Update the manifest only when the change is intended.)" >&2
   exit 1
 fi
 
