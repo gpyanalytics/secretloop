@@ -25,6 +25,8 @@ export interface HistoryScanOptions {
    * way a working-tree scan does.
    */
   onGeneratedExcluded?: (count: number) => void;
+  /** Findings the diff dropped to an inline directive, for the disclosure. */
+  onSuppressed?: (count: number) => void;
   /**
    * Aborts the scan and kills the git process.
    *
@@ -162,12 +164,14 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
         if (cancelled) {
           const partial = parser.finish();
           options.onGeneratedExcluded?.(parser.generatedExcludedCount());
+          options.onSuppressed?.(parser.suppressedCount());
           return resolve(partial);
         }
         if (code !== 0) return reject(new Error(describeGitFailure(code, signal, stderr)));
         if (carry.length > 0) parser.push(carry);
         const all = parser.finish();
         options.onGeneratedExcluded?.(parser.generatedExcludedCount());
+        options.onSuppressed?.(parser.suppressedCount());
         resolve(all);
       } catch (err) {
         // The trailing flush parses too, and on a repository small enough to
@@ -229,6 +233,7 @@ export class LogPatchParser {
   private commitsScanned = 0;
   /** Distinct paths the generated group kept out, for the scope disclosure. */
   private readonly generatedSkipped = new Set<string>();
+  private suppressed = 0;
 
   // Buffers consecutive added lines per hunk so multi-line secrets like PEM
   // blocks are scanned as one body rather than line by line.
@@ -247,6 +252,7 @@ export class LogPatchParser {
       config: this.config,
       filePath: this.currentFile,
       commit: this.commit.sha,
+      onSuppressed: (n: number) => (this.suppressed += n),
     });
     for (const f of local) {
       f.line = buf.firstLine + f.line - 1;
@@ -340,6 +346,11 @@ export class LogPatchParser {
   /** Distinct files the generated-file group excluded from this scan. */
   generatedExcludedCount(): number {
     return this.generatedSkipped.size;
+  }
+
+  /** Findings dropped by an inline directive while parsing the diff. */
+  suppressedCount(): number {
+    return this.suppressed;
   }
 }
 
