@@ -146,10 +146,64 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   // Together with the empty-segment change above the whole 0.1.2 path delta is
   // 0.3488% -> 0.3684%, or 0.0196%.
   /^(?:[A-Za-z]:)?[\\/](?:[\w.+-]*[\\/])+[\w+-]+(?:\.[\w+-]+)+$/,
+
+  // Build-setting assignment captured whole, added in 0.1.2:
+  // "CLANG_DEBUG_INFORMATION_LEVEL=default" out of scripts/build-xcframework.sh.
+  // 4 tree and 10 history findings on bugsnag-cocoa.
+  //
+  // The "=" is the signal. Base64 uses "=" only as trailing padding, so an "="
+  // with something after it is not padding -- hence [^=] rather than a bare "=",
+  // which is what keeps an all-uppercase base64 blob ending in "=" reporting.
+  /^[A-Z][A-Z0-9_]*=[^=]/,
 ];
 
-function isStructuralFalsePositive(value: string): boolean {
-  return STRUCTURAL_FALSE_POSITIVES.some((r) => r.test(value));
+/**
+ * A dotted identifier chain: reverse-DNS bundle ids, build products, and
+ * property accesses like `process.env.BUILDKITE_MESSAGE`.
+ *
+ * A predicate rather than a regex because the shape ALONE is not safe. A JWT is
+ * three dot-separated base64url segments -- structurally identical to
+ * `com.apple.Foo` -- and the chain pattern by itself skips 56.96% of JWT-shaped
+ * values. That is a credential blind spot, not a precision fix.
+ *
+ * The second condition is what makes it safe: every segment must itself score
+ * BELOW the entropy bar. Structured text is assembled from low-entropy parts;
+ * a secret is not. With it, the measured skip rate on JWT-shaped values is
+ * 0.0000%, and on github, AWS, Slack and 32-byte base64 values it is 0.0000%
+ * too, while every real false positive on both benchmark corpora is still
+ * covered.
+ *
+ * Do not reduce this to a regex. The entropy condition is the matcher.
+ */
+function isDottedIdentifierChain(value: string, threshold: number): boolean {
+  if (!/^[A-Za-z_$][\w$-]*(?:\.[A-Za-z_$][\w$-]*)+$/.test(value)) return false;
+  const segments = value.split(".").filter(Boolean);
+  return segments.length >= 2 && segments.every((seg) => shannonEntropy(seg) < threshold);
+}
+
+/**
+ * NOT a matcher, and deliberately so.
+ *
+ * A bare-identifier filter would remove the ~23 remaining ObjC-constant
+ * findings on bugsnag-cocoa's history ("BSG_KSJSONDecodeOptionIgnoreNullInArray",
+ * "NSURLIsExcludedFromBackupKey"). Every predicate that catches them was
+ * measured against 200,000 samples of each credential shape and every one is
+ * disqualifying:
+ *
+ *   ^[A-Z][A-Z0-9_]*$          skips 100.0000% of AWS access key ids
+ *   ^[A-Za-z_][A-Za-z0-9_]*$   skips 100.0000% of AWS ids and ghp_ tokens
+ *   ^[A-Za-z._-]+$             skips 3.6650% of AWS ids, 0.2140% of ghp_
+ *   ^[a-z][a-zA-Z]*$           skips 0.0645% of 32-character base64
+ *
+ * AKIAIOSFODNN7EXAMPLE *is* SCREAMING_SNAKE_CASE. Leaving that noise visible
+ * beats risking a false negative, so those findings are accepted as noise. If a
+ * future release wants them gone, the answer is context (the string is an
+ * argument to a known ObjC API), never the value's shape.
+ */
+
+function isStructuralFalsePositive(value: string, threshold: number): boolean {
+  if (STRUCTURAL_FALSE_POSITIVES.some((r) => r.test(value))) return true;
+  return isDottedIdentifierChain(value, threshold);
 }
 
 /**
@@ -178,7 +232,7 @@ export function findHighEntropyStrings(text: string, threshold: number): Entropy
       const index = m.index + m[0].lastIndexOf(value);
       if (seen.has(index)) continue;
 
-      if (isStructuralFalsePositive(value)) continue;
+      if (isStructuralFalsePositive(value, threshold)) continue;
       if (charsetDiversity(value) < 2) continue;
 
       const entropy = shannonEntropy(value);
