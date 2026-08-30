@@ -566,7 +566,33 @@ function passesFilters(value: string, rule: SecretRule, allowValues: RegExp[]): 
   if (rule.allowlist?.some((r) => r.test(value))) return false;
   if (allowValues.some((r) => r.test(value))) return false;
   if (rule.entropy !== undefined && shannonEntropy(value) < rule.entropy) return false;
+  if (!clearsPostPrefixFloor(value, rule)) return false;
   return true;
+}
+
+/**
+ * The post-prefix entropy floor, applied in one place for every rule that
+ * declares it.
+ *
+ * One shared check rather than a per-rule allowlist entry, because the eight
+ * rules that need it share a defect rather than a value: a fixed prefix built
+ * only from characters its own variable class accepts, so the pattern describes
+ * a single unbroken run of one alphabet and any long enough run of that
+ * alphabet satisfies it. Eight allowlists would be eight copies of the same
+ * argument, and rule 104 with the same shape would arrive without one.
+ *
+ * Fails open twice over. A rule that declares nothing is untouched, and a
+ * declared prefix that no longer matches leaves the finding reported rather
+ * than silently dropped -- a filter that cannot locate the variable portion has
+ * not earned the right to hide what follows it. See postPrefixEntropy in
+ * rules.ts for the measurement the threshold comes from.
+ */
+function clearsPostPrefixFloor(value: string, rule: SecretRule): boolean {
+  const floor = rule.postPrefixEntropy;
+  if (!floor) return true;
+  const matched = floor.prefix.exec(value);
+  if (!matched) return true;
+  return shannonEntropy(value.slice(matched[0].length)) >= floor.min;
 }
 
 /**
