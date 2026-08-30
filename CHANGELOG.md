@@ -2,8 +2,10 @@
 
 ## 0.1.2 — unreleased
 
-One safety fix and one precision pass. No rule IDs, thresholds, output formats
-or fingerprints changed, so existing baselines keep matching.
+One safety fix, one precision pass, and remediation guidance on the surfaces
+that had none. No rule IDs, thresholds or fingerprints changed, so existing
+baselines keep matching. The only output change is additive: SARIF results gain
+a `properties.remediation` field.
 
 ### Fixed — fixture-path suppression could hide a real credential
 
@@ -22,7 +24,15 @@ ever report.
 The two policies had been fused only because `generic: true` was introduced for
 overlap tiebreaking and then reused for suppression. They are separate now:
 suppression covers the entropy pass alone. **Suppress the guess, never the
-certainty.** Measured cost on both benchmark corpora: zero extra findings.
+certainty.**
+
+This surfaces findings that were previously hidden, and on a repository that
+keeps credentials in fixtures that is a large number. bugsnag-js gains 64
+working-tree and 84 history `generic-api-key-assignment` findings — 9 and 23
+distinct values, mostly one test API key repeated across fixture JSON. They were
+always in those files; 0.1.1 was not showing them. That is the fix working, not
+a regression. bugsnag-cocoa gains one, because its suite lives in `Tests/` and
+the path match is case-sensitive — see below.
 
 Known and unchanged: the fixture-path match is case-sensitive, so `Tests/` is
 not recognised where `tests/` is. Recorded in the code rather than fixed here,
@@ -60,17 +70,47 @@ clear the remaining ObjC-constant noise skips 100% of AWS access key ids or
 `ghp_` tokens — `AKIAIOSFODNN7EXAMPLE` is SCREAMING_SNAKE_CASE. That noise stays
 visible on purpose, and the reasoning sits beside the code.
 
-Measured, `--fail-on never`:
+Measured on both checkouts with `--fail-on never`, split by tier because the two
+halves of this release move in opposite directions: the entropy tier is the
+precision work, and the format-match column is the safety fix surfacing findings
+0.1.1 hid.
 
-| corpus | 0.1.1 | 0.1.2 |
-|---|---|---|
-| bugsnag-js working tree | 4 | 0 |
-| bugsnag-js history | 28 | 21 |
-| bugsnag-cocoa working tree | 133 | 1 |
-| bugsnag-cocoa history | 199 | 26 |
+| corpus | entropy | format-match | total |
+|---|---|---|---|
+| bugsnag-js working tree | 4 → **0** | 0 → **64** | 4 → 64 |
+| bugsnag-js history | 26 → **19** | 2 → **86** | 28 → 105 |
+| bugsnag-cocoa working tree | 132 → **0** | 1 → 1 | 133 → 1 |
+| bugsnag-cocoa history | 196 → **23** | 3 → **6** | 199 → 29 |
+
+A rising total is the expected result on a repository that keeps credentials in
+fixtures. Read the entropy column for the noise reduction and the format-match
+column for what was being hidden.
 
 Every specific-rule finding, and the `high` API key in bugsnag-cocoa's
-`BugsnagEvent1.json`, still reports.
+`BugsnagEvent1.json`, still reports. Fingerprints are unchanged for all 48
+findings present in both the 0.1.1 and 0.1.2 scans.
+
+### Remediation guidance
+
+A finding now says what to do about it. Previously only the editor knew — the
+CLI, JSON and SARIF surfaces reported a credential and suggested nothing, which
+is the half of "detect, verify, remediate" that CI actually reads.
+
+- **The text report and SARIF carry guidance** on a genuine finding: remove the
+  credential from source and load it from an environment variable instead. In
+  SARIF it is per result, in `properties.remediation`; rule metadata is
+  untouched, so nothing about a rule changes with the files a scan covered.
+- **VS Code offers the matching quick-fix** where it applies — *Move to `.env`
+  and reference it*, alongside redact and, for a credential that verified live,
+  rotate. **The `.env` write happens only when you invoke that quick-fix.**
+  Nothing is written automatically, and a scan never writes anything.
+- **Fixture findings still report, and carry no relocation advice.** Now that
+  format-match findings in test paths are visible, telling someone to move
+  `YOUR_BROWSER_API_KEY` out of a fixture and into `.env` would be wrong advice
+  — so the finding appears without it, and the editor withholds only that one
+  action there. Redact and rotate stay available, because a credential that is
+  genuinely live in a test file is the most dangerous thing this tool finds.
+- JSON is unchanged.
 
 ## 0.1.1
 
