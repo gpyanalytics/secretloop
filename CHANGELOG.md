@@ -1,6 +1,78 @@
 # Changelog
 
-## 0.1.1 — unreleased
+## 0.1.2 — unreleased
+
+One safety fix and one precision pass. No rule IDs, thresholds, output formats
+or fingerprints changed, so existing baselines keep matching.
+
+### Fixed — fixture-path suppression could hide a real credential
+
+0.1.1 stopped reporting *generic-tier* findings in test, fixture and example
+paths. "Generic tier" was `generic-high-entropy` **or** `genericRuleIds`, and
+that set's single member is `generic-api-key-assignment` — a `high` severity
+`format-match`, and the only rule covering providers with no named format. So
+`api_key = "…"` in a test file was hidden at default settings, in the place
+credentials most often leak.
+
+It was worse than one hidden rule. Suppression runs inside `scanText`, and
+verification runs afterwards over what `scanText` returned, so a
+**verified-live** credential in a fixture path had no path by which it could
+ever report.
+
+The two policies had been fused only because `generic: true` was introduced for
+overlap tiebreaking and then reused for suppression. They are separate now:
+suppression covers the entropy pass alone. **Suppress the guess, never the
+certainty.** Measured cost on both benchmark corpora: zero extra findings.
+
+Known and unchanged: the fixture-path match is case-sensitive, so `Tests/` is
+not recognised where `tests/` is. Recorded in the code rather than fixed here,
+because making it case-insensitive *widens* suppression and this release
+narrows it. It is safe to do later precisely because of the split above.
+
+### Fewer findings — the entropy tier skips structured text
+
+Entropy false positives are not random: they are structured text that happens
+to score well. Each matcher below is paired with an assertion that real
+credentials still report through it.
+
+- **Mangled and plain C/ObjC symbols.** A crash report is a symbol table.
+- **Source filenames and `#import` targets** — a closed extension list, so a
+  high-entropy value ending `.pem` or `.key` still reports.
+- **Absolute paths with doubled slashes or `+` segments** — dyld image paths.
+  Not a new filter; the existing one could not match an empty segment or a `+`.
+- **Dotted identifier chains** — reverse-DNS bundle ids, build products,
+  `process.env.X`, `this.foo.Bar` — **only when every segment is itself
+  low-entropy.** A JWT is three dot-separated base64url segments, so the shape
+  alone would have skipped 56.96% of them; the segment condition takes that to
+  0.0000%.
+- **Whole `NAME=value` build settings**, keyed on an `=` that is not base64
+  padding.
+- **Module specifiers, by syntactic position** — the operand of `from`,
+  `require`, `import` or `declare module`. Position rather than shape, because
+  a shape-based rule for these costs 1.802% of random keys, and because
+  `const token = "ghp_…"` is not an import whatever the value looks like.
+- **Xcode `.xcscheme` files join the generated group.** Their noise is
+  build-target names, which are bare identifiers and cannot be matched by shape
+  safely.
+
+There is deliberately **no bare-identifier matcher**. Every predicate that would
+clear the remaining ObjC-constant noise skips 100% of AWS access key ids or
+`ghp_` tokens — `AKIAIOSFODNN7EXAMPLE` is SCREAMING_SNAKE_CASE. That noise stays
+visible on purpose, and the reasoning sits beside the code.
+
+Measured, `--fail-on never`:
+
+| corpus | 0.1.1 | 0.1.2 |
+|---|---|---|
+| bugsnag-js working tree | 4 | 0 |
+| bugsnag-js history | 28 | 21 |
+| bugsnag-cocoa working tree | 133 | 1 |
+| bugsnag-cocoa history | 199 | 26 |
+
+Every specific-rule finding, and the `high` API key in bugsnag-cocoa's
+`BugsnagEvent1.json`, still reports.
+
+## 0.1.1
 
 Precision and honesty, plus four narrowly-scoped detection fixes found by
 benchmarking against gitleaks and TruffleHog. Every other rule, rule ID and
