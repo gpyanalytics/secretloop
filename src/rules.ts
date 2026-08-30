@@ -1152,6 +1152,18 @@ export const baseExcludePaths = [
   "**/Gemfile.lock",
   "**/Cargo.lock",
   "**/go.sum",
+  // Go workspaces (Go 1.18+) put the same content -- module paths, versions and
+  // checksums -- in a second filename, and only the first was ever listed. One
+  // public Go repository produced 44 generic-high-entropy findings from a single
+  // go.work.sum, every one a module digest.
+  //
+  // Here rather than in the generated group, which is the one decision this
+  // entry actually makes. The two files are the same file class with the same
+  // content, so they should answer --include-generated the same way, and
+  // go.sum's answer has always been "no". Putting this one in the generated
+  // group would have made the flag scan go.work.sum but not go.sum -- a
+  // difference no one could predict from the filenames.
+  "**/go.work.sum",
   "**/composer.lock",
 ];
 
