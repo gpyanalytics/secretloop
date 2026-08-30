@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.2 — unreleased
+## 0.1.2
 
 One safety fix, one precision pass, and remediation guidance on the surfaces
 that had none. No rule IDs, thresholds or fingerprints changed, so existing
