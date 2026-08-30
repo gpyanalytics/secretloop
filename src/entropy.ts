@@ -114,6 +114,21 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   // "identifier-looking" predicate was measured and rejected outright; see the
   // note on bare identifiers below.
   /^_[A-Za-z][A-Za-z_]*$/,
+
+  // Source filenames and #import targets, added in 0.1.2. 17 tree findings and
+  // 27 history findings on bugsnag-cocoa, every one the operand of an #import
+  // in a .m/.mm/.c file -- BSGEventUploader.m:11 imports
+  // "BSGEventUploadKSCrashReportOperation.h". The value is a filename the
+  // compiler resolves, never a credential.
+  //
+  // Closed extension alternation, anchored at the end, exactly like the hashed
+  // asset filename filter above: "a name ending in a known source extension",
+  // not "anything with a dot in it". A high-entropy value ending .exe, .sql,
+  // .pem or .key still reports.
+  //
+  // The stem class excludes = and /, so a base64 blob cannot reach the
+  // alternation by accident. Measured 0.0000% across every credential shape.
+  /^[A-Za-z_][\w+-]*(?:\.[\w+-]+)*\.(?:h|hh|hpp|hxx|m|mm|c|cc|cpp|cxx|swift)$/i,
 ];
 
 function isStructuralFalsePositive(value: string): boolean {
