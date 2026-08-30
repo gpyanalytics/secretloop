@@ -27,11 +27,13 @@ suppression covers the entropy pass alone. **Suppress the guess, never the
 certainty.**
 
 This surfaces findings that were previously hidden, and on a repository that
-keeps credentials in fixtures that is a large number. bugsnag-js gains 64
+keeps credentials in fixtures that is a large number. A large open-source
+JavaScript SDK gains 64
 working-tree and 84 history `generic-api-key-assignment` findings — 9 and 23
 distinct values, mostly one test API key repeated across fixture JSON. They were
 always in those files; 0.1.1 was not showing them. That is the fix working, not
-a regression. bugsnag-cocoa gains one, because its suite lives in `Tests/` and
+a regression. A large open-source Objective-C SDK gains one, because its suite
+lives in `Tests/` and
 the path match is case-sensitive — see below.
 
 Known and unchanged: the fixture-path match is case-sensitive, so `Tests/` is
@@ -77,17 +79,17 @@ precision work, and the format-match column is the safety fix surfacing findings
 
 | corpus | entropy | format-match | total |
 |---|---|---|---|
-| bugsnag-js working tree | 4 → **0** | 0 → **64** | 4 → 64 |
-| bugsnag-js history | 26 → **19** | 2 → **86** | 28 → 105 |
-| bugsnag-cocoa working tree | 132 → **0** | 1 → 1 | 133 → 1 |
-| bugsnag-cocoa history | 196 → **23** | 3 → **6** | 199 → 29 |
+| JS SDK (tree) | 4 → **0** | 0 → **64** | 4 → 64 |
+| JS SDK (history) | 26 → **19** | 2 → **86** | 28 → 105 |
+| ObjC SDK (tree) | 132 → **0** | 1 → 1 | 133 → 1 |
+| ObjC SDK (history) | 196 → **23** | 3 → **6** | 199 → 29 |
 
 A rising total is the expected result on a repository that keeps credentials in
 fixtures. Read the entropy column for the noise reduction and the format-match
 column for what was being hidden.
 
-Every specific-rule finding, and the `high` API key in bugsnag-cocoa's
-`BugsnagEvent1.json`, still reports. Fingerprints are unchanged for all 48
+Every specific-rule finding, and the `high` API key in one project's test
+fixtures, still reports. Fingerprints are unchanged for all 48
 findings present in both the 0.1.1 and 0.1.2 scans.
 
 ### Remediation guidance
