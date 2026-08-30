@@ -1,6 +1,36 @@
 import { Finding, UnknownReason, redactValue } from "./scanner";
+import { isFixturePath } from "./config";
 
 export type OutputFormat = "text" | "json" | "sarif";
+
+/**
+ * What to do about a credential that is sitting in source.
+ *
+ * SecretLoop could already move a secret into `.env` from the editor lightbulb,
+ * but no CLI, JSON or SARIF surface ever said so -- someone running it in CI saw
+ * a finding and no suggestion of what to do about it. This is that sentence,
+ * and it is a constant rather than a template on purpose: it must never be able
+ * to interpolate the credential it is advising about.
+ */
+export const REMEDIATION_NOTE =
+  "Remove it from source and load it from an environment variable instead; " +
+  "in VS Code, the lightbulb will do it for you.";
+
+/**
+ * Whether relocation advice applies to a finding.
+ *
+ * Conditional because 0.1.2 made format-match findings in test paths report --
+ * correctly -- and telling someone to move `YOUR_BROWSER_API_KEY` out of a
+ * fixture and into `.env` is advice that is simply wrong. The finding still
+ * reports; it carries no relocation advice.
+ *
+ * A finding with no path at all (scanText over a raw stream) is NOT a fixture:
+ * a check that could not run has proven nothing, and the safe direction here is
+ * to give the advice.
+ */
+function wantsRelocationAdvice(finding: Finding): boolean {
+  return finding.file ? !isFixturePath(finding.file) : true;
+}
 
 export interface ReportOptions {
   /** Mask secret values in the output. Default true — reports end up in CI logs. */
@@ -336,6 +366,10 @@ function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): s
 
   out.push(`${indent}  value: ${displayValue(f, options.redact)}`);
   if (f.verifyDetail) out.push(`${indent}  ${f.verifyDetail}`);
+  // Suppressed only when EVERY occurrence is in a fixture path. One credential
+  // in src/ and tests/ is one entry here, and it still needs moving -- so the
+  // group errs toward giving the advice.
+  if (group.some(wantsRelocationAdvice)) out.push(`${indent}  ${REMEDIATION_NOTE}`);
   // Every occurrence keeps its own identity, and every one is printed: a
   // baseline entry is per occurrence, so showing only the first would leave
   // someone unable to accept the rest.
@@ -441,6 +475,14 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
             verificationStatus: f.verifyStatus ?? "unchecked",
             verificationReason: f.verifyReason ?? null,
             verificationDetail: f.verifyDetail ?? null,
+            // Per RESULT, not a rule-level `help`. Rule metadata that appeared
+            // or vanished depending on which files a scan happened to cover
+            // would be unstable for no benefit, and this is the field the
+            // format provides for exactly this -- the same bag the invocations
+            // block above uses. Null rather than absent so the key set is
+            // constant, and null on a fixture path for the reason
+            // wantsRelocationAdvice documents.
+            remediation: wantsRelocationAdvice(f) ? REMEDIATION_NOTE : null,
           },
           // GitHub code scanning keys alert identity off this field, so the name
           // is a one-way door: once alerts exist under it, changing it

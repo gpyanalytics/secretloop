@@ -6,6 +6,7 @@ import {
   defaultConfig,
   BASELINE_VERSION,
   SecretLoopConfig,
+  isFixturePath,
 } from "./config";
 import { redactInPlace, extractToEnv } from "./remediate";
 import { isVerifiable, verifyFindings, verificationProvider, VerificationCache } from "./verify";
@@ -471,6 +472,28 @@ export function offersRotation(f: Finding): boolean {
  * credential" over a 403 is the boolean's old mistake in a new place: the label
  * would be stating the verdict the check explicitly failed to reach.
  */
+/**
+ * Whether the move-to-`.env` quick-fix is offered for a finding.
+ *
+ * Withheld in test, fixture and example paths. 0.1.2 made format-match findings
+ * report there -- correctly, because a real credential in a test file is a
+ * leaked credential -- but "relocate this so your application can load it" is
+ * the wrong sentence for an intentional fixture value.
+ *
+ * Only THIS action is withheld. Redact, copy-then-redact and rotate stay
+ * offered: if a fixture-path finding reported but offered no way to act on it,
+ * that would be a softer version of the blindness bug 0.1.2 exists to close --
+ * visible, and unfixable. Rotation especially, since offersRotation fires only
+ * on verified-live or a 403, which is precisely when a credential in a test
+ * file is most dangerous.
+ *
+ * A finding with no path is not a fixture; see wantsRelocationAdvice in
+ * report.ts for the same reasoning.
+ */
+export function offersEnvExtraction(f: Finding): boolean {
+  return f.file ? !isFixturePath(f.file) : true;
+}
+
 export function rotateActionTitle(f: Finding): string {
   if (f.confidence === "verified-live") {
     return "SecretLoop: Rotate / revoke this LIVE credential";
@@ -522,16 +545,18 @@ export class SecretCodeActionProvider implements vscode.CodeActionProvider {
       };
       actions.push(copyRedactAction);
 
-      const extractAction = new vscode.CodeAction(
-        "SecretLoop: Move to .env and reference it",
-        vscode.CodeActionKind.QuickFix
-      );
-      extractAction.command = {
-        command: "secretloop.extractToEnv",
-        title: "Extract to .env",
-        arguments: [document.uri, finding],
-      };
-      actions.push(extractAction);
+      if (offersEnvExtraction(finding)) {
+        const extractAction = new vscode.CodeAction(
+          "SecretLoop: Move to .env and reference it",
+          vscode.CodeActionKind.QuickFix
+        );
+        extractAction.command = {
+          command: "secretloop.extractToEnv",
+          title: "Extract to .env",
+          arguments: [document.uri, finding],
+        };
+        actions.push(extractAction);
+      }
     }
 
     return actions;
