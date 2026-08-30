@@ -349,4 +349,82 @@ test("(d1) base64 padding is not an assignment", () => {
   assert.ok(!skipped(padded), `a padded uppercase blob was skipped as a build setting: ${padded}`);
 });
 
+// ---------------------------------------------------------------------------
+suite("0.1.2 (f2) — module specifiers, by syntactic position");
+
+/**
+ * Evidence: the last 2 survivors of bugsnag-js's tree scan, and 2 of its
+ * history findings -- 'react-native/Libraries/TurboModule/RCTExport', imported
+ * by packages/react-native/src/NativeBugsnag.ts and declared by
+ * packages/react-native/types/react-native-internals.d.ts.
+ *
+ * This matcher keys on POSITION, not on the value's shape, and that choice is
+ * load-bearing twice over.
+ *
+ * 1. Safety. A shape-based rule here would have to skip "a relative path with
+ *    no ./ prefix and no extension", and 0.1.1 measured every such predicate at
+ *    >= 1.802% of random keys against the 0.823% then accepted. Position costs
+ *    nothing: `const token = "ghp_..."` is not an import no matter what the
+ *    value looks like.
+ *
+ * 2. It keeps a pre-existing test honest. tests/detection.test.ts pins this
+ *    exact value as MUST-FIRE, in the form `m = "..."`, recording the accepted
+ *    cost of 0.1.1's narrowing. That form is not import position, so it still
+ *    fires and that test still passes. The 1.802% is never paid.
+ *
+ * The skip is entropy-tier only. Named provider rules do not consult position
+ * and are unaffected, which the last test here asserts.
+ */
+const SPECIFIER = "react-native/Libraries/TurboModule/RCTExport";
+
+test("a module specifier in import position is skipped", () => {
+  const forms = [
+    `import type { TurboModule } from '${SPECIFIER}'`,
+    `declare module '${SPECIFIER}' {`,
+    `const x = require('${SPECIFIER}')`,
+    `export * from '${SPECIFIER}'`,
+    `const m = await import('${SPECIFIER}')`,
+    `import '${SPECIFIER}'`,
+  ];
+  for (const src of forms) {
+    assert.strictEqual(
+      findHighEntropyStrings(src, THRESHOLD).length,
+      0,
+      `import position still fired: ${src}`
+    );
+  }
+});
+
+test("(f2) real credentials still report", () => assertRealSecretsStillReport("(f2)"));
+
+test("(f2) ADVERSARIAL: assignment position is never import position", () => {
+  // Each of these puts an import keyword within reach of the value without the
+  // value being an import operand. All must still report.
+  const [, ghp] = REAL_SECRETS[0];
+  const cases: Array<[label: string, src: string]> = [
+    ["the pinned detection.test.ts form", `m = "${SPECIFIER}"`],
+    ["a plain assignment", `const token = "${ghp}"`],
+    ["an object key", `apiKey: "${ghp}"`],
+    ["a variable literally named from", `const from = "${ghp}"`],
+    ["a property named from", `x.from = "${ghp}"`],
+    ["an identifier prefixed by import", `const importedKey = "${ghp}"`],
+    ["a comment mentioning import and from", `// import the key from the vault\nconst k = "${ghp}"`],
+    ["a require-like function that is not require", `notrequire("${ghp}")`],
+  ];
+  for (const [label, src] of cases) {
+    assert.ok(
+      findHighEntropyStrings(src, THRESHOLD).length > 0,
+      `${label}: a value was skipped as a module specifier -- ${src}`
+    );
+  }
+});
+
+test("(f2) is entropy-tier only: a named rule still fires in import position", () => {
+  // If someone ever writes a credential where a specifier belongs, position
+  // must not hide it. Named rules do not consult position at all.
+  const [, ghp] = REAL_SECRETS[0];
+  const ids = scanText(`import x from "${ghp}";\n`, { filePath: "src/a.ts" }).map((f) => f.ruleId);
+  assert.ok(ids.includes("github-token"), `named rule suppressed in import position: ${ids.join(",")}`);
+});
+
 finish();

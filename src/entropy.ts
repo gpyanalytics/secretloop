@@ -220,6 +220,38 @@ function charsetDiversity(value: string): number {
   return classes;
 }
 
+/**
+ * Is the string at `index` the operand of an import, rather than a value?
+ *
+ * The only filter here that reads POSITION instead of shape, and the choice is
+ * load-bearing twice.
+ *
+ * Safety. The values this exists for -- 'react-native/Libraries/TurboModule/
+ * RCTExport', imported by NativeBugsnag.ts and declared by
+ * react-native-internals.d.ts -- are relative paths with no ./ prefix and no
+ * extension. 0.1.1 measured every value-shape predicate that catches that at
+ * >= 1.802% of random keys, against the 0.823% it accepted, and recorded the
+ * trade rather than paying it. Position costs nothing instead: `const token =
+ * "ghp_..."` is not an import whatever the value looks like.
+ *
+ * Honesty. tests/detection.test.ts pins that same value as MUST-FIRE in the
+ * form `m = "..."`, which is not import position -- so it still fires and that
+ * test still passes untouched. A shape-based fix would have forced it red.
+ *
+ * Entropy-tier only. Named provider rules never consult position, so a
+ * credential written where a specifier belongs still reports.
+ */
+const IMPORT_POSITION =
+  /(?:\bfrom\s+|\brequire\s*\(\s*|\bimport\s*\(?\s*|\bdeclare\s+module\s+|\bexport\s+\*\s+from\s+)$/;
+
+function isModuleSpecifier(text: string, index: number): boolean {
+  // 80 characters is well past the longest keyword run this matches, and
+  // bounding it keeps the scan linear on very long single-line files -- crash
+  // report JSON is exactly that.
+  const before = text.slice(Math.max(0, index - 80), index).replace(/["\'`]\s*$/, "");
+  return IMPORT_POSITION.test(before);
+}
+
 export function findHighEntropyStrings(text: string, threshold: number): EntropyMatch[] {
   const matches: EntropyMatch[] = [];
   const seen = new Set<number>();
@@ -233,6 +265,7 @@ export function findHighEntropyStrings(text: string, threshold: number): Entropy
       if (seen.has(index)) continue;
 
       if (isStructuralFalsePositive(value, threshold)) continue;
+      if (isModuleSpecifier(text, index)) continue;
       if (charsetDiversity(value) < 2) continue;
 
       const entropy = shannonEntropy(value);
