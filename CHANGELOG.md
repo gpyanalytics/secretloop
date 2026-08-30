@@ -1,6 +1,120 @@
 # Changelog
 
-## 0.1.1 — unreleased
+## 0.1.2 — unreleased
+
+One safety fix, one precision pass, and remediation guidance on the surfaces
+that had none. No rule IDs, thresholds or fingerprints changed, so existing
+baselines keep matching. The only output change is additive: SARIF results gain
+a `properties.remediation` field.
+
+### Fixed — fixture-path suppression could hide a real credential
+
+0.1.1 stopped reporting *generic-tier* findings in test, fixture and example
+paths. "Generic tier" was `generic-high-entropy` **or** `genericRuleIds`, and
+that set's single member is `generic-api-key-assignment` — a `high` severity
+`format-match`, and the only rule covering providers with no named format. So
+`api_key = "…"` in a test file was hidden at default settings, in the place
+credentials most often leak.
+
+It was worse than one hidden rule. Suppression runs inside `scanText`, and
+verification runs afterwards over what `scanText` returned, so a
+**verified-live** credential in a fixture path had no path by which it could
+ever report.
+
+The two policies had been fused only because `generic: true` was introduced for
+overlap tiebreaking and then reused for suppression. They are separate now:
+suppression covers the entropy pass alone. **Suppress the guess, never the
+certainty.**
+
+This surfaces findings that were previously hidden, and on a repository that
+keeps credentials in fixtures that is a large number. A large open-source
+JavaScript SDK gains 64
+working-tree and 84 history `generic-api-key-assignment` findings — 9 and 23
+distinct values, mostly one test API key repeated across fixture JSON. They were
+always in those files; 0.1.1 was not showing them. That is the fix working, not
+a regression. A large open-source Objective-C SDK gains one, because its suite
+lives in `Tests/` and
+the path match is case-sensitive — see below.
+
+Known and unchanged: the fixture-path match is case-sensitive, so `Tests/` is
+not recognised where `tests/` is. Recorded in the code rather than fixed here,
+because making it case-insensitive *widens* suppression and this release
+narrows it. It is safe to do later precisely because of the split above.
+
+### Fewer findings — the entropy tier skips structured text
+
+Entropy false positives are not random: they are structured text that happens
+to score well. Each matcher below is paired with an assertion that real
+credentials still report through it.
+
+- **Mangled and plain C/ObjC symbols.** A crash report is a symbol table.
+- **Source filenames and `#import` targets** — a closed extension list, so a
+  high-entropy value ending `.pem` or `.key` still reports.
+- **Absolute paths with doubled slashes or `+` segments** — dyld image paths.
+  Not a new filter; the existing one could not match an empty segment or a `+`.
+- **Dotted identifier chains** — reverse-DNS bundle ids, build products,
+  `process.env.X`, `this.foo.Bar` — **only when every segment is itself
+  low-entropy.** A JWT is three dot-separated base64url segments, so the shape
+  alone would have skipped 56.96% of them; the segment condition takes that to
+  0.0000%.
+- **Whole `NAME=value` build settings**, keyed on an `=` that is not base64
+  padding.
+- **Module specifiers, by syntactic position** — the operand of `from`,
+  `require`, `import` or `declare module`. Position rather than shape, because
+  a shape-based rule for these costs 1.802% of random keys, and because
+  `const token = "ghp_…"` is not an import whatever the value looks like.
+- **Xcode `.xcscheme` files join the generated group.** Their noise is
+  build-target names, which are bare identifiers and cannot be matched by shape
+  safely.
+
+There is deliberately **no bare-identifier matcher**. Every predicate that would
+clear the remaining ObjC-constant noise skips 100% of AWS access key ids or
+`ghp_` tokens — `AKIAIOSFODNN7EXAMPLE` is SCREAMING_SNAKE_CASE. That noise stays
+visible on purpose, and the reasoning sits beside the code.
+
+Measured on both checkouts with `--fail-on never`, split by tier because the two
+halves of this release move in opposite directions: the entropy tier is the
+precision work, and the format-match column is the safety fix surfacing findings
+0.1.1 hid.
+
+| corpus | entropy | format-match | total |
+|---|---|---|---|
+| JS SDK (tree) | 4 → **0** | 0 → **64** | 4 → 64 |
+| JS SDK (history) | 26 → **19** | 2 → **86** | 28 → 105 |
+| ObjC SDK (tree) | 132 → **0** | 1 → 1 | 133 → 1 |
+| ObjC SDK (history) | 196 → **23** | 3 → **6** | 199 → 29 |
+
+A rising total is the expected result on a repository that keeps credentials in
+fixtures. Read the entropy column for the noise reduction and the format-match
+column for what was being hidden.
+
+Every specific-rule finding, and the `high` API key in one project's test
+fixtures, still reports. Fingerprints are unchanged for all 48
+findings present in both the 0.1.1 and 0.1.2 scans.
+
+### Remediation guidance
+
+A finding now says what to do about it. Previously only the editor knew — the
+CLI, JSON and SARIF surfaces reported a credential and suggested nothing, which
+is the half of "detect, verify, remediate" that CI actually reads.
+
+- **The text report and SARIF carry guidance** on a genuine finding: remove the
+  credential from source and load it from an environment variable instead. In
+  SARIF it is per result, in `properties.remediation`; rule metadata is
+  untouched, so nothing about a rule changes with the files a scan covered.
+- **VS Code offers the matching quick-fix** where it applies — *Move to `.env`
+  and reference it*, alongside redact and, for a credential that verified live,
+  rotate. **The `.env` write happens only when you invoke that quick-fix.**
+  Nothing is written automatically, and a scan never writes anything.
+- **Fixture findings still report, and carry no relocation advice.** Now that
+  format-match findings in test paths are visible, telling someone to move
+  `YOUR_BROWSER_API_KEY` out of a fixture and into `.env` would be wrong advice
+  — so the finding appears without it, and the editor withholds only that one
+  action there. Redact and rotate stay available, because a credential that is
+  genuinely live in a test file is the most dangerous thing this tool finds.
+- JSON is unchanged.
+
+## 0.1.1
 
 Precision and honesty, plus four narrowly-scoped detection fixes found by
 benchmarking against gitleaks and TruffleHog. Every other rule, rule ID and

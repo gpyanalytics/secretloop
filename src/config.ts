@@ -85,6 +85,24 @@ export const FIXTURE_PATH_SEGMENTS = new Set([
   "examples",
 ]);
 
+/**
+ * KNOWN LATENT ISSUE, recorded deliberately rather than fixed in 0.1.2.
+ *
+ * The comparison is case-SENSITIVE, so `Tests/`, `Fixtures/` and `Examples/`
+ * are not recognised. bugsnag-cocoa keeps its suite in `Tests/`, which is why
+ * the [high] generic-api-key-assignment in
+ * Tests/BugsnagTests/Data/BugsnagEvents/BugsnagEvent1.json reported under
+ * 0.1.1 -- luck, not design.
+ *
+ * Not changed here because making it case-insensitive *widens* what gets
+ * suppressed, and 0.1.2 is the release that narrows it. Widening and narrowing
+ * suppression in one release would leave no clean before/after on either.
+ *
+ * Safe to do in a later release, and only now: since 0.1.2 the suppressible set
+ * is the entropy tier alone (see isEntropyTier), so broadening the path match
+ * can no longer hide a format-match or a verified-live credential. Re-measure
+ * the entropy-tier counts on both benchmark corpora when it lands.
+ */
 export function isFixturePath(relPath: string): boolean {
   return relPath
     .split(path.sep)
