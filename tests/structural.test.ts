@@ -133,4 +133,62 @@ test("(a2) does not skip an underscore-led value carrying digits or base64 punct
   }
 });
 
+// ---------------------------------------------------------------------------
+suite("0.1.2 (b) — source filenames and #import targets");
+
+/**
+ * Evidence: bugsnag-cocoa, 17 tree findings and 27 history findings. Every one
+ * is the operand of an #import in a .m/.mm/.c file --
+ * BSGEventUploader.m:11 `#import "BSGEventUploadKSCrashReportOperation.h"` --
+ * so the value is a filename the compiler resolves, never a credential.
+ *
+ * The extension alternation is closed and anchors the end, matching the
+ * existing hashed-asset-filename filter's philosophy: this stays "a name ending
+ * in a known source extension", not "anything with a dot in it".
+ */
+test("bare source filenames are skipped, including inside a real #import line", () => {
+  const headers = [
+    "BSGEventUploadKSCrashReportOperation.h",
+    "BSG_KSCrashSentry_CPPException.h",
+    "BSGURLSessionTracingProxy.h",
+    "BSGEventDiscardRuleFactory.h",
+    "BugsnagClient+Private.hpp",
+    "KSCrashReportConverter.mm",
+    "BugsnagConfiguration.swift",
+  ];
+  for (const h of headers) assert.ok(skipped(h), `source filename still fired: ${h}`);
+  // The real polyglot shape, not just the bare value.
+  const objc = headers.map((h) => `#import "${h}"`).join("\n");
+  assert.strictEqual(
+    findHighEntropyStrings(objc, THRESHOLD).length,
+    0,
+    "an ObjC #import block still produced entropy findings"
+  );
+});
+
+test("(b) real credentials still report", () => assertRealSecretsStillReport("(b)"));
+
+test("(b) extension list is closed: other extensions still report", () => {
+  // The filter is named for source files. A high-entropy value ending .exe or
+  // .sql is not one, and the existing asset filter makes the same promise.
+  for (const ext of ["exe", "sql", "pem", "key"]) {
+    const v = gen(36, alnum, 11) + "." + ext;
+    assert.ok(!skipped(v), `a value ending .${ext} was skipped as a source file`);
+  }
+});
+
+test("(b) does not skip a padded base64 value that happens to end in .c", () => {
+  // The stem class is [\w+-], which excludes = and /. A base64 blob carrying
+  // either cannot reach the extension alternation by accident.
+  //
+  // A *slash-bearing* value ending .c is deliberately not asserted here. It is
+  // already skipped, by 0.1.1's relative-path arm rather than by anything in
+  // this commit -- "segment/segment.ext" is precisely that arm's shape, and its
+  // 0.823% cost against random keys was measured and accepted then. Asserting
+  // it here would have made this test a claim about (b) that (b) does not make;
+  // it failed in RED for that reason, which is how the mis-specification
+  // surfaced.
+  assert.ok(!skipped(gen(38, alnum + "+/", 14) + "=.c"), "a padded base64 value was skipped");
+});
+
 finish();
