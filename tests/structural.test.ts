@@ -243,4 +243,110 @@ test("(c) a base64 blob that merely starts with / still reports", () => {
   assert.ok(!skipped(b64), `a slash-led base64 blob was skipped: ${b64}`);
 });
 
+// ---------------------------------------------------------------------------
+suite("0.1.2 (d) — dotted identifier chains, guarded by segment entropy");
+
+/**
+ * Evidence: reverse-DNS bundle ids and build products on bugsnag-cocoa
+ * (com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB in the storyboards,
+ * BugsnagNetworkRequestPlugin.xcframework.zip in .buildkite), and dotted
+ * property accesses on bugsnag-js (process.env.BUILDKITE_MESSAGE,
+ * this._config.enabledBreadcrumbTypes). 4 tree + 10 history on cocoa,
+ * 2 tree + 5 history on js.
+ *
+ * THE GUARD IS THE MATCHER. A JWT is three dot-separated base64url segments --
+ * structurally the same shape as com.apple.Foo. Measured: the chain shape alone
+ * skips 56.96% of JWT-shaped values. Requiring every segment to score BELOW the
+ * entropy bar takes that to 0.0000% while still covering every real false
+ * positive, because structured text is built from low-entropy parts and a
+ * secret is not.
+ *
+ * Do not remove the segment-entropy condition. It is the difference between a
+ * precision fix and a credential blind spot.
+ */
+test("dotted identifier chains are skipped", () => {
+  for (const v of [
+    "com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB",
+    "com.bugsnag.BugsnagNetworkRequestPlugin",
+    "process.env.BUILDKITE_MESSAGE",
+    "process.env.BROWSERSTACK_LOCAL_IDENTIFIER",
+    "this._config.enabledBreadcrumbTypes",
+    "BugsnagNetworkRequestPlugin.xcframework.zip",
+  ]) {
+    assert.ok(skipped(v), `dotted identifier chain still fired: ${v}`);
+  }
+});
+
+test("(d) an identifier segment long enough to cross the bar is NOT skipped", () => {
+  // The guard errs toward reporting, and this pins which way it errs.
+  //
+  // undocumented.json:48 on bugsnag-cocoa holds
+  // "BSGEnabledBreadcrumbType.BSGEnabledBreadcrumbTypeNavigation". Its second
+  // segment is 34 characters and scores 4.359, above the 4.3 bar, so the chain
+  // is not treated as structured and the finding survives. Every other
+  // identifier segment in either corpus scores at or below 4.004
+  // ("BugsnagNetworkRequestPlugin"), so this is the outlier rather than the
+  // rule -- and one surviving false positive is the correct price for a guard
+  // that never widens toward credentials.
+  assert.ok(!skipped("BSGEnabledBreadcrumbType.BSGEnabledBreadcrumbTypeNavigation"));
+});
+
+test("(d) real credentials still report", () => assertRealSecretsStillReport("(d)"));
+
+test("(d) GUARD: a dotted token with high-entropy segments still reports", () => {
+  // The anti-regression half, and the reason the segment-entropy condition
+  // exists. Not an eyJ JWT: that is claimed by the `jwt` named rule before the
+  // entropy tier sees it, so it could not prove anything about this filter.
+  // This is a generic three-part signed token, which reaches entropy.
+  const b64url = alnum + "-_";
+  const signed = gen(36, b64url, 31) + "." + gen(60, b64url, 32) + "." + gen(43, b64url, 33);
+  assert.ok(
+    !skipped(signed),
+    "a three-part signed token was skipped as a dotted identifier chain -- the segment-entropy guard is gone"
+  );
+});
+
+test("(d) GUARD: a real eyJ JWT still reports, through its named rule", () => {
+  const b64url = alnum + "-_";
+  const jwt = "eyJ" + gen(30, b64url, 34) + ".eyJ" + gen(40, b64url, 35) + "." + gen(43, b64url, 36);
+  const ids = scanText(`const t = "${jwt}";\n`, { filePath: "src/a.ts" }).map((f) => f.ruleId);
+  assert.ok(ids.includes("jwt"), `the jwt rule stopped firing: ${ids.join(",") || "(nothing)"}`);
+});
+
+test("(d) requires at least two segments and identifier-shaped starts", () => {
+  // A single dotted pair of high-entropy halves is not an identifier chain.
+  assert.ok(!skipped(gen(24, alnum, 37) + "." + gen(24, alnum, 38)), "a two-part blob was skipped");
+});
+
+// ---------------------------------------------------------------------------
+suite("0.1.2 (d1) — build-setting assignments captured whole");
+
+/**
+ * Evidence: bugsnag-cocoa scripts/build-xcframework.sh and
+ * features/scripts/foreground_ios_app.sh -- 4 tree findings and 10 history
+ * findings where an entire NAME=value pair was captured as one token.
+ *
+ * "=" inside a value is the signal. Base64 uses "=" only as trailing padding,
+ * so an "=" with something after it is not padding, and a SCREAMING_SNAKE name
+ * in front of it is a build setting rather than a credential.
+ */
+test("build-setting assignments are skipped", () => {
+  for (const v of [
+    "CLANG_DEBUG_INFORMATION_LEVEL=default",
+    "DEBUG_INFORMATION_FORMAT=dwarf-with-dsym",
+    "EVENT_TYPE=AutoCaptureRunScenario",
+  ]) {
+    assert.ok(skipped(v), `build setting still fired: ${v}`);
+  }
+});
+
+test("(d1) real credentials still report", () => assertRealSecretsStillReport("(d1)"));
+
+test("(d1) base64 padding is not an assignment", () => {
+  // The [^=] after the "=" is what separates a value from padding. An
+  // all-uppercase base64 blob ending in "=" must not read as NAME=value.
+  const padded = gen(43, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789", 41) + "=";
+  assert.ok(!skipped(padded), `a padded uppercase blob was skipped as a build setting: ${padded}`);
+});
+
 finish();
