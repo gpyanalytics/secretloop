@@ -43,7 +43,12 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   /^sha(?:256|512)-/,                                         // SRI hash
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, // UUID
   /^data:[a-z]+\/[a-z0-9.+-]+;base64,/i,                      // inline data URI
-  /^(?:[A-Za-z]:)?[\\/](?:[\w.-]+[\\/])+[\w.-]+$/,            // filesystem path
+  // Absolute filesystem path. The segment repetition is [\w.-]* rather than +
+  // as of 0.1.2: a doubled slash makes one segment empty, and dyld image paths
+  // in a crash report are full of them
+  // (".../Frameworks//CoreData.framework/CoreData"). Measured delta from
+  // allowing it: 0.3488% -> 0.3817% of random 40-character base64 keys.
+  /^(?:[A-Za-z]:)?[\\/](?:[\w.-]*[\\/])+[\w.-]+$/,
   /^https?:\/\//i,                                            // bare URL (credential URLs have their own rule)
   // Hashed asset filename. The stem carries a dot because a content-hashed
   // bundle name has inner dots -- main.<hash>.chunk.js -- and without it this
@@ -129,6 +134,18 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   // The stem class excludes = and /, so a base64 blob cannot reach the
   // alternation by accident. Measured 0.0000% across every credential shape.
   /^[A-Za-z_][\w+-]*(?:\.[\w+-]+)*\.(?:h|hh|hpp|hxx|m|mm|c|cc|cpp|cxx|swift)$/i,
+
+  // Absolute path whose segments may carry "+", added in 0.1.2 for
+  // "/usr/lib/libc++.1.dylib" and "/usr/lib/libc++abi.dylib" -- 7 tree and 84
+  // history findings on bugsnag-cocoa, all dyld image paths out of report.json.
+  //
+  // Separate from the arm above because "+" is the character base64 uses and
+  // the path arm above must not learn it. The final segment MUST carry an
+  // extension, and that requirement is the entire safety margin: with it this
+  // arm skips 0.0000% of random 40-character base64 keys, without it 0.68%.
+  // Together with the empty-segment change above the whole 0.1.2 path delta is
+  // 0.3488% -> 0.3684%, or 0.0196%.
+  /^(?:[A-Za-z]:)?[\\/](?:[\w.+-]*[\\/])+[\w+-]+(?:\.[\w+-]+)+$/,
 ];
 
 function isStructuralFalsePositive(value: string): boolean {
