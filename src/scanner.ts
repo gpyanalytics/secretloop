@@ -27,9 +27,36 @@ import {
  */
 export const ENTROPY_RULE_ID = "generic-high-entropy";
 
-/** Both halves of the generic tier: the shape rules and the entropy pass. */
+/**
+ * Both halves of the generic tier: the shape rules and the entropy pass.
+ *
+ * This is the *overlap-merging* tier -- "matches by shape, so it yields to a
+ * named rule on the same span". It is deliberately NOT the fixture-suppression
+ * tier; see isEntropyTier.
+ */
 export function isGenericTier(ruleId: string): boolean {
   return ruleId === ENTROPY_RULE_ID || genericRuleIds.has(ruleId);
+}
+
+/**
+ * What fixture-path suppression is allowed to hide: the entropy tier, alone.
+ *
+ * 0.1.1 suppressed isGenericTier, and genericRuleIds' single member is
+ * generic-api-key-assignment -- `severity: high`, `confidence: format-match`,
+ * and the only rule covering the long tail of providers with no named format.
+ * A keyword-anchored API key committed to a test file was therefore hidden at
+ * default settings, and test files are the most common real leak location.
+ *
+ * Worse, suppression happens here inside scanText while verifyFindings runs
+ * afterwards over what scanText returned -- so a *verified-live* credential in
+ * a fixture path had no code path by which it could ever report.
+ *
+ * The two policies were fused only because `generic: true` in rules.ts was
+ * introduced for overlap tiebreaking and then reused here. Suppress the guess,
+ * never the certainty.
+ */
+export function isEntropyTier(ruleId: string): boolean {
+  return ruleId === ENTROPY_RULE_ID;
 }
 
 export type ConfidenceTier = "verified-live" | "format-match" | "entropy-heuristic";
@@ -267,10 +294,16 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   //
   // Named rules are exempt by construction: a `ghp_` committed to a test file
   // is a leaked credential, and the noise this addresses is entirely generic.
+  //
+  // The predicate is isEntropyTier, not isGenericTier. Narrowed in 0.1.2: the
+  // generic tier's other member, generic-api-key-assignment, is a `high`
+  // severity `format-match`, and hiding it here also put it out of reach of
+  // verifyFindings, which runs after this function over what it returns. See
+  // isEntropyTier for the whole argument.
   let fixtureSuppressed = 0;
   if (!config.includeFixtures && options.filePath && isFixturePath(options.filePath)) {
     for (let i = findings.length - 1; i >= 0; i--) {
-      if (isGenericTier(findings[i].ruleId)) {
+      if (isEntropyTier(findings[i].ruleId)) {
         findings.splice(i, 1);
         fixtureSuppressed++;
       }
