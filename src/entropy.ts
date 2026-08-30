@@ -88,6 +88,32 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   // Predicates that catch it -- adding a >=3-separator arm -- cost 1.802%, more
   // than doubling the false-negative surface to remove one false-positive shape.
   /^(?:(?:[\w.-]+\/)+[\w-]+\.[A-Za-z][A-Za-z0-9]{0,9}|(?:\.{1,2}\/|\/|[A-Za-z]:[\\/])[\w.-]+(?:\/[\w.-]+)*)$/,
+
+  // Symbols, added in 0.1.2. A crash report is a symbol table, and a symbol
+  // table is high-entropy structured text -- 80 of bugsnag-cocoa's 132 tree
+  // findings and 22 of its history findings were mangled names out of
+  // report-react-native-promise-rejection.json and android_native_crash.json.
+  // One value alone accounted for 10 locations.
+  //
+  // Itanium ABI: the grammar says a mangled name begins _Z, and the four
+  // productions that actually occur in the wild are N (nested), L (internal
+  // linkage), S (substitution) and T (vtable/typeinfo). Up to three leading
+  // underscores because Objective-C block trampolines carry ___Z.
+  //
+  // Anchored, so a credential merely containing "_ZN" is untouched. Measured at
+  // 0.0010% of random JWT-shaped values -- two in 200,000 base64url strings
+  // that happen to open "_ZN"/"_ZL"/"_ZS"/"_ZT" -- and 0.0000% of every other
+  // credential shape tested. `jwt` is a named rule and fires independently.
+  /^_{1,3}Z[NLST]/,
+  // Plain C/ObjC symbols from the same reports, which are not mangled at all:
+  // _BlockUntilNextEventMatchingListInModeWithFilter.
+  //
+  // Kept deliberately narrow -- a leading underscore AND letters/underscores
+  // only. No digits and no base64 punctuation, which is what keeps it away from
+  // generated credentials: 0.0000% across every sampled shape. A broader
+  // "identifier-looking" predicate was measured and rejected outright; see the
+  // note on bare identifiers below.
+  /^_[A-Za-z][A-Za-z_]*$/,
 ];
 
 function isStructuralFalsePositive(value: string): boolean {
