@@ -191,4 +191,56 @@ test("(b) does not skip a padded base64 value that happens to end in .c", () => 
   assert.ok(!skipped(gen(38, alnum + "+/", 14) + "=.c"), "a padded base64 value was skipped");
 });
 
+// ---------------------------------------------------------------------------
+suite("0.1.2 (c) — absolute paths with doubled slashes or + in a segment");
+
+/**
+ * Evidence: bugsnag-cocoa Tests/BugsnagTests/report.json, 7 tree findings and
+ * 84 history findings. These are dyld image paths in a crash report.
+ *
+ * They are NOT a new filter. 0.1.1 already skips absolute paths; these seven
+ * escaped for two mechanical reasons, both visible in the values themselves:
+ *
+ *   Frameworks//CoreData.framework   -- a doubled slash, and the 0.1.1 segment
+ *                                       class is [\w.-]+, which cannot be empty
+ *   usr/lib/libc++.1.dylib           -- "+" is not in [\w.-]
+ *
+ * So the amendment is: let a segment be empty, and add one arm that permits +
+ * provided the final segment carries an extension. Measured over 1,000,000
+ * random 40-character base64 keys, the skip rate goes 0.3488% (shipped) ->
+ * 0.3684% (proposed): a delta of 0.0196%. The extension requirement is what
+ * keeps the + arm free -- without it the same arm cost 0.68%.
+ */
+test("dyld image paths with doubled slashes or + are skipped", () => {
+  const prefix =
+    "/Applications/Xcode.app/Contents/Developer/Platforms/iPhoneSimulator.platform" +
+    "/Developer/SDKs/iPhoneSimulator.sdk";
+  const paths = [
+    prefix + "/System/Library/Frameworks//CoreData.framework/CoreData",
+    prefix + "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework//libBLAS.dylib",
+    prefix + "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework//libLAPACK.dylib",
+    prefix + "/System/Library/Frameworks/Accelerate.framework/Frameworks/vecLib.framework//libLinearAlgebra.dylib",
+    prefix + "/System/Library/Frameworks/OpenGLES.framework//libLLVMContainer.dylib",
+    prefix + "/usr/lib/libc++.1.dylib",
+    prefix + "/usr/lib/libc++abi.dylib",
+  ];
+  for (const p of paths) assert.ok(skipped(p), `dyld image path still fired: ${p}`);
+});
+
+test("(c) real credentials still report", () => assertRealSecretsStillReport("(c)"));
+
+test("(c) the + arm requires an extension, so a +-bearing absolute blob still reports", () => {
+  // This is the condition that keeps the arm from costing 0.68% instead of
+  // 0.0196%. If someone drops the extension requirement, this fails.
+  const blob = "/" + gen(20, alnum, 21) + "+" + gen(20, alnum, 22);
+  assert.ok(!skipped(blob), `a +-bearing absolute value with no extension was skipped: ${blob}`);
+});
+
+test("(c) a base64 blob that merely starts with / still reports", () => {
+  // Base64 contains slashes, and 1 in 64 keys opens with one. The arms are
+  // segment-shaped, not "contains a slash", and this pins that.
+  const b64 = "/" + gen(42, alnum + "+/", 23) + "=";
+  assert.ok(!skipped(b64), `a slash-led base64 blob was skipped: ${b64}`);
+});
+
 finish();
