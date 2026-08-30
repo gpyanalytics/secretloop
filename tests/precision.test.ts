@@ -75,6 +75,7 @@ const GENERATED_FIXTURES: Array<[label: string, rel: string]> = [
   ["maven wrapper (windows)", "mvnw.cmd"],
   ["xcode project", "ios/App.xcodeproj/project.pbxproj"],
   ["xcode workspace", "ios/App.xcworkspace/contents.xcworkspacedata"],
+  ["xcode scheme", "ios/App.xcodeproj/xcshareddata/xcschemes/App-iOS.xcscheme"],
   ["scan artifact", "results.sarif"],
 ];
 
@@ -442,6 +443,57 @@ test("stdout is byte-identical to a run without the hint", () => {
       ungated.stdout,
       "the hint changed stdout; it must go to stderr only"
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+suite("0.1.2 — Xcode schemes are generated files");
+
+test("a real .xcscheme is skipped by default and its target names never report", () => {
+  // The polyglot corpus entry for Xcode. bugsnag-cocoa's schemes produced 14
+  // tree findings and 16 history findings, every one a build-target name:
+  // BugsnagNetworkRequestPlugin-watchOSTests.xctest and friends.
+  //
+  // Those names cannot be generalised safely -- they are bare identifiers, and
+  // every value-shape predicate that catches them skips 100% of AWS access key
+  // ids (see the note in src/entropy.ts). So this is a path exclude, which is
+  // the documented escape hatch for a shape that will not generalise.
+  const scheme = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    '<Scheme LastUpgradeVersion = "1500" version = "1.7">',
+    '   <BuildableReference BlueprintName = "BugsnagNetworkRequestPlugin-watchOS"',
+    '      BuildableName = "BugsnagNetworkRequestPlugin-watchOSTests.xctest"',
+    '      BlueprintIdentifier = "BugsnagNetworkRequestPlugin-macOSTests">',
+    '   </BuildableReference>',
+    '</Scheme>',
+  ].join("\n");
+  withDir((dir) => {
+    write(dir, "ios/App.xcodeproj/xcshareddata/xcschemes/App-iOS.xcscheme", scheme);
+    write(dir, "src/app.js", "const ok = 1;\n");
+
+    const off = JSON.parse(runCli(dir, ["scan", "--format", "json"]).stdout);
+    assert.strictEqual(off.summary.total, 0, `a scheme file was scanned by default:\n${off.stdout}`);
+
+    // With the flag the file IS scanned, and the target names DO report. That is
+    // the honest cost of having no bare-identifier matcher, and it is pinned
+    // here rather than wished away: the exclude is the mitigation, and anyone
+    // who passes --include-generated has asked to see everything in the file.
+    //
+    // The first draft of this test asserted 0 here. It failed, correctly -- it
+    // was asserting a matcher the release deliberately does not ship, because
+    // every predicate that catches these names skips 100% of AWS access key ids.
+    const on = JSON.parse(runCli(dir, ["scan", "--format", "json", "--include-generated"]).stdout);
+    assert.ok(
+      on.summary.total > 0,
+      "--include-generated did not scan the scheme file at all"
+    );
+    for (const f of on.findings) {
+      assert.strictEqual(
+        f.ruleId,
+        "generic-high-entropy",
+        `a scheme target name matched a named provider rule: ${f.ruleId}`
+      );
+    }
   });
 });
 
