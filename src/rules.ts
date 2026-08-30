@@ -1097,6 +1097,25 @@ export const generatedExcludePaths = [
   "**/mvnw.cmd",
   "**/*.pbxproj",
   "**/*.xcworkspacedata",
+  // Added in 0.1.2. Xcode schemes produced 14 tree findings and 16 history
+  // findings on bugsnag-cocoa, every one a build-target name --
+  // BugsnagNetworkRequestPlugin-watchOSTests.xctest and its siblings.
+  //
+  // A path exclude rather than an entropy matcher because that shape does not
+  // generalise: the names are bare identifiers, and every value-shape predicate
+  // that catches them skips 100% of AWS access key ids. See the bare-identifier
+  // note in src/entropy.ts. This is the documented escape hatch for a shape
+  // that will not generalise safely.
+  //
+  // `**/*.xcworkspace` is deliberately absent: .xcworkspace is a bundle
+  // DIRECTORY, and the file inside it is contents.xcworkspacedata, already
+  // covered above. A file glob for it would be dead config.
+  //
+  // `**/*.storyboard` is deliberately absent too. Its noise is the reverse-DNS
+  // string com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB, which the
+  // dotted-identifier-chain matcher handles generally -- and a storyboard is
+  // hand-edited source, not a generated file.
+  "**/*.xcscheme",
   "**/*.sarif",
 ];
 
