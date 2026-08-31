@@ -95,9 +95,9 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   /^(?:(?:[\w.-]+\/)+[\w-]+\.[A-Za-z][A-Za-z0-9]{0,9}|(?:\.{1,2}\/|\/|[A-Za-z]:[\\/])[\w.-]+(?:\/[\w.-]+)*)$/,
 
   // Symbols, added in 0.1.2. A crash report is a symbol table, and a symbol
-  // table is high-entropy structured text -- 80 of bugsnag-cocoa's 132 tree
-  // findings and 22 of its history findings were mangled names out of
-  // report-react-native-promise-rejection.json and android_native_crash.json.
+  // table is high-entropy structured text -- 80 of the Objective-C validation
+  // corpus's 132 tree findings and 22 of its history findings were mangled
+  // names out of two committed crash-report fixtures.
   // One value alone accounted for 10 locations.
   //
   // Itanium ABI: the grammar says a mangled name begins _Z, and the four
@@ -121,9 +121,9 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
   /^_[A-Za-z][A-Za-z_]*$/,
 
   // Source filenames and #import targets, added in 0.1.2. 17 tree findings and
-  // 27 history findings on bugsnag-cocoa, every one the operand of an #import
-  // in a .m/.mm/.c file -- BSGEventUploader.m:11 imports
-  // "BSGEventUploadKSCrashReportOperation.h". The value is a filename the
+  // 27 history findings on the Objective-C validation corpus, every one the
+  // operand of an #import in a .m/.mm/.c file -- an ObjC source file importing
+  // an ObjC header filename. The value is a filename the
   // compiler resolves, never a credential.
   //
   // Closed extension alternation, anchored at the end, exactly like the hashed
@@ -137,7 +137,8 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
 
   // Absolute path whose segments may carry "+", added in 0.1.2 for
   // "/usr/lib/libc++.1.dylib" and "/usr/lib/libc++abi.dylib" -- 7 tree and 84
-  // history findings on bugsnag-cocoa, all dyld image paths out of report.json.
+  // history findings on the Objective-C validation corpus, all dyld image paths
+  // out of a committed crash report.
   //
   // Separate from the arm above because "+" is the character base64 uses and
   // the path arm above must not learn it. The final segment MUST carry an
@@ -149,7 +150,7 @@ const STRUCTURAL_FALSE_POSITIVES: RegExp[] = [
 
   // Build-setting assignment captured whole, added in 0.1.2:
   // "CLANG_DEBUG_INFORMATION_LEVEL=default" out of scripts/build-xcframework.sh.
-  // 4 tree and 10 history findings on bugsnag-cocoa.
+  // 4 tree and 10 history findings on the Objective-C validation corpus.
   //
   // The "=" is the signal. Base64 uses "=" only as trailing padding, so an "="
   // with something after it is not padding -- hence [^=] rather than a bare "=",
@@ -185,8 +186,8 @@ function isDottedIdentifierChain(value: string, threshold: number): boolean {
  * NOT a matcher, and deliberately so.
  *
  * A bare-identifier filter would remove the ~23 remaining ObjC-constant
- * findings on bugsnag-cocoa's history ("BSG_KSJSONDecodeOptionIgnoreNullInArray",
- * "NSURLIsExcludedFromBackupKey"). Every predicate that catches them was
+ * findings on the Objective-C validation corpus's history (long framework
+ * constant names). Every predicate that catches them was
  * measured against 200,000 samples of each credential shape and every one is
  * disqualifying:
  *
@@ -227,7 +228,7 @@ function charsetDiversity(value: string): number {
  * load-bearing twice.
  *
  * Safety. The values this exists for -- 'react-native/Libraries/TurboModule/
- * RCTExport', imported by NativeBugsnag.ts and declared by
+ * RCTExport', imported by a React Native binding module and declared by
  * react-native-internals.d.ts -- are relative paths with no ./ prefix and no
  * extension. 0.1.1 measured every value-shape predicate that catches that at
  * >= 1.802% of random keys, against the 0.823% it accepted, and recorded the

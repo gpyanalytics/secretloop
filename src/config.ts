@@ -89,9 +89,9 @@ export const FIXTURE_PATH_SEGMENTS = new Set([
  * KNOWN LATENT ISSUE, recorded deliberately rather than fixed in 0.1.2.
  *
  * The comparison is case-SENSITIVE, so `Tests/`, `Fixtures/` and `Examples/`
- * are not recognised. bugsnag-cocoa keeps its suite in `Tests/`, which is why
- * the [high] generic-api-key-assignment in
- * Tests/BugsnagTests/Data/BugsnagEvents/BugsnagEvent1.json reported under
+ * are not recognised. The Objective-C validation corpus keeps its suite in
+ * `Tests/`, which is why the [high] generic-api-key-assignment in a
+ * crash-report fixture under that directory reported under
  * 0.1.1 -- luck, not design.
  *
  * Not changed here because making it case-insensitive *widens* what gets

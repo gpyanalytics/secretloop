@@ -450,9 +450,9 @@ test("stdout is byte-identical to a run without the hint", () => {
 suite("0.1.2 — Xcode schemes are generated files");
 
 test("a real .xcscheme is skipped by default and its target names never report", () => {
-  // The polyglot corpus entry for Xcode. bugsnag-cocoa's schemes produced 14
-  // tree findings and 16 history findings, every one a build-target name:
-  // BugsnagNetworkRequestPlugin-watchOSTests.xctest and friends.
+  // The polyglot corpus entry for Xcode. The Objective-C validation corpus's
+  // schemes produced 14 tree findings and 16 history findings, every one a
+  // build-target name: CorpusNetworkRequestPlugin-watchOSTests.xctest and friends.
   //
   // Those names cannot be generalised safely -- they are bare identifiers, and
   // every value-shape predicate that catches them skips 100% of AWS access key
@@ -461,9 +461,9 @@ test("a real .xcscheme is skipped by default and its target names never report",
   const scheme = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<Scheme LastUpgradeVersion = "1500" version = "1.7">',
-    '   <BuildableReference BlueprintName = "BugsnagNetworkRequestPlugin-watchOS"',
-    '      BuildableName = "BugsnagNetworkRequestPlugin-watchOSTests.xctest"',
-    '      BlueprintIdentifier = "BugsnagNetworkRequestPlugin-macOSTests">',
+    '   <BuildableReference BlueprintName = "CorpusNetworkRequestPlugin-watchOS"',
+    '      BuildableName = "CorpusNetworkRequestPlugin-watchOSTests.xctest"',
+    '      BlueprintIdentifier = "CorpusNetworkRequestPlugin-macOSTests">',
     '   </BuildableReference>',
     '</Scheme>',
   ].join("\n");

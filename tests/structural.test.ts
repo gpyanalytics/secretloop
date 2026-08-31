@@ -74,9 +74,9 @@ function assertRealSecretsStillReport(matcher: string): void {
 suite("0.1.2 (a) — C++/ObjC mangled symbols");
 
 /**
- * Evidence: bugsnag-cocoa. 80 of 132 tree-scan entropy findings and 22 of its
- * history findings are Itanium ABI mangled names, out of
- * report-react-native-promise-rejection.json and android_native_crash.json --
+ * Evidence: the Objective-C validation corpus. 80 of 132 tree-scan entropy
+ * findings and 22 of its history findings are Itanium ABI mangled names, out
+ * of two committed crash-report fixtures --
  * crash reports, where a symbol table is the whole point of the file. One value
  * alone hit 10 locations.
  */
@@ -107,7 +107,8 @@ test("(a) is anchored: a credential that merely contains _Z still reports", () =
 suite("0.1.2 (a2) — leading-underscore C/ObjC symbols");
 
 /**
- * Evidence: bugsnag-cocoa, 6 tree findings and 4 history findings that are not
+ * Evidence: the Objective-C validation corpus, 6 tree findings and 4 history
+ * findings that are not
  * Itanium-mangled at all -- plain C symbols out of the same crash reports.
  *
  * Deliberately narrow: a leading underscore AND letters/underscores only. No
@@ -137,9 +138,9 @@ test("(a2) does not skip an underscore-led value carrying digits or base64 punct
 suite("0.1.2 (b) — source filenames and #import targets");
 
 /**
- * Evidence: bugsnag-cocoa, 17 tree findings and 27 history findings. Every one
- * is the operand of an #import in a .m/.mm/.c file --
- * BSGEventUploader.m:11 `#import "BSGEventUploadKSCrashReportOperation.h"` --
+ * Evidence: the Objective-C validation corpus, 17 tree findings and 27 history
+ * findings. Every one is the operand of an #import in a .m/.mm/.c file --
+ * an ObjC source file importing an ObjC header filename --
  * so the value is a filename the compiler resolves, never a credential.
  *
  * The extension alternation is closed and anchors the end, matching the
@@ -152,9 +153,9 @@ test("bare source filenames are skipped, including inside a real #import line", 
     "BSG_KSCrashSentry_CPPException.h",
     "BSGURLSessionTracingProxy.h",
     "BSGEventDiscardRuleFactory.h",
-    "BugsnagClient+Private.hpp",
+    "CorpusClient+Private.hpp",
     "KSCrashReportConverter.mm",
-    "BugsnagConfiguration.swift",
+    "CorpusConfiguration.swift",
   ];
   for (const h of headers) assert.ok(skipped(h), `source filename still fired: ${h}`);
   // The real polyglot shape, not just the bare value.
@@ -195,8 +196,8 @@ test("(b) does not skip a padded base64 value that happens to end in .c", () => 
 suite("0.1.2 (c) — absolute paths with doubled slashes or + in a segment");
 
 /**
- * Evidence: bugsnag-cocoa Tests/BugsnagTests/report.json, 7 tree findings and
- * 84 history findings. These are dyld image paths in a crash report.
+ * Evidence: a crash-report fixture in the Objective-C validation corpus, 7 tree
+ * findings and 84 history findings. These are dyld image paths in a crash report.
  *
  * They are NOT a new filter. 0.1.1 already skips absolute paths; these seven
  * escaped for two mechanical reasons, both visible in the values themselves:
@@ -247,12 +248,14 @@ test("(c) a base64 blob that merely starts with / still reports", () => {
 suite("0.1.2 (d) — dotted identifier chains, guarded by segment entropy");
 
 /**
- * Evidence: reverse-DNS bundle ids and build products on bugsnag-cocoa
+ * Evidence: reverse-DNS bundle ids and build products on the Objective-C
+ * validation corpus
  * (com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB in the storyboards,
- * BugsnagNetworkRequestPlugin.xcframework.zip in .buildkite), and dotted
- * property accesses on bugsnag-js (process.env.BUILDKITE_MESSAGE,
- * this._config.enabledBreadcrumbTypes). 4 tree + 10 history on cocoa,
- * 2 tree + 5 history on js.
+ * CorpusNetworkRequestPlugin.xcframework.zip in .buildkite), and dotted
+ * property accesses on the JavaScript validation corpus
+ * (process.env.BUILDKITE_MESSAGE,
+ * this._config.enabledBreadcrumbTypes). 4 tree + 10 history on the Objective-C
+ * corpus, 2 tree + 5 history on the JavaScript corpus.
  *
  * THE GUARD IS THE MATCHER. A JWT is three dot-separated base64url segments --
  * structurally the same shape as com.apple.Foo. Measured: the chain shape alone
@@ -267,11 +270,11 @@ suite("0.1.2 (d) — dotted identifier chains, guarded by segment entropy");
 test("dotted identifier chains are skipped", () => {
   for (const v of [
     "com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB",
-    "com.bugsnag.BugsnagNetworkRequestPlugin",
+    "com.corpus.CorpusNetworkRequestPlugin",
     "process.env.BUILDKITE_MESSAGE",
     "process.env.BROWSERSTACK_LOCAL_IDENTIFIER",
     "this._config.enabledBreadcrumbTypes",
-    "BugsnagNetworkRequestPlugin.xcframework.zip",
+    "CorpusNetworkRequestPlugin.xcframework.zip",
   ]) {
     assert.ok(skipped(v), `dotted identifier chain still fired: ${v}`);
   }
@@ -280,12 +283,12 @@ test("dotted identifier chains are skipped", () => {
 test("(d) an identifier segment long enough to cross the bar is NOT skipped", () => {
   // The guard errs toward reporting, and this pins which way it errs.
   //
-  // undocumented.json:48 on bugsnag-cocoa holds
+  // A JSON fixture in the Objective-C validation corpus holds
   // "BSGEnabledBreadcrumbType.BSGEnabledBreadcrumbTypeNavigation". Its second
   // segment is 34 characters and scores 4.359, above the 4.3 bar, so the chain
   // is not treated as structured and the finding survives. Every other
-  // identifier segment in either corpus scores at or below 4.004
-  // ("BugsnagNetworkRequestPlugin"), so this is the outlier rather than the
+  // identifier segment in this file's fixtures scores at or below 4.027
+  // ("CorpusNetworkRequestPlugin"), so this is the outlier rather than the
   // rule -- and one surviving false positive is the correct price for a guard
   // that never widens toward credentials.
   assert.ok(!skipped("BSGEnabledBreadcrumbType.BSGEnabledBreadcrumbTypeNavigation"));
@@ -322,7 +325,7 @@ test("(d) requires at least two segments and identifier-shaped starts", () => {
 suite("0.1.2 (d1) — build-setting assignments captured whole");
 
 /**
- * Evidence: bugsnag-cocoa scripts/build-xcframework.sh and
+ * Evidence: the Objective-C validation corpus's scripts/build-xcframework.sh and
  * features/scripts/foreground_ios_app.sh -- 4 tree findings and 10 history
  * findings where an entire NAME=value pair was captured as one token.
  *
@@ -353,9 +356,10 @@ test("(d1) base64 padding is not an assignment", () => {
 suite("0.1.2 (f2) — module specifiers, by syntactic position");
 
 /**
- * Evidence: the last 2 survivors of bugsnag-js's tree scan, and 2 of its
- * history findings -- 'react-native/Libraries/TurboModule/RCTExport', imported
- * by packages/react-native/src/NativeBugsnag.ts and declared by
+ * Evidence: the last 2 survivors of the JavaScript validation corpus's tree
+ * scan, and 2 of its history findings --
+ * 'react-native/Libraries/TurboModule/RCTExport', imported
+ * by a React Native binding module and declared by
  * packages/react-native/types/react-native-internals.d.ts.
  *
  * This matcher keys on POSITION, not on the value's shape, and that choice is

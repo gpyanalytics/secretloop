@@ -4,7 +4,7 @@
 because a previous version of this document listed finished work as pending, and
 an assistant reading it proposed rebuilding four things that were already done.*
 
-**Last updated: August 2026, at commit `791fa10`.**
+**Last updated: August 2026, at commit `ae93370`.**
 
 ---
 
@@ -44,27 +44,27 @@ Every item from the original architecture review is closed. Verify with
 
 | area | commit | what landed |
 |---|---|---|
-| Redaction targeting the wrong copy of a secret | `2d6836f` | d-flag indices instead of `lastIndexOf` |
-| `--fail-on verified` without `--verify` | `bf27bad` | rejected, exits 2 |
-| Baseline union on rewrite | `c3d6b98` | same-path rejection, triage before verify |
-| Live verification made opt-in | `1e91350` | provider-named prompt, default `false` |
-| Verification bounded and cached | `c46186d` | 5s AbortSignal, concurrency 5, SHA-256-keyed cache |
-| Clipboard removed from default redact | `190100c` | second quick-fix for copy-then-redact |
-| `.env` extraction refuses a tracked file | `40a2275` | `isTracked()` with `:(literal)` pathspec |
-| AWS admin credentials → SecretStorage | `9f0d478` | removed from the manifest |
-| Baseline fingerprints v2 | `202984f` | context strategy for password-bearing rules, 17 tests |
-| Liveness tri-state | `8262197` | live / dead / unknown **with a reason** |
-| Pre-commit hook path resolution | `b1b5191` | fail-open on missing CLI or node |
-| Pre-commit hook chaining | `13566e7` | foreign hook preserved and run first |
-| Streaming history scan | `c9c73d6` | replaced blocking `spawnSync` + cancellation |
-| Workspace/CLI scan divergence | `6d99ee7` | one enumeration path in `workspace.ts` |
-| Duplicate finding merging | `a8bec2a` | named rule wins, loser recorded in `alsoMatched` |
-| SecretGuard compat layer removed | `03fd981` | never shipped; zero users |
-| SARIF key → `secretloopFingerprint/v2` | `8a91d6c` | versioned, before anything published |
-| CI exclusion narrowed | `af7747f` | fixture files, not `tests/**` |
-| AWS migration confirmed in a real host | `818a614` | value planted, read and migrated |
-| **npm packaging** | `026a2de` | 4 files, 509 kB; SDKs → devDependencies |
-| Summary-first CLI output + `${...}` filter | `2ba84e0`, `791fa10` | |
+| Redaction targeting the wrong copy of a secret | `18aa877` | d-flag indices instead of `lastIndexOf` |
+| `--fail-on verified` without `--verify` | `dec1e3e` | rejected, exits 2 |
+| Baseline union on rewrite | `b415b2f` | same-path rejection, triage before verify |
+| Live verification made opt-in | `f162b5b` | provider-named prompt, default `false` |
+| Verification bounded and cached | `6d2f38e` | 5s AbortSignal, concurrency 5, SHA-256-keyed cache |
+| Clipboard removed from default redact | `44702f8` | second quick-fix for copy-then-redact |
+| `.env` extraction refuses a tracked file | `b1f3ad2` | `isTracked()` with `:(literal)` pathspec |
+| AWS admin credentials → SecretStorage | `0197a82` | removed from the manifest |
+| Baseline fingerprints v2 | `0c40286` | context strategy for password-bearing rules, 17 tests |
+| Liveness tri-state | `c14153f` | live / dead / unknown **with a reason** |
+| Pre-commit hook path resolution | `6fc7cbf` | fail-open on missing CLI or node |
+| Pre-commit hook chaining | `7455abe` | foreign hook preserved and run first |
+| Streaming history scan | `6789e27` | replaced blocking `spawnSync` + cancellation |
+| Workspace/CLI scan divergence | `08cff2b` | one enumeration path in `workspace.ts` |
+| Duplicate finding merging | `9d80f69` | named rule wins, loser recorded in `alsoMatched` |
+| SecretGuard compat layer removed | `74d5ed5` | never shipped; zero users |
+| SARIF key → `secretloopFingerprint/v2` | `a7d013d` | versioned, before anything published |
+| CI exclusion narrowed | `37bf4e8` | fixture files, not `tests/**` |
+| AWS migration confirmed in a real host | `f4b4064` | value planted, read and migrated |
+| **npm packaging** | `646f843` | 4 files, 509 kB; SDKs → devDependencies |
+| Summary-first CLI output + `${...}` filter | `fc240c2`, `ae93370` | |
 
 **Also done, not in git:** all five extension-host flows validated in a real
 VS Code instance — verification prompt, two quick-fix actions, `.env` refusal,
@@ -230,7 +230,7 @@ Full version in `docs/ROADMAP.md`. Summary:
 | phase | status |
 |---|---|
 | 0 — Ship hygiene | repo metadata, docs move — mostly done |
-| 1 — CLI to npm | **packaging done (`026a2de`); not yet published** |
+| 1 — CLI to npm | **packaging done (`646f843`); not yet published** |
 | 2 — README + demo GIF | **current work** |
 | 3 — Twenty conversations | not started — **the gate** |
 | 4 — Marketplace | after CLI feedback |
