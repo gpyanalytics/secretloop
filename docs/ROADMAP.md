@@ -27,16 +27,16 @@ The second is only built where the first justifies it.
 
 | item | evidence |
 |---|---|
-| Fingerprint design, baseline v2 | `202984f` — 17 tests, context strategy for password-bearing rules |
-| Pre-commit hook, path resolution and chaining | `b1b5191`, `13566e7` |
-| History scan streaming | `c9c73d6` — replaced the blocking `spawnSync` |
-| Workspace/CLI scan divergence | `6d99ee7` — one enumeration path |
-| Duplicate finding merging | `a8bec2a` — named rule wins, `alsoMatched` recorded |
-| SecretGuard compatibility layer removed | `03fd981` |
-| SARIF key → `secretloopFingerprint/v2` | `8a91d6c` |
-| CI exclusion narrowed to fixture files | `af7747f` |
-| AWS migration confirmed against a running host | `818a614` |
-| Marketplace publisher set | `8379f38` — `gpyanalytics` |
+| Fingerprint design, baseline v2 | `0c40286` — 17 tests, context strategy for password-bearing rules |
+| Pre-commit hook, path resolution and chaining | `6fc7cbf`, `7455abe` |
+| History scan streaming | `6789e27` — replaced the blocking `spawnSync` |
+| Workspace/CLI scan divergence | `08cff2b` — one enumeration path |
+| Duplicate finding merging | `9d80f69` — named rule wins, `alsoMatched` recorded |
+| SecretGuard compatibility layer removed | `74d5ed5` |
+| SARIF key → `secretloopFingerprint/v2` | `a7d013d` |
+| CI exclusion narrowed to fixture files | `37bf4e8` |
+| AWS migration confirmed against a running host | `f4b4064` |
+| Marketplace publisher set | `668f136` — `gpyanalytics` |
 | **Extension-host validation — all five flows** | prompt, quick-fixes, `.env` refusal, hook chain, hook restore |
 
 Every item from the original architecture review is closed. Nothing in the repo
