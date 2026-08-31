@@ -1098,8 +1098,8 @@ export const generatedExcludePaths = [
   "**/*.pbxproj",
   "**/*.xcworkspacedata",
   // Added in 0.1.2. Xcode schemes produced 14 tree findings and 16 history
-  // findings on bugsnag-cocoa, every one a build-target name --
-  // BugsnagNetworkRequestPlugin-watchOSTests.xctest and its siblings.
+  // findings on the Objective-C validation corpus, every one a build-target
+  // name -- CorpusNetworkRequestPlugin-watchOSTests.xctest and its siblings.
   //
   // A path exclude rather than an entropy matcher because that shape does not
   // generalise: the names are bare identifiers, and every value-shape predicate

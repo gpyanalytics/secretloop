@@ -200,8 +200,8 @@ suite("0.1.2 — HARD GATE: fixture suppression can never hide a real secret");
  * The rule now: suppress the guess, never the certainty. Only the entropy tier
  * is suppressible.
  *
- * bugsnag-cocoa's [high] key in Tests/BugsnagTests/Data/BugsnagEvents/
- * BugsnagEvent1.json reported under 0.1.1 only because isFixturePath is
+ * The Objective-C validation corpus's [high] key in a crash-report fixture
+ * under `Tests/` reported under 0.1.1 only because isFixturePath is
  * case-sensitive and that path says `Tests`, not `tests`. Luck, not design --
  * see the latent-issue note on FIXTURE_PATH_SEGMENTS in config.ts.
  */
