@@ -73,6 +73,11 @@ export const positiveSamples: Record<string, string> = {
   "paypal-braintree-token": "access_token$production$" + gen(16, LOWER_NUM) + "$" + hex(32),
   "plaid-secret": `plaid_secret = "${hex(30)}"`,
   "openai-api-key": "sk-proj-" + gen(64),
+  // sk-or- is the documented OpenRouter prefix; the hex tail matches the shape
+  // its own docs show. Also the anti-regression fixture for the OpenAI
+  // carve-out -- if /^sk-or-/ ever leaves openai-api-key's allowlist, the
+  // corpus overlap guard fails on this value.
+  "openrouter-api-key": "sk-or-v1-" + hex(64),
   "anthropic-api-key": "sk-ant-api03-" + gen(95),
   "huggingface-token": "hf_" + gen(36),
   "replicate-token": "r8_" + gen(38),

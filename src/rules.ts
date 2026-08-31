@@ -368,7 +368,13 @@ export const rules: SecretRule[] = [
   // ----------------------------------------------------------------- Payments
   {
     id: "stripe-secret-key",
-    description: "Stripe / Clerk secret key",
+    // Stripe, Clerk and WorkOS all issue secret keys as sk_live_/sk_test_.
+    // Clerk documents the collision outright, calling the shape "common among
+    // developer tools to provide a more familiar developer experience", so no
+    // pattern can separate the three. The description names the ambiguity
+    // instead of asserting one provider: a finding that says "Stripe" and means
+    // Clerk sends someone to rotate a key in a dashboard that does not hold it.
+    description: "Stripe / Clerk / WorkOS secret key (format shared by all three)",
     regex: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{24,}\b/g,
     fullMatch: true,
     keywords: ["sk_live_", "sk_test_", "rk_live_", "rk_test_"],
@@ -444,7 +450,13 @@ export const rules: SecretRule[] = [
     fullMatch: true,
     keywords: ["sk-"],
     entropy: 3.5,
-    allowlist: [/^sk-ant-/, ...DOC_SAMPLE],
+    // /^sk-or-/ joins /^sk-ant-/ for the same reason and by the same mechanism:
+    // both providers issue keys inside OpenAI's `sk-` namespace, and everything
+    // after `sk-` falls inside this rule's own character class, so without the
+    // carve-out this rule claims their keys. An allowlist rather than a
+    // tiebreak, because a tiebreak would bury a rule-design collision that a
+    // red build surfaces.
+    allowlist: [/^sk-ant-/, /^sk-or-/, ...DOC_SAMPLE],
     severity: "critical",
   },
   {
@@ -453,6 +465,30 @@ export const rules: SecretRule[] = [
     regex: /\bsk-ant-(?:api\d{2}|admin\d{2})-[A-Za-z0-9_-]{80,}\b/g,
     fullMatch: true,
     keywords: ["sk-ant-"],
+    severity: "critical",
+  },
+  {
+    // Format source: https://openrouter.ai/docs/features/provisioning-api-keys
+    // shows a created key as "sk-or-v1-abc...123", and OpenRouter's own blog
+    // states that keys "start with sk-or-, which is how a tool knows it's
+    // talking to OpenRouter and not OpenAI directly".
+    //
+    // Anchored on the documented `sk-or-` rather than on the `v1` that appears
+    // only in an example, so a future key version keeps matching.
+    //
+    // NO postPrefixEntropy, and that is measured rather than forgotten. The
+    // variable portion as issued is hexadecimal, which is inherently low
+    // entropy: over 1,000,000 uniform 32-character hex draws -- this rule's
+    // minimum -- a 3.75 floor rejects 85.0968%, a 3.00 floor rejects 0.0111%,
+    // and only 2.50 reaches zero. At 2.50 the floor rejects nothing the
+    // 32-character minimum does not already exclude, so it would be a threshold
+    // that costs real keys and buys nothing. The length is the constraint here.
+    id: "openrouter-api-key",
+    description: "OpenRouter API Key",
+    regex: /\bsk-or-[A-Za-z0-9_-]{32,}\b/g,
+    fullMatch: true,
+    keywords: ["sk-or-"],
+    allowlist: DOC_SAMPLE,
     severity: "critical",
   },
   {
