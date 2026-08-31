@@ -1,5 +1,106 @@
 # Changelog
 
+## 0.1.3 — unreleased
+
+Two false-positive fixes. Both come from a twenty-repository survey run against
+0.1.2 **after** it shipped — a different and much broader exercise than the two
+SDK checkouts 0.1.2 was tuned against, and no part of it changed 0.1.2.
+
+No rule ID changed and no existing threshold changed. No output format changed.
+Findings that survive these fixes keep their fingerprints: across this
+repository and the source files below, 283 findings are present before and
+after with byte-identical fingerprints, and nothing new appeared.
+
+### Fixed — fixed-prefix rules matched low-diversity runs
+
+A rule that matches a fixed literal prefix followed by a character class has a
+problem when every character of that prefix also belongs to the class: the
+pattern then describes one unbroken run of one alphabet, and any long enough run
+of that alphabet satisfies it.
+
+`twitter-bearer-token` is the extreme case — twenty-one `A` characters in front
+of `[A-Za-z0-9%]{50,}`. In one public repository it produced **7,129 findings at
+`high` severity from five files** of assembly padding and committed test data.
+The existing repeated-character guard did not catch them: it requires the value
+to be a single character repeated, and padding with two stray bytes in it is
+not. A `high` severity rule firing seven thousand times on padding is the
+fastest way to teach someone to ignore alerts.
+
+**The variable portion after the prefix must now clear an entropy floor.** One
+mechanism, applied to the eight rules that share the defect, rather than eight
+separate exceptions — `atlassian-api-token`, `facebook-access-token`,
+`github-fine-grained-pat`, `intercom-token`, `jfrog-token`, `pypi-token`,
+`square-access-token` (one of its two branches) and `twitter-bearer-token`. Of
+103 rules, 55 are fixed-prefix and 28 carry the precondition; the floor is
+enabled only where the variable run is long enough for a threshold to be shown
+safe. It fails open: a rule that declares nothing is untouched, and a prefix
+that stops matching leaves the finding reported rather than dropped.
+
+The threshold is measured, not chosen. Two populations, both on the portion
+after the prefix:
+
+| population | Shannon entropy |
+|---|---|
+| the false positives above, re-scanned from the source files | 0.040 – 3.337 bits |
+| 100,000,000 uniformly random tokens at the tightest enabled configuration | **4.1649 bits minimum** |
+
+The floor sits at 3.75 — the midpoint, 0.413 bits above the worst false positive
+and 0.415 below the least random of a hundred million legitimate tokens.
+
+Distinct-character count was measured and **rejected** as the discriminator: the
+least diverse of those tokens carried 21 distinct characters and the worst false
+positive carried 29, so the two populations overlap on diversity and separate
+only on entropy.
+
+Measured on a 200,000-sample synthetic corpus (deterministic, one recorded
+seed), with every value drawn from the character class the rule's own pattern
+declares:
+
+- **legitimate-token loss: 0 of 140,000 — 0.0000%.** Per rule, at both the
+  documented token length and the shortest length the pattern accepts.
+- every false-positive-shaped sample the scanner reported before the change is
+  rejected after it, across all eight rules
+- no finding was added anywhere
+- on the five source files: **7,129 findings before, 0 after**
+
+Known boundary, stated rather than hidden: a variable run drawn from a
+16-symbol alphabet at 50–60 characters straddles the floor. None of these eight
+providers issues tokens of that shape, which is why the rules that do — such as
+`sentry-auth-token`, whose run is declared over 65 symbols but issued as hex —
+are deliberately not on the list.
+
+### Fewer findings — `go.work.sum` is excluded, like `go.sum`
+
+`go.sum` has always been excluded. Go workspaces (Go 1.18+) put the same content
+in a second filename — module paths, versions and checksums — and that one was
+never listed. One public repository produced **44 entropy findings from a single
+`go.work.sum`**, every one a module digest. Measured on that file: 44 before, 0
+after.
+
+It joins the base exclusion group, beside `go.sum` rather than in the
+generated-file group, so the two files answer `--include-generated` the same
+way: **neither is restored by it**, which has always been true of `go.sum`. The
+alternative would have made the flag scan one and not the other, a difference
+nobody could predict from the filenames.
+
+### Measured and not fixed — fixed-prefix matches inside base64 assets
+
+The same survey found `square-access-token` and `facebook-access-token` matching
+inside base64 blobs embedded in a vector image and a machine-learning resource
+file — five findings — and suggested the entropy floor above would cover them
+too. **Measurement rejected that, and they are unchanged.**
+
+Those values carry 4.33 to 4.81 bits over 95 to 119 characters. The least random
+of 10,000,000 uniformly random legitimate tokens of the same length carries
+4.885. A gap of 0.075 bits sits *inside* the legitimate distribution's own tail,
+so no threshold separates the two populations, and one that appeared to would be
+fitted to a pair of samples rather than to a property of credentials. A test
+asserts these still match, so lowering the threshold to reach them fails loudly
+instead of quietly trading real credentials for five findings.
+
+A different mechanism might address them. None is proposed here on this
+evidence.
+
 ## 0.1.2
 
 One safety fix, one precision pass, and remediation guidance on the surfaces

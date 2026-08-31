@@ -14,6 +14,29 @@ export interface SecretRule {
   keywords?: string[];
   /** Minimum Shannon entropy the captured value must have. Filters structured lookalikes. */
   entropy?: number;
+  /**
+   * Minimum Shannon entropy the portion AFTER a fixed prefix must carry.
+   *
+   * The whole-value `entropy` above cannot express this. A rule whose fixed
+   * prefix is long enough to dominate the value -- twitter-bearer-token's
+   * twenty-one `A` characters -- has its entropy set by the prefix, so a floor
+   * on the whole string either passes everything or rejects the real token too.
+   * The variable portion is the only part a provider actually randomises, so it
+   * is the only part worth measuring.
+   *
+   * `prefix` is anchored and selects which shape the floor applies to. A rule
+   * with two branches can enable the floor on one and leave the other alone:
+   * square-access-token declares /^EAAA/, so its `sq0atp-` branch -- whose
+   * variable run is 22 characters, too short for any threshold to be shown safe
+   * -- is untouched.
+   *
+   * FAILS OPEN. A prefix that stops matching leaves the finding reported rather
+   * than dropped, because a filter that cannot see the structure it is
+   * filtering must not be the thing that hides a credential. The drift shows up
+   * in tests/fixed-prefix.test.ts instead, which asserts every declared prefix
+   * still matches its own rule's token shape.
+   */
+  postPrefixEntropy?: { prefix: RegExp; min: number };
   /** Rule-scoped false-positive patterns. A value matching any of these is dropped. */
   allowlist?: RegExp[];
   /**
@@ -90,6 +113,57 @@ const DOC_SAMPLE = [
 export function isDocumentationSample(value: string): boolean {
   return DOC_SAMPLE.some((r) => r.test(value));
 }
+
+/**
+ * The post-prefix entropy floor, in bits. Measured, not chosen.
+ *
+ * A fixed-prefix rule whose prefix characters all belong to its own variable
+ * character class describes ONE unbroken run from ONE alphabet. Padding data
+ * satisfies it. So does base64. twitter-bearer-token is the extreme case --
+ * twenty-one `A` characters in front of `[A-Za-z0-9%]{50,}` -- and it produced
+ * 7,129 findings at severity `high` from five files of IL-assembly padding and
+ * committed test-assembly data in one public repository.
+ *
+ * Two populations, both measured on the post-prefix portion:
+ *
+ *   false positives   0.040 .. 3.337 bits, from those five files, re-fetched
+ *                     read-only and re-scanned. The floor of the range is
+ *                     padding (2-3 distinct characters over 234); the top is
+ *                     base64 of a mostly-zero blob, where the zero byte's `A`
+ *                     dominates but real bytes supply the rest.
+ *   legitimate        4.1649 bits minimum over 100,000,000 uniformly random
+ *                     tokens at the tightest configuration the floor is enabled
+ *                     on -- a 50-character run over a 62-symbol alphabet.
+ *                     Nothing fell below 4.10.
+ *
+ * 3.75 is the midpoint of the gap: 0.413 bits above the worst false positive,
+ * 0.415 bits below the least random of a hundred million legitimate tokens.
+ * Chosen for margin on both sides rather than to clear any particular fixture.
+ *
+ * DISTINCT-CHARACTER COUNT WAS MEASURED AND REJECTED. The least diverse of
+ * those hundred million tokens carried 21 distinct characters; the worst false
+ * positive carried 29. The populations overlap on diversity and separate
+ * cleanly on entropy, so the benchmark's "charset-diversity floor" phrasing
+ * describes a filter that cannot work.
+ *
+ * SCOPE. Enabled where the measurement can show it is safe: prefix characters
+ * all drawn from the variable class, a variable run of at least 50 characters,
+ * and a class of at least 62 symbols. Below 50 characters the legitimate
+ * distribution reaches down into the false-positive band and no threshold
+ * separates them -- which is why sentry-auth-token is deliberately absent. Its
+ * 40-character run is declared over 65 symbols but issued as hex, and hex of
+ * that length sits at 3.06 bits, below this floor and below several of the
+ * false positives it is meant to reject.
+ *
+ * NOT A FIX FOR ASSET-EMBEDDED BASE64. The same benchmark proposed this floor
+ * for square-access-token and facebook-access-token firing inside base64 blobs
+ * in an SVG and a tokenizer resource. Measurement rejected that use: those
+ * values carry 4.33 to 4.81 bits, and the least random of 10,000,000 legitimate
+ * tokens of the same length carries 4.885. A 0.075-bit gap is inside the
+ * legitimate distribution's own tail, so no threshold separates them. Those
+ * findings survive this floor on purpose.
+ */
+const POST_PREFIX_ENTROPY_FLOOR = 3.75;
 
 export const rules: SecretRule[] = [
   // ---------------------------------------------------------------- AWS
@@ -234,6 +308,7 @@ export const rules: SecretRule[] = [
     regex: /\bgithub_pat_[A-Za-z0-9_]{60,}\b/g,
     fullMatch: true,
     keywords: ["github_pat_"],
+    postPrefixEntropy: { prefix: /^github_pat_/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "critical",
   },
 
@@ -278,6 +353,7 @@ export const rules: SecretRule[] = [
     regex: /\bATATT3x[A-Za-z0-9_\-=.]{100,}\b/g,
     fullMatch: true,
     keywords: ["ATATT3x"],
+    postPrefixEntropy: { prefix: /^ATATT3x/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "critical",
   },
   {
@@ -321,6 +397,10 @@ export const rules: SecretRule[] = [
     regex: /\b(?:sq0atp-[A-Za-z0-9_-]{22}|EAAA[A-Za-z0-9_-]{59,})\b/g,
     fullMatch: true,
     keywords: ["sq0atp-", "EAAA"],
+    // Only the EAAA branch. The sq0atp- branch varies over 22 characters,
+    // where a legitimate token can carry as little as 3.29 bits -- below this
+    // floor -- so the prefix pattern deliberately does not match it.
+    postPrefixEntropy: { prefix: /^EAAA/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "critical",
   },
   {
@@ -530,6 +610,7 @@ export const rules: SecretRule[] = [
     regex: /\bpypi-AgEIcHlwaS5vcmc[A-Za-z0-9_-]{50,}\b/g,
     fullMatch: true,
     keywords: ["pypi-AgEIcHlwaS5vcmc"],
+    postPrefixEntropy: { prefix: /^pypi-AgEIcHlwaS5vcmc/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "critical",
   },
   {
@@ -554,6 +635,7 @@ export const rules: SecretRule[] = [
     regex: /\b(?:AKCp[A-Za-z0-9]{60,}|cmVmdGtuOjAx[A-Za-z0-9_/+=-]{60,})\b/g,
     fullMatch: true,
     keywords: ["AKCp", "cmVmdGtuOjAx"],
+    postPrefixEntropy: { prefix: /^(?:AKCp|cmVmdGtuOjAx)/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "critical",
   },
   {
@@ -860,6 +942,7 @@ export const rules: SecretRule[] = [
     regex: /\bdG9r[A-Za-z0-9+/=]{50,}\b/g,
     fullMatch: true,
     keywords: ["dG9r"],
+    postPrefixEntropy: { prefix: /^dG9r/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "high",
   },
   {
@@ -911,6 +994,7 @@ export const rules: SecretRule[] = [
     fullMatch: true,
     keywords: ["EAA"],
     allowlist: [/^EAAA/],
+    postPrefixEntropy: { prefix: /^EAA/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "high",
   },
   {
@@ -919,6 +1003,9 @@ export const rules: SecretRule[] = [
     regex: /\bAAAAAAAAAAAAAAAAAAAAA[A-Za-z0-9%]{50,}\b/g,
     fullMatch: true,
     keywords: ["AAAAAAAAAAAAAAAAAAAAA"],
+    // The rule this floor exists for: the prefix is 21 `A` characters and the
+    // class that follows contains `A`, so any run of 71 or more `A` matches.
+    postPrefixEntropy: { prefix: /^A{21}/, min: POST_PREFIX_ENTROPY_FLOOR },
     severity: "high",
   },
   {
@@ -1065,6 +1152,18 @@ export const baseExcludePaths = [
   "**/Gemfile.lock",
   "**/Cargo.lock",
   "**/go.sum",
+  // Go workspaces (Go 1.18+) put the same content -- module paths, versions and
+  // checksums -- in a second filename, and only the first was ever listed. One
+  // public Go repository produced 44 generic-high-entropy findings from a single
+  // go.work.sum, every one a module digest.
+  //
+  // Here rather than in the generated group, which is the one decision this
+  // entry actually makes. The two files are the same file class with the same
+  // content, so they should answer --include-generated the same way, and
+  // go.sum's answer has always been "no". Putting this one in the generated
+  // group would have made the flag scan go.work.sum but not go.sum -- a
+  // difference no one could predict from the filenames.
+  "**/go.work.sum",
   "**/composer.lock",
 ];
 
