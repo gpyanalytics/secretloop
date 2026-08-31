@@ -120,6 +120,71 @@ test("the Stripe rule still matches both its own key shapes", () => {
 });
 
 // ---------------------------------------------------------------------------
+suite("\n0.1.3 — Vercel, Supabase and Neon");
+
+/**
+ * Three modern-platform rules, each anchored on a prefix the provider states in
+ * its own documentation, and each carrying an entropy floor measured against
+ * 10,000,000 uniform draws at that rule's own minimum length.
+ *
+ *   vercel-access-token   vercel.com/docs/accounts/access-tokens:
+ *                         "Personal access tokens begin with the prefix vcp_".
+ *                         The changelog adds vci_, vca_, vcr_ and vck_ for
+ *                         integration, app access, app refresh and API keys.
+ *   supabase-secret-key   supabase.com/docs/guides/getting-started/api-keys
+ *                         documents sb_secret_... as the secret and
+ *                         sb_publishable_... as safe to expose. Only the first
+ *                         is a credential, and the rule must never claim the
+ *                         second.
+ *   neon-api-key          neon.com/docs/changelog/2025-01-31: "Newly created
+ *                         Neon API keys are now prefixed with napi_."
+ */
+const VERCEL_TOKEN = "vcp_" + gen(24);
+const SUPABASE_SECRET = "sb_secret_" + gen(40);
+const SUPABASE_PUBLISHABLE = "sb_publishable_" + gen(40);
+const NEON_KEY = "napi_" + gen(48);
+
+test("a Vercel personal access token reports", () => {
+  assert.ok(ruleIdsFor(`VERCEL_TOKEN = "${VERCEL_TOKEN}"`).includes("vercel-access-token"));
+});
+
+test("every documented Vercel credential prefix reports", () => {
+  for (const p of ["vcp_", "vci_", "vca_", "vcr_", "vck_"]) {
+    assert.ok(
+      ruleIdsFor(`t = "${p}${gen(24)}"`).includes("vercel-access-token"),
+      `${p} did not match`
+    );
+  }
+});
+
+test("a Supabase secret key reports", () => {
+  assert.ok(ruleIdsFor(`SUPABASE_SECRET_KEY = "${SUPABASE_SECRET}"`).includes("supabase-secret-key"));
+});
+
+/**
+ * The half that matters. A publishable key is documented as "safe to expose
+ * online: web page, mobile or desktop app, GitHub actions, CLIs, source code".
+ * Reporting one is a false positive by definition, and it would be the kind
+ * users learn to ignore -- it is SUPPOSED to be in their source.
+ */
+test("a Supabase PUBLISHABLE key is never reported", () => {
+  const ids = ruleIdsFor(`SUPABASE_PUBLISHABLE_KEY = "${SUPABASE_PUBLISHABLE}"`);
+  assert.deepStrictEqual(ids, [], `a publishable key was reported as a secret: ${ids.join(",")}`);
+});
+
+test("a Neon API key reports", () => {
+  assert.ok(ruleIdsFor(`NEON_API_KEY = "${NEON_KEY}"`).includes("neon-api-key"));
+});
+
+test("the existing Supabase and Vercel rules are untouched", () => {
+  assert.ok(ruleIdsFor(`k = "sbp_${gen(40, HEX)}"`).includes("supabase-service-key"));
+  assert.ok(
+    ruleIdsFor(`vercel_token = "${gen(24)}"`).includes("vercel-token"),
+    "the keyword-anchored vercel-token rule stopped matching"
+  );
+});
+
+// ---------------------------------------------------------------------------
 suite("\n0.1.3 — code identifiers that must never be credentials");
 
 /**
@@ -138,6 +203,9 @@ const IDENTIFIER_PROBES: Array<[label: string, code: string]> = [
   ["rnd_ variable prefix", 'const rnd_seed = 12345; let rnd_generator = makeRng(rnd_seed);'],
   ["Python re module", 'import re\nre_match = re.compile(r"^x")\nre_search_result = re_match.search(s)'],
   ["ddp_ variable prefix", 'const ddp_handler = require("./ddp"); export default ddp_handler;'],
+  ["sb_secret_ lowercase identifier", 'const sb_secret_configuration_value = process.env.SB_SECRET_KEY;'],
+  ["vcp_ variable prefix", 'let vcp_connection_pool_size = 24; const vcp_retry = 3;'],
+  ["napi_ long call chain", 'napi_create_reference(env, value, 1, &ref); napi_delete_reference(env, ref);'],
 ];
 
 for (const [label, code] of IDENTIFIER_PROBES) {
