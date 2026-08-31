@@ -9,7 +9,45 @@ tool. It finds exposed credentials, checks whether they are actually live, and
 helps you rotate and remediate them — in your editor, your pre-commit hook, and
 your CI.
 
-![The SecretLoop CLI scanning a repository and verifying each credential against its provider](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demo.gif)
+![SecretLoop scanning a working tree: three findings, each with its severity, rule, masked value, remediation line and fingerprint](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-scan-hero.gif)
+
+## Quickstart
+
+Needs Node 18 or newer — the liveness checks use the runtime's built-in `fetch`.
+
+Scan a repository's whole history without installing anything:
+
+```bash
+npx secretloop history --verify
+```
+
+`--verify` makes a read-only call to each provider to prove whether a credential
+still works, so you get a list of things to rotate today rather than a list of
+maybes. Drop it to stay entirely offline.
+
+```bash
+npx secretloop scan                  # the working tree
+npx secretloop staged                # what you are about to commit
+npx secretloop scan --format sarif -o results.sarif   # for CI
+```
+
+Install it properly if you want it in CI or a pre-commit hook:
+
+```bash
+npm install -g secretloop
+```
+
+For the editor, install **SecretLoop** from the VS Code Marketplace, or from a
+`.vsix`:
+
+```bash
+code --install-extension secretloop-0.1.0.vsix
+```
+
+The extension scans as you type and puts *redact*, *extract to `.env`* and
+*rotate* on the lightbulb. Live verification is off until you turn it on — it
+sends the credential to its provider, and a repository you just cloned may hold
+someone else's.
 
 ## In the editor
 
@@ -50,43 +88,82 @@ handoff between them:
    as a lightbulb in your editor with *redact*, *extract to `.env`*, and, where
    the provider exposes an API for it, *rotate*.
 
-## Quickstart
+## In VS Code
 
-Needs Node 18 or newer — the liveness checks use the runtime's built-in `fetch`.
+The same engine runs as you type: a finding becomes a diagnostic, and the lightbulb
+carries *SecretLoop: Redact this secret*, *SecretLoop: Copy to clipboard, then redact*
+and *SecretLoop: Move to `.env` and reference it*. That last one rewrites the literal to
+a `process.env` reference, writes the value into `.env`, and adds `.env` to `.gitignore`
+before it reports success.
 
-Scan a repository's whole history without installing anything:
+A walkthrough is under *More demos* below, as a mockup rather than a recording.
 
-```bash
-npx secretloop history --verify
+## Before you paste logs into an AI
+
+`secretloop mask` reads a log on stdin and writes it back with every credential replaced
+by `[REDACTED:<rule-id>]`, so a deploy log keeps the structure an assistant needs and
+loses the secrets it does not. The summary of what was masked goes to stderr, which
+leaves the masked log clean to pipe onward.
+
+```
+cat deploy.log | npx secretloop mask | pbcopy
 ```
 
-`--verify` makes a read-only call to each provider to prove whether a credential
-still works, so you get a list of things to rotate today rather than a list of
-maybes. Drop it to stay entirely offline.
+Both the terminal recording and an editor-side mockup are under *More demos* below.
 
-```bash
-npx secretloop scan                  # the working tree
-npx secretloop staged                # what you are about to commit
-npx secretloop scan --format sarif -o results.sarif   # for CI
-```
+<details>
+<summary>More demos</summary>
 
-Install it properly if you want it in CI or a pre-commit hook:
+### CLI
 
-```bash
-npm install -g secretloop
-```
+**`secretloop --help`**
 
-For the editor, install **SecretLoop** from the VS Code Marketplace, or from a
-`.vsix`:
+![The secretloop CLI help output listing every command and flag](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-help.gif)
 
-```bash
-code --install-extension secretloop-0.1.0.vsix
-```
+**`secretloop scan`**
 
-The extension scans as you type and puts *redact*, *extract to `.env`* and
-*rotate* on the lightbulb. Live verification is off until you turn it on — it
-sends the credential to its provider, and a repository you just cloned may hold
-someone else's.
+![A working-tree scan reporting findings grouped by value](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-scan.gif)
+
+**`secretloop history`**
+
+![A git history scan walking commits for credentials](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-history.gif)
+
+**`secretloop scan --staged`**
+
+![Scanning only the staged changes, as the pre-commit hook does](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-staged.gif)
+
+**`secretloop --write-baseline`**
+
+![Accepting current findings as a baseline so only new secrets report](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-baseline.gif)
+
+**`secretloop mask`**
+
+![Masking credentials in a log stream before sharing it](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mask.gif)
+
+**Masking a log before handing it to an AI CLI**
+
+![A deploy log masked with secretloop mask, then passed to an AI CLI for debugging](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mask-to-copilot-cli.gif)
+
+**Copy, then redact**
+
+![Copying a secret to the clipboard and redacting it from the file in one step](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-clipboard-story.gif)
+
+### Illustrative mockups
+
+These two are **staged mockups, not UI recordings.** They show the shape of the
+workflow; several on-screen strings are narration rather than text the tool renders.
+They are kept here, and out of the sections above, until they are re-recorded against
+the shipped UI.
+
+**Move a secret to `.env` from the lightbulb**
+
+![Mockup: a hardcoded key, the SecretLoop quick-fix menu, and the value relocated to .env](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-move-to-env.gif)
+
+**Masking a log before pasting it into an editor assistant**
+
+![Mockup: a deploy log masked at the terminal, then pasted into an editor chat panel](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mask-to-copilot.gif)
+
+</details>
 
 ## Where this sits against the existing tools
 
