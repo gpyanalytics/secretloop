@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.3 — unreleased
+## 0.1.3
 
 Two false-positive fixes. Both come from a twenty-repository survey run against
 0.1.2 **after** it shipped — a different and much broader exercise than the two
