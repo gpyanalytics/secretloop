@@ -165,6 +165,32 @@ export function isDocumentationSample(value: string): boolean {
  */
 const POST_PREFIX_ENTROPY_FLOOR = 3.75;
 
+/**
+ * Post-prefix floors for the 0.1.3 provider rules, one per rule.
+ *
+ * 3.75 above is NOT reusable here and the difference is measured, not assumed.
+ * It was derived for variable runs of at least 50 characters over alphabets of
+ * at least 62 symbols. These rules are shorter, and two of them draw from
+ * narrower alphabets, so the same number would reject real credentials -- at a
+ * 24-character Vercel token, 3.75 costs 0.0027% of legitimate keys, and at a
+ * 20-character Supabase tail it costs 0.1125%.
+ *
+ * Each value below is the highest floor that lost NOTHING across 10,000,000
+ * uniform draws at that rule's own minimum length:
+ *
+ *   vercel-access-token   3.00   24 chars over 62 symbols   0/10,000,000
+ *   supabase-secret-key   2.75   20 chars over 63 symbols   0/10,000,000
+ *   neon-api-key          3.50   32 chars over 62 symbols   0/10,000,000
+ *
+ * A low floor is worth less than a high one, and these are honest about that:
+ * at 2.75 the Supabase floor rejects near-homogeneous runs and little else, so
+ * the 20-character minimum is doing most of the work. The floor is the backstop
+ * against the N1 shape, not the primary filter.
+ */
+const FLOOR_VERCEL_ACCESS_TOKEN = 3.0;
+const FLOOR_SUPABASE_SECRET_KEY = 2.75;
+const FLOOR_NEON_API_KEY = 3.5;
+
 export const rules: SecretRule[] = [
   // ---------------------------------------------------------------- AWS
   {
@@ -726,6 +752,26 @@ export const rules: SecretRule[] = [
     severity: "critical",
   },
   {
+    // Format source: https://vercel.com/docs/accounts/access-tokens --
+    // "Personal access tokens begin with the prefix `vcp_`", with a curl example
+    // using it. https://vercel.com/changelog/new-token-formats-and-secret-scanning
+    // adds the other four: vci_ integration, vca_ app access, vcr_ app refresh,
+    // vck_ API key. Vercel introduced the prefixes expressly so leaked
+    // credentials can be recognised, which is what makes this rule possible.
+    //
+    // 24 is a conservative minimum, not a documented length -- Vercel publishes
+    // none. The class excludes "_", so `vcp_connection_pool_size` stops at the
+    // first underscore and cannot reach the minimum.
+    id: "vercel-access-token",
+    description: "Vercel Access Token",
+    regex: /\bvc[apirk]_[A-Za-z0-9]{24,}\b/g,
+    fullMatch: true,
+    keywords: ["vcp_", "vci_", "vca_", "vcr_", "vck_"],
+    postPrefixEntropy: { prefix: /^vc[apirk]_/, min: FLOOR_VERCEL_ACCESS_TOKEN },
+    allowlist: DOC_SAMPLE,
+    severity: "high",
+  },
+  {
     id: "vercel-token",
     description: "Vercel API Token",
     regex: /(?:vercel[_.-]?(?:api[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9]{24})["']?/gi,
@@ -825,11 +871,53 @@ export const rules: SecretRule[] = [
     severity: "critical",
   },
   {
+    // Format source: https://supabase.com/docs/guides/getting-started/api-keys
+    // documents two modern keys -- `sb_secret_...` with "Elevated" privileges
+    // and a "Never expose your secret keys publicly" warning, and
+    // `sb_publishable_...` marked "Safe to expose online: web page, mobile or
+    // desktop app, GitHub actions, CLIs, source code".
+    //
+    // The prefix is `sb_secret_` precisely so the publishable key can never
+    // match. Reporting a publishable key would be a false positive by
+    // definition: it is supposed to be in the source, and a rule that flags it
+    // teaches people to ignore this rule. tests/provider-rules-0.1.3.test.ts
+    // asserts the publishable form reports nothing at all.
+    id: "supabase-secret-key",
+    description: "Supabase Secret Key",
+    regex: /\bsb_secret_[A-Za-z0-9_-]{20,}\b/g,
+    fullMatch: true,
+    keywords: ["sb_secret_"],
+    postPrefixEntropy: { prefix: /^sb_secret_/, min: FLOOR_SUPABASE_SECRET_KEY },
+    allowlist: DOC_SAMPLE,
+    severity: "critical",
+  },
+  {
     id: "supabase-service-key",
     description: "Supabase Personal Access Token",
     regex: /\bsbp_[a-f0-9]{40}\b/g,
     fullMatch: true,
     keywords: ["sbp_"],
+    severity: "critical",
+  },
+  {
+    // Format source: https://neon.com/docs/changelog/2025-01-31 -- "Newly
+    // created Neon API keys are now prefixed with `napi_`." Neon added the
+    // prefix expressly to make the keys findable by secret scanners.
+    //
+    // THE FALSE-POSITIVE RISK HERE IS Node-API, not another provider. `napi_`
+    // prefixes every symbol in Node's native addon interface -- napi_status,
+    // napi_value, napi_create_string_utf8 -- and those appear in quantity in
+    // any C/C++ addon. The class excludes "_", so every one of them stops at
+    // its first underscore and falls far short of 32 characters. Pinned by a
+    // permanent probe in tests/provider-rules-0.1.3.test.ts rather than left to
+    // the reader to verify.
+    id: "neon-api-key",
+    description: "Neon API Key",
+    regex: /\bnapi_[A-Za-z0-9]{32,}\b/g,
+    fullMatch: true,
+    keywords: ["napi_"],
+    postPrefixEntropy: { prefix: /^napi_/, min: FLOOR_NEON_API_KEY },
+    allowlist: DOC_SAMPLE,
     severity: "critical",
   },
   {
