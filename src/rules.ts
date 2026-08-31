@@ -190,6 +190,16 @@ const POST_PREFIX_ENTROPY_FLOOR = 3.75;
 const FLOOR_VERCEL_ACCESS_TOKEN = 3.0;
 const FLOOR_SUPABASE_SECRET_KEY = 2.75;
 const FLOOR_NEON_API_KEY = 3.5;
+/**
+ * Tailscale, both rules: 2.75, the highest floor with zero loss over
+ * 10,000,000 uniform draws at the 20-character minimum.
+ *
+ * Low, and honestly so -- it rejects near-homogeneous runs and little else. It
+ * does not need to do more. The prefix is ten characters carrying two hyphens
+ * at fixed offsets, which no identifier in a mainstream language can spell, so
+ * the prefix is already the filter and the floor is only the N1 backstop.
+ */
+const FLOOR_TAILSCALE = 2.75;
 
 export const rules: SecretRule[] = [
   // ---------------------------------------------------------------- AWS
@@ -607,6 +617,40 @@ export const rules: SecretRule[] = [
     fullMatch: true,
     keywords: [":AA"],
     severity: "high",
+  },
+  {
+    // Format source: https://tailscale.com/docs/reference/key-prefixes -- a
+    // dedicated reference page listing every prefix. "tskey-api" is an API
+    // access token, "tskey-client" an OAuth client key, "tskey-scim" a SCIM key
+    // and "tskey-webhook" a webhook key. The page notes the keys are
+    // case-sensitive and states no length, so 20 is a conservative minimum.
+    //
+    // The alternation is CLOSED. An undocumented tskey- type is not a
+    // credential this rule set can name, and inventing one would be the same
+    // error as inventing a format.
+    id: "tailscale-api-key",
+    description: "Tailscale API Access Token",
+    regex: /\btskey-(?:api|client|scim|webhook)-[A-Za-z0-9-]{20,}\b/g,
+    fullMatch: true,
+    keywords: ["tskey-api-", "tskey-client-", "tskey-scim-", "tskey-webhook-"],
+    postPrefixEntropy: { prefix: /^tskey-(?:api|client|scim|webhook)-/, min: FLOOR_TAILSCALE },
+    allowlist: DOC_SAMPLE,
+    severity: "critical",
+  },
+  {
+    // Same documented source and the same shape, kept as a SEPARATE rule
+    // because it is a different credential. An API access token administers the
+    // tailnet; a pre-authentication key provisions a device ONTO it. That is
+    // network access rather than account access, it is revoked in a different
+    // place, and one rotation instruction cannot serve both.
+    id: "tailscale-auth-key",
+    description: "Tailscale Pre-Authentication Key",
+    regex: /\btskey-auth-[A-Za-z0-9-]{20,}\b/g,
+    fullMatch: true,
+    keywords: ["tskey-auth-"],
+    postPrefixEntropy: { prefix: /^tskey-auth-/, min: FLOOR_TAILSCALE },
+    allowlist: DOC_SAMPLE,
+    severity: "critical",
   },
   {
     id: "twilio-api-key",

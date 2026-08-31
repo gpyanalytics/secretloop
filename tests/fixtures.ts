@@ -92,6 +92,8 @@ export const positiveSamples: Record<string, string> = {
   "discord-bot-token": `const discordToken = "M${gen(24)}.${gen(6)}.${gen(30)}";`,
   "discord-webhook": "https://discord.com/api/webhooks/" + gen(18, "0123456789") + "/" + gen(70),
   "telegram-bot-token": gen(9, "123456789") + ":AA" + gen(33),
+  "tailscale-api-key": "tskey-api-" + gen(12) + "-" + gen(20),
+  "tailscale-auth-key": "tskey-auth-" + gen(12) + "-" + gen(20),
   "twilio-api-key": "twilio SK" + hex(32),
   "twilio-auth-token": `twilio_auth_token="${hex(32)}"`,
   "sendgrid-api-key": "SG." + gen(22) + "." + gen(43),
