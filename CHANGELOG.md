@@ -2,14 +2,18 @@
 
 ## 0.1.3
 
-Two false-positive fixes. Both come from a twenty-repository survey run against
-0.1.2 **after** it shipped — a different and much broader exercise than the two
-SDK checkouts 0.1.2 was tuned against, and no part of it changed 0.1.2.
+Two false-positive fixes, one misattribution fix, and six new provider rules —
+103 rules to 109.
 
-No rule ID changed and no existing threshold changed. No output format changed.
-Findings that survive these fixes keep their fingerprints: across this
-repository and the source files below, 283 findings are present before and
-after with byte-identical fingerprints, and nothing new appeared.
+The false-positive work comes from a twenty-repository survey run against 0.1.2
+**after** it shipped — a different and much broader exercise than the two SDK
+checkouts 0.1.2 was tuned against, and no part of it changed 0.1.2.
+
+No existing rule ID changed and no existing threshold changed. No output format
+changed. Findings that survive the false-positive fixes keep their
+fingerprints: across this repository and the source files below, 283 findings
+are present before and after with byte-identical fingerprints, and nothing new
+appeared.
 
 ### Fixed — fixed-prefix rules matched low-diversity runs
 
@@ -82,6 +86,85 @@ generated-file group, so the two files answer `--include-generated` the same
 way: **neither is restored by it**, which has always been true of `go.sum`. The
 alternative would have made the flag scan one and not the other, a difference
 nobody could predict from the filenames.
+
+### Fixed — OpenRouter keys were reported as OpenAI keys
+
+`openai-api-key` matches `sk-` followed by 32 or more characters from a class
+that includes everything an OpenRouter key puts after `sk-`, so every
+`sk-or-…` key was reported under the wrong provider. That is worse than a
+generic finding: the provider selects the verifier, names the consent prompt and
+picks the rotation link, so the finding sent you to the wrong console.
+
+Fixed the way the same overlap was already fixed for Anthropic — an allowlist
+entry on the broader rule, `/^sk-or-/` beside `/^sk-ant-/`. OpenAI's own key
+shapes are unaffected.
+
+### Six new provider rules
+
+Every format below was verified against the provider's own documentation before
+its pattern was written. **Four further providers were surveyed and dropped** —
+see below.
+
+| rule | severity | prefix | documented by |
+|---|---|---|---|
+| `openrouter-api-key` | critical | `sk-or-` | OpenRouter docs and blog |
+| `vercel-access-token` | high | `vcp_` `vci_` `vca_` `vcr_` `vck_` | Vercel access-token docs and changelog |
+| `supabase-secret-key` | critical | `sb_secret_` | Supabase API-keys guide |
+| `neon-api-key` | critical | `napi_` | Neon changelog |
+| `tailscale-api-key` | critical | `tskey-api-` `tskey-client-` `tskey-scim-` `tskey-webhook-` | Tailscale key-prefix reference |
+| `tailscale-auth-key` | critical | `tskey-auth-` | Tailscale key-prefix reference |
+
+Tailscale is two rules rather than one because an API token administers the
+tailnet while a pre-authentication key provisions a device onto it — different
+blast radius, different revocation path.
+
+**Supabase publishable keys are never reported.** The documentation calls them
+safe to expose in source, so flagging one would be a false positive by
+definition; a test asserts the publishable form produces nothing.
+
+**Minimum lengths are conservative floors, not documented values** — none of
+these providers publishes a length, and a floor set too long silently misses
+real credentials.
+
+Each rule carries a post-prefix entropy floor set to the highest value that lost
+nothing across **10,000,000** uniform draws at that rule's own minimum length:
+3.00 for Vercel, 2.75 for Supabase and both Tailscale rules, 3.50 for Neon.
+`openrouter-api-key` ships **without** a floor, and that is measured rather than
+overlooked: its variable portion is hexadecimal, and at the rule's minimum
+length a 3.75 floor would reject **85.0968%** of legitimate keys, 3.00 would
+reject 0.0111%, and only 2.50 reaches zero — where it excludes nothing the
+length requirement does not already exclude.
+
+Measured on 200,000 samples of ordinary repository content — random alphanumeric,
+hex and base64 runs, snake_case and camelCase identifiers, file paths, UUIDs and
+prose — **every new rule fired 0 times**, against a 0.001% rejection budget.
+
+### Measured and not built — four providers with no safe pattern
+
+Reported because the absence is the result, not an omission.
+
+**MongoDB Atlas, Deno Deploy and Render** publish no page stating their
+credential format. Third-party write-ups describe one, and that is not evidence
+a detector can rest on.
+
+**Resend** is the more interesting case: its prefix *is* documented, and it was
+still dropped. `re_` is three characters, and the only published example carries
+an internal underscore, so the pattern's character class must accept `_` — which
+makes `re_<snake_case_identifier>` the same shape as a key. Entropy cannot
+separate them: across 20,000 realistic 30-character identifiers, **81.7% of
+snake_case and 94.5% of camelCase** clear 3.50, already the highest floor that
+keeps real keys. Excluding `_` takes the collision to zero and stops matching
+real Resend keys too. A documented prefix turns out to be necessary but not
+sufficient.
+
+### Honest about a format three providers share
+
+`stripe-secret-key` now reads *"Stripe / Clerk / WorkOS secret key (format
+shared by all three)"*. Clerk and WorkOS both issue secret keys as
+`sk_live_`/`sk_test_`, and Clerk's documentation says the shape is deliberately
+familiar. No pattern separates them, so none is attempted — but a finding that
+said "Stripe" and meant Clerk sent someone to rotate a key in a dashboard that
+does not hold it.
 
 ### Measured and not fixed — fixed-prefix matches inside base64 assets
 
