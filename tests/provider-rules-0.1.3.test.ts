@@ -8,10 +8,23 @@ import { rules } from "../src/rules";
  *
  * Every format in this file was re-verified against the provider's own
  * documentation before its pattern was written, and the source is recorded
- * beside each rule. Three providers surveyed alongside these were DROPPED for
- * exactly that reason: MongoDB Atlas, Deno Deploy and Render publish no page
- * stating their credential format, and a pattern built on a third-party
- * write-up is a guess wearing a citation.
+ * beside each rule. FOUR providers surveyed alongside these were DROPPED.
+ *
+ * MongoDB Atlas, Deno Deploy and Render publish no page stating their
+ * credential format, and a pattern built on a third-party write-up is a guess
+ * wearing a citation.
+ *
+ * Resend was dropped for a different and more interesting reason: its prefix IS
+ * documented -- resend.com/auth.md says "The only credential is a Resend API key
+ * (prefix `re_`)" -- but nothing else is. `re_` is three characters, and the
+ * only published example carries an internal underscore, so the rule's class
+ * must accept "_". That makes `re_<snake_case_identifier>` indistinguishable
+ * from a key by length, and measurement showed entropy cannot separate them
+ * either: of 20,000 realistic 30-character identifiers, 81.7% of snake_case and
+ * 94.5% of camelCase clear the highest floor that keeps real keys (3.50).
+ * Excluding "_" from the class would drop the collision to zero and also stop
+ * matching real Resend keys. A documented prefix is necessary but not
+ * sufficient.
  *
  * Minimum lengths are conservative floors, not documented values, because none
  * of these providers publishes a length. A floor that is too long misses real
@@ -185,6 +198,53 @@ test("the existing Supabase and Vercel rules are untouched", () => {
 });
 
 // ---------------------------------------------------------------------------
+suite("\n0.1.3 — Tailscale");
+
+/**
+ * Tailscale publishes a dedicated key-prefix reference --
+ * https://tailscale.com/docs/reference/key-prefixes -- which is the strongest
+ * format documentation of any provider in this slice. It lists five prefixes,
+ * all `tskey-` plus the key type.
+ *
+ * Split into two rules because they are two credentials with different blast
+ * radii. An API access token administers the tailnet through the API; a
+ * pre-authentication key PROVISIONS A DEVICE ONTO the tailnet, which is network
+ * access rather than account access, and is revoked in a different place.
+ * Collapsing them would put one rotation instruction on both.
+ */
+const TS_API = "tskey-api-" + gen(12) + "-" + gen(20);
+const TS_AUTH = "tskey-auth-" + gen(12) + "-" + gen(20);
+
+test("a Tailscale API access token reports as tailscale-api-key", () => {
+  const ids = ruleIdsFor(`TS_API_KEY = "${TS_API}"`);
+  assert.ok(ids.includes("tailscale-api-key"), ids.join(","));
+  assert.ok(!ids.includes("tailscale-auth-key"), "an API token matched the auth-key rule");
+});
+
+test("a Tailscale pre-auth key reports as tailscale-auth-key", () => {
+  const ids = ruleIdsFor(`TS_AUTHKEY = "${TS_AUTH}"`);
+  assert.ok(ids.includes("tailscale-auth-key"), ids.join(","));
+  assert.ok(!ids.includes("tailscale-api-key"), "an auth key matched the API-token rule");
+});
+
+test("the other three documented tskey- types report as API-tier credentials", () => {
+  for (const kind of ["client", "scim", "webhook"]) {
+    assert.ok(
+      ruleIdsFor(`k = "tskey-${kind}-${gen(12)}-${gen(20)}"`).includes("tailscale-api-key"),
+      `tskey-${kind}- did not match`
+    );
+  }
+});
+
+test("an undocumented tskey- type is not claimed by either rule", () => {
+  // The prefix list is closed on purpose. An invented type is not a credential
+  // this rule set knows how to name, and guessing one would be the same error
+  // as guessing a format.
+  const ids = ruleIdsFor(`k = "tskey-notatype-${gen(12)}-${gen(20)}"`);
+  assert.ok(!ids.includes("tailscale-api-key") && !ids.includes("tailscale-auth-key"), ids.join(","));
+});
+
+// ---------------------------------------------------------------------------
 suite("\n0.1.3 — code identifiers that must never be credentials");
 
 /**
@@ -206,6 +266,9 @@ const IDENTIFIER_PROBES: Array<[label: string, code: string]> = [
   ["sb_secret_ lowercase identifier", 'const sb_secret_configuration_value = process.env.SB_SECRET_KEY;'],
   ["vcp_ variable prefix", 'let vcp_connection_pool_size = 24; const vcp_retry = 3;'],
   ["napi_ long call chain", 'napi_create_reference(env, value, 1, &ref); napi_delete_reference(env, ref);'],
+  // The shape that cost Resend its rule in this slice. Kept as a guard so a
+  // later attempt has to confront it rather than rediscover it.
+  ["re_ snake_case identifier", 'const re_parser_buffer_match_resolver_context = compile(pattern);'],
 ];
 
 for (const [label, code] of IDENTIFIER_PROBES) {

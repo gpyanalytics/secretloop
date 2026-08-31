@@ -192,6 +192,8 @@ const REALISTIC: Array<[label: string, value: string]> = [
   ["vercel-access-token, at the pattern floor", "vcp_" + gen(24)],
   ["supabase-secret-key, at the pattern floor", "sb_secret_" + gen(20)],
   ["neon-api-key, at the pattern floor", "napi_" + gen(32)],
+  ["tailscale-api-key, at the pattern floor", "tskey-api-" + gen(20)],
+  ["tailscale-auth-key, at the pattern floor", "tskey-auth-" + gen(20)],
 ];
 
 suite("\n0.1.3 — realistically shaped tokens still report");
@@ -253,6 +255,8 @@ const MEASURED_FLOORS: Record<string, number> = {
   "vercel-access-token": 3.0,
   "supabase-secret-key": 2.75,
   "neon-api-key": 3.5,
+  "tailscale-api-key": 2.75,
+  "tailscale-auth-key": 2.75,
 };
 
 test("every declared floor matches its recorded measurement", () => {
