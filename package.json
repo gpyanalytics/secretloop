@@ -3,7 +3,7 @@
   "displayName": "SecretLoop",
   "description": "SecretLoop detects exposed secrets, verifies whether they are live, and helps developers rotate and remediate them. A GPY Analytics product.",
   "icon": "docs/icon.png",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "publisher": "gpyanalytics",
   "engines": {
     "vscode": "^1.85.0",
