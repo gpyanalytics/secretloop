@@ -1,0 +1,36 @@
+# Keyed-corpus repository identities and pinned commits
+#
+# The corpus behind the N8 key-context measurement in bench/keyed-corpus.ts.
+# Written so this measurement stays reproducible -- the 20-repository
+# benchmark of 0.1.2 was not, because its clones were deleted and no commit
+# was recorded, and repos.txt exists to stop that happening twice.
+#
+# These are the fourteen pinned identities from the false-positive corpus in
+# bench/repos.txt. The twenty-repository benchmark in that same file is NOT
+# used here: every one of its commits is recorded as unknown, so cloning
+# those today would give a different tree and a number nobody could check.
+#
+# Cloned 2026-09-01, shallow (--filter=blob:none), read-only, then checked out
+# at the commit below. Recreate with:
+#
+#   git clone --filter=blob:none --no-checkout https://github.com/<repo>.git <dir>
+#   git -C <dir> checkout <commit>
+#
+# repository                            commit (full)
+anthropics/anthropic-sdk-typescript   7f3898c525b1a1486c85b3808f03935418fed0b8
+aws/aws-sdk-js-v3                     e53a25aafbdd772c90d26471dc271e383f1daf71
+expo/expo                             f1882313ed8455baa8ca31e5e52d7cf5aff27771
+facebook/react-native                 c6b137cac9fea8cb0124d0a374e8f60316895d16
+flutter/flutter                       634d370c3ab270fb4bbbcf71ee01a8c0907aa1c3
+getsentry/sentry-javascript           fade8e2ddd3dfc2ff18b6e4053a93a94c1c7cbae
+googleapis/google-cloud-node          c5fea74ac47bd646309e7e38143264364a5275ee
+langchain-ai/langchainjs              ffadf8515774376e090b6c67d5cb54e2cd2ab0b7
+open-telemetry/opentelemetry-js       b85eb28343ff6234e2bb4d46b7b4a3d360e5ea2f
+openai/openai-node                    eea2292a4a523da9405161dde0a79ac5dc2ecb2a
+stripe/stripe-js                      8daa6fad5d318aa9e18aa0e1833e4249c08e4682
+stripe/stripe-node                    6592470f1c70dbeb71ebb74c4200650ec93b26f8
+supabase/supabase-js                  b3b939a405ae663aea2fabecfa4dfcc6161d155a
+vercel/ai                             1c6854096fbe9aa55ae59cfa2bdee03d55e95c8e
+#
+# Inclusion means a repository was scanned. It does not mean the project uses
+# SecretLoop, endorses it, or was consulted.
