@@ -73,6 +73,14 @@ docs/**
 # negation: src/ and tests/ still contribute zero entries.
 !docs/icon.png
 
+# Unreported findings from scanning other people's code, held for responsible
+# disclosure. A root-level .md is not covered by anything above -- README.md,
+# LICENSE and SECURITY.md ship from exactly that position -- so this one would
+# have shipped by default, which is the failure mode the docs/** note above was
+# written about. The manifest diff in scripts/smoke-vsix.sh is the check that
+# would have caught it; this line is what stops it needing to.
+PRIVATE-FINDINGS.md
+
 # Build configuration and repository tooling. scripts/ holds the release gate
 # that packs and runs the npm tarball; it is never loaded by the extension.
 scripts/**
