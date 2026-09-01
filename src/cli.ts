@@ -431,6 +431,16 @@ export interface GateOutcome {
   fail: boolean;
   /** Why the build failed, when the reason is not simply a live credential. */
   note?: string;
+  /**
+   * How many findings met the threshold -- not how many were found.
+   *
+   * Reported in the exit message, and computed here rather than at the call
+   * site because this function is the only thing that knows what each mode
+   * counts. `--fail-on critical` on a report of forty mediums and one critical
+   * fails on one finding, and a message that said forty would send someone
+   * looking for thirty-nine criticals that are not there.
+   */
+  count: number;
 }
 
 /**
@@ -447,25 +457,30 @@ export interface GateOutcome {
  * turn it off, which protects nothing.
  */
 export function evaluateGate(findings: Finding[], failOn: Args["failOn"]): GateOutcome {
-  if (failOn === "never" || findings.length === 0) return { fail: false };
+  if (failOn === "never" || findings.length === 0) return { fail: false, count: 0 };
   switch (failOn) {
     case "verified": {
       const live = findings.filter((f) => f.verifyStatus === "live");
       const unresolved = findings.filter((f) => f.verifyStatus === "unknown");
-      if (live.length === 0 && unresolved.length === 0) return { fail: false };
+      const count = live.length + unresolved.length;
+      if (count === 0) return { fail: false, count: 0 };
       // A live credential explains itself in the report; an unresolved one does
       // not, and the remedy differs per reason.
-      if (unresolved.length === 0) return { fail: true };
-      return { fail: true, note: unresolvedNote(unresolved) };
+      if (unresolved.length === 0) return { fail: true, count };
+      return { fail: true, count, note: unresolvedNote(unresolved) };
     }
-    case "critical":
-      return { fail: findings.some((f) => f.severity === "critical") };
-    case "high":
-      return {
-        fail: findings.some((f) => f.severity === "critical" || f.severity === "high"),
-      };
+    case "critical": {
+      const count = findings.filter((f) => f.severity === "critical").length;
+      return { fail: count > 0, count };
+    }
+    case "high": {
+      const count = findings.filter(
+        (f) => f.severity === "critical" || f.severity === "high"
+      ).length;
+      return { fail: count > 0, count };
+    }
     default:
-      return { fail: true };
+      return { fail: true, count: findings.length };
   }
 }
 
@@ -721,10 +736,27 @@ async function main(): Promise<void> {
     // dashboards, and a byte added there would change every consumer's input.
     // A non-zero exit from a scanner reads as a crash to anyone who has not met
     // this flag before, and the report itself gives them no way to tell.
-    process.stderr.write(
-      "secretloop: exit 1: findings at or above the fail-on threshold " +
-        "(this is the CI gate, not an error)\n"
-    );
+    //
+    // Rewritten in 0.1.4 to answer the three questions the old wording left
+    // open -- how many, against which threshold, and what to run instead. It
+    // said "findings at or above the fail-on threshold (this is the CI gate,
+    // not an error)", which named neither the count nor the mode, so the reader
+    // still had to go and find both.
+    //
+    // The second line is omitted without -o on purpose: with no file written
+    // there is nothing to point at, and "Report written to undefined" is worse
+    // than silence.
+    const lines = [
+      `secretloop: exit 1 — ${gate.count} finding(s) at or above ` +
+        `--fail-on ${args.failOn} (CI gate).`,
+    ];
+    if (args.output) {
+      lines.push(
+        `  Report written to ${args.output}. ` +
+          "Use --fail-on never for a report-only run."
+      );
+    }
+    process.stderr.write(lines.join("\n") + "\n");
   }
   process.exitCode = gate.fail ? 1 : 0;
 }

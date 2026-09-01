@@ -403,15 +403,59 @@ test("SARIF result structure and fingerprints are unchanged for a fixed finding 
 suite("0.1.1 — fail-on stderr hint");
 
 test("exiting 1 under a fail-on gate prints the hint to stderr", () => {
+  // Reworded in 0.1.4. The old text -- "findings at or above the fail-on
+  // threshold (this is the CI gate, not an error)" -- named neither how many
+  // nor which threshold, so a reader still had to go and find both.
   withDir((dir) => {
     write(dir, "src/app.js", `const t = "${token()}";\n`);
     const res = runCli(dir, ["scan"]);
     assert.strictEqual(res.status, 1);
     assert.match(
       res.stderr,
-      /exit 1: findings at or above the fail-on threshold \(this is the CI gate, not an error\)/,
+      /exit 1 — 1 finding\(s\) at or above --fail-on any \(CI gate\)\./,
       `hint missing from stderr:\n${res.stderr}`
     );
+    // No -o, so there is no file to point at and the second line is absent.
+    assert.ok(
+      !res.stderr.includes("Report written to"),
+      `the -o line appeared without -o:\n${res.stderr}`
+    );
+  });
+});
+
+test("the exit message names the report file when -o was given", () => {
+  withDir((dir) => {
+    write(dir, "src/app.js", `const t = "${token()}";\n`);
+    const out = path.join(dir, "report.txt");
+    const res = runCli(dir, ["scan", "-o", out]);
+    assert.strictEqual(res.status, 1);
+    assert.match(
+      res.stderr,
+      new RegExp(
+        `Report written to ${out.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\. ` +
+          "Use --fail-on never for a report-only run\\."
+      ),
+      `the -o line is missing or malformed:\n${res.stderr}`
+    );
+  });
+});
+
+test("the count is what met the threshold, not what was found", () => {
+  withDir((dir) => {
+    // One critical and one medium. `--fail-on critical` gates on one of the
+    // two, and saying "2" there would send someone hunting for a second
+    // critical that does not exist.
+    write(
+      dir,
+      "src/app.js",
+      `const t = "${token()}";\nconst list = [\n  "qIk1MOfm2ziDcVTafyeu5ivE6uu7Gy82zuB0KaQf",\n];\n`
+    );
+    const all = JSON.parse(runCli(dir, ["scan", "--format", "json", "--fail-on", "never"]).stdout);
+    assert.strictEqual(all.findings.length, 2, "the fixture no longer plants two findings");
+
+    const res = runCli(dir, ["scan", "--fail-on", "critical"]);
+    assert.strictEqual(res.status, 1);
+    assert.match(res.stderr, /exit 1 — 1 finding\(s\) at or above --fail-on critical/);
   });
 });
 
