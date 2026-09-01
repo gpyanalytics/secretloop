@@ -222,6 +222,81 @@ function charsetDiversity(value: string): number {
 }
 
 /**
+ * Ordered character runs, added in 0.1.4 (N7a).
+ *
+ * Shannon entropy is blind to ordering: it counts how often each character
+ * occurs and never looks at what follows what. A printed alphabet is therefore
+ * the highest-scoring string there is -- every character exactly once -- and the
+ * first external run of this tool on a real frontend monorepo reported one, an
+ * email-validation character class, at entropy 6.02. No credential scores that.
+ *
+ * Two statistics, and a candidate is rejected on either:
+ *
+ *   longest_run   the longest strictly monotonic run, each character's code one
+ *                 above (or, separately, one below) the last. The reported
+ *                 alphabet carries runs of 26, 26 and 10.
+ *   seq_fraction  adjacent pairs one apart, over all adjacent pairs. This
+ *                 catches the shape a run length cannot see -- consecutive
+ *                 pairs written in alternating directions, where no run ever
+ *                 reaches 3 and half the pairs are still sequential.
+ *
+ * The thresholds are 6 and 0.40. The pair fraction sits high deliberately:
+ * small alphabets produce sequential pairs by chance far more often than base64
+ * does, and 0.40 is well clear of what a 16-symbol alphabet reaches.
+ *
+ * Measured before enabling, over the 140,000-sample realistic-token corpus at
+ * seed 20260831 (bench/entropy-vetoes.ts): 0 rejected by run length, 0 by pair
+ * fraction, 0.0000% loss. Bare hex was added to that corpus for this fix
+ * because the 0.1.3 one carried none: 0 of 20,000 64-character samples and 1 of
+ * 20,000 32-character samples, and an independent 200,000-draw run puts the
+ * 32-character rate at 0.0010%. That value could not have been a candidate
+ * anyway -- lowercase hex is two character classes, so it faces the 4.5 bar,
+ * and a 16-symbol alphabet cannot exceed 4.0 bits.
+ *
+ * Entropy-tier only. Named provider rules never consult this.
+ */
+const ORDERED_RUN_MIN = 6;
+const SEQUENTIAL_PAIR_FRACTION = 0.4;
+
+export interface OrderedRunStats {
+  /** Characters in the longest run of consecutive character codes. */
+  longestRun: number;
+  /** Adjacent pairs one code apart, over all adjacent pairs. */
+  sequentialFraction: number;
+}
+
+export function orderedRunStats(value: string): OrderedRunStats {
+  let longestRun = 1;
+  let current = 1;
+  let direction = 0;
+  let sequential = 0;
+  for (let i = 1; i < value.length; i++) {
+    const delta = value.charCodeAt(i) - value.charCodeAt(i - 1);
+    if (delta === 1 || delta === -1) {
+      sequential++;
+      // A change of direction ends the run and starts a new two-character one:
+      // "abcba" is two runs of three, not one run of five.
+      current = delta === direction ? current + 1 : 2;
+      direction = delta;
+      if (current > longestRun) longestRun = current;
+    } else {
+      direction = 0;
+      current = 1;
+    }
+  }
+  const pairs = value.length - 1;
+  return { longestRun, sequentialFraction: pairs > 0 ? sequential / pairs : 0 };
+}
+
+export function hasOrderedRun(value: string): boolean {
+  const stats = orderedRunStats(value);
+  return (
+    stats.longestRun >= ORDERED_RUN_MIN ||
+    stats.sequentialFraction >= SEQUENTIAL_PAIR_FRACTION
+  );
+}
+
+/**
  * Is the string at `index` the operand of an import, rather than a value?
  *
  * The only filter here that reads POSITION instead of shape, and the choice is
@@ -266,6 +341,7 @@ export function findHighEntropyStrings(text: string, threshold: number): Entropy
       if (seen.has(index)) continue;
 
       if (isStructuralFalsePositive(value, threshold)) continue;
+      if (hasOrderedRun(value)) continue;
       if (isModuleSpecifier(text, index)) continue;
       if (charsetDiversity(value) < 2) continue;
 

@@ -20,6 +20,25 @@ Corpus B is a real repository with no known secrets, so every finding is a false
 positive. It stays a manual step because it needs an external checkout pinned to
 a specific commit.
 
+## entropy-vetoes.ts — the generic-high-entropy veto measurement
+
+```bash
+npx ts-node --transpile-only bench/entropy-vetoes.ts
+```
+
+A separate measurement from the corpus above, and a narrower question: how many
+realistic credentials would a proposed veto on the entropy tier throw away? It
+regenerates the 140,000-sample realistic-token corpus 0.1.3 used for the
+post-prefix floor — eight fixed-prefix families at both the documented and the
+shortest accepted length, plus a rejection-sampled low-entropy tail — and runs
+each veto over it. Deterministic at seed 20260831.
+
+The predicates are imported from `src/entropy.ts` rather than copied, so the
+number cannot drift away from what ships. Diagnostic buckets (deliberately
+structured shapes, bare 32- and 64-character hex) are reported separately and
+never counted as realistic: they exist so a veto that rejects nothing anywhere
+reads as inert rather than as safe.
+
 ## What it measures
 
 - **Corpus A**: 190 files across 12 languages, 50 planted secrets in the tree,
