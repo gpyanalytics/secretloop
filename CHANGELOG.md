@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.1.5 — unreleased
+
+### Rules
+
+Six new provider rules — 103 rules to 109. No existing rule ID changed, no
+existing threshold changed, and no output format changed. Every format below was
+verified against the provider's own documentation before its pattern was
+written, and each minimum length is a conservative floor rather than a
+documented value, because none of these providers publishes one.
+
+- **`openrouter-api-key`** — `sk-or-`, critical. Ships without a post-prefix
+  entropy floor, and that is measured rather than overlooked: the variable
+  portion is hexadecimal, so at the rule's minimum length a 3.75 floor rejects
+  85.0968% of legitimate keys, 3.00 rejects 0.0111%, and only 2.50 reaches zero
+  — where it excludes nothing the length requirement does not already exclude.
+- **`vercel-access-token`** — `vcp_` `vci_` `vca_` `vcr_` `vck_`, high, floor 3.00.
+- **`supabase-secret-key`** — `sb_secret_`, critical, floor 2.75. Publishable
+  keys are documented as safe to expose in source and are never reported.
+- **`neon-api-key`** — `napi_`, critical, floor 3.50. The class excludes `_`, so
+  Node-API symbols such as `napi_create_string_utf8` stop at their first
+  underscore and cannot reach the minimum.
+- **`tailscale-api-key`** — `tskey-api-`, `tskey-client-`, `tskey-scim-`,
+  `tskey-webhook-`, critical, floor 2.75.
+- **`tailscale-auth-key`** — `tskey-auth-`, critical, floor 2.75. Kept separate
+  from the API rule because a pre-authentication key provisions a device onto
+  the tailnet rather than administering it, and the two are revoked in different
+  places.
+
+Each floor is the highest value that lost nothing across 10,000,000 uniform
+draws at that rule's own minimum length.
+
+### Fixed — OpenRouter keys were reported as OpenAI keys
+
+`openai-api-key` matches `sk-` followed by a character class that contains
+everything an OpenRouter key puts after `sk-`, so every `sk-or-…` key was
+reported under the wrong provider. That is worse than a generic finding: the
+provider selects the verifier, names the consent prompt and picks the rotation
+link, so the finding sent you to the wrong console. Fixed the way the same
+overlap was already fixed for Anthropic — an allowlist entry on the broader
+rule, `/^sk-or-/` beside `/^sk-ant-/`. OpenAI's own key shapes are unaffected.
+
+**Re-baseline after upgrading.** A fingerprint is `path:rule-id:digest`, so a
+`sk-or-…` finding already accepted into a baseline under `openai-api-key` no
+longer matches under `openrouter-api-key`: the digest is unchanged, the rule ID
+is not, and the finding returns as new.
+
+### Changed — a format three providers share is named as such
+
+`stripe-secret-key` now reads *"Stripe / Clerk / WorkOS secret key (format
+shared by all three)"*. All three issue secret keys as `sk_live_`/`sk_test_`,
+and no pattern separates them, so none is attempted — but a finding that said
+"Stripe" and meant Clerk sent someone to rotate a key in a dashboard that does
+not hold it.
+
 ## 0.1.4
 
 ### Precision
