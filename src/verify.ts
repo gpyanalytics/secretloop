@@ -83,6 +83,38 @@ function requestInit(ctx: VerifyContext, init: RequestInit = {}): RequestInit {
   return { ...init, signal: AbortSignal.timeout(ctx.timeoutMs ?? VERIFY_TIMEOUT_MS) };
 }
 
+/**
+ * Rules whose credential format is issued by more than one provider, and the
+ * providers that share it.
+ *
+ * Verification's contract is that a credential goes to the company that issued
+ * it and to nobody else. A rule in this table cannot honour that contract,
+ * because detection genuinely cannot tell the issuers apart -- so it does not
+ * try, and the credential is not sent anywhere.
+ *
+ * `stripe-secret-key` is the whole table today. Stripe, Clerk and WorkOS all
+ * issue secret keys as `sk_live_`/`sk_test_`; the rule's comment in rules.ts
+ * records that Clerk documents the collision outright, and 0.1.5's changelog
+ * states that no pattern separates the three. Until 0.1.6 this rule sent every
+ * match to api.stripe.com, which meant a Clerk or WorkOS secret key -- a live
+ * credential -- was handed to an unrelated company by a tool whose entire
+ * purpose is preventing exactly that.
+ *
+ * Not verifying costs a verdict on one rule. Verifying costs a credential
+ * disclosure that cannot be recalled, for two providers out of three. The
+ * asymmetry is the whole argument, and it is why this is a refusal rather than
+ * a guess at which issuer a key belongs to: no published sub-marker separates
+ * the formats, and a wrong guess sends the key anyway.
+ */
+const AMBIGUOUS_ISSUERS: Record<string, string[]> = {
+  "stripe-secret-key": ["Stripe", "Clerk", "WorkOS"],
+};
+
+/** True when a rule's format is issued by more than one provider. */
+export function isAmbiguousIssuer(ruleId: string): boolean {
+  return ruleId in AMBIGUOUS_ISSUERS;
+}
+
 const verifiers: Record<string, Verifier> = {
   "github-token": verifyGitHubToken,
   "github-oauth-token": verifyGitHubToken,
@@ -110,6 +142,16 @@ export function isVerifiable(ruleId: string): boolean {
 
 /** Every rule whose credential can be checked against a live provider. */
 export const VERIFIABLE_RULE_IDS: string[] = Object.keys(verifiers);
+
+/**
+ * The rules whose credential can actually leave the machine: every rule with a
+ * verifier, minus the ones whose issuer is ambiguous and are therefore never
+ * sent. This is the honest answer to "what can be transmitted", and it is
+ * smaller than VERIFIABLE_RULE_IDS.
+ */
+export const TRANSMITTING_RULE_IDS: string[] = VERIFIABLE_RULE_IDS.filter(
+  (id) => !isAmbiguousIssuer(id)
+);
 
 /**
  * The third party a rule's credential is checked against, by the name a user
@@ -141,12 +183,34 @@ export function verificationProvider(ruleId: string): string | undefined {
   return providers[ruleId];
 }
 
+/** "Stripe, Clerk and WorkOS" — an Oxford-free list for a sentence. */
+function listProviders(names: string[]): string {
+  if (names.length <= 1) return names[0] ?? "another provider";
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`;
+}
+
 export async function verifyFinding(
   finding: Finding,
   context: VerifyContext
 ): Promise<VerificationResult | null> {
   const verifier = verifiers[finding.ruleId];
   if (!verifier) return null; // no verifier for this rule; caller decides what that means
+
+  // Refused before dispatch, so the credential never reaches a verifier that
+  // would send it. Returning early rather than filtering upstream keeps the
+  // reason attached to the finding: the user is told the check did not happen
+  // and why, instead of seeing a silent "never checked".
+  const sharedBy = AMBIGUOUS_ISSUERS[finding.ruleId];
+  if (sharedBy) {
+    return unknown(
+      "ambiguous-issuer",
+      `This credential format is issued by ${listProviders(sharedBy)}, and nothing in the ` +
+        `value says which one issued this key. It was NOT sent to any of them, because ` +
+        `checking it would mean handing a live credential to a provider that may not have ` +
+        `issued it. Confirm it in the issuing provider's own dashboard.`
+    );
+  }
+
   try {
     return await verifier(finding.value, context);
   } catch (err: any) {
@@ -274,10 +338,16 @@ export async function verifyFindings(
   const contextFor = typeof context === "function" ? context : () => context;
 
   const { cache, onOutbound } = options;
+  // A refused check sends nothing, so it must not be recorded as a send. The
+  // outbound record's whole value is that it cannot overstate what left the
+  // machine -- the same reason a cache hit does not fire it.
+  const record = onOutbound && ((f: Finding) => {
+    if (!isAmbiguousIssuer(f.ruleId)) onOutbound(f);
+  });
   const check = cache
-    ? (f: Finding) => cache.verify(f, contextFor(f), onOutbound)
+    ? (f: Finding) => cache.verify(f, contextFor(f), record)
     : (f: Finding) => {
-        onOutbound?.(f);
+        record?.(f);
         return verifyFinding(f, contextFor(f));
       };
 
@@ -344,6 +414,20 @@ async function verifySlackToken(value: string, ctx: VerifyContext): Promise<Veri
   );
 }
 
+/**
+ * CURRENTLY UNREACHABLE, and deliberately kept.
+ *
+ * `stripe-secret-key` is in AMBIGUOUS_ISSUERS, so verifyFinding returns before
+ * dispatching here and this function sends nothing. It stays because the
+ * refusal is a property of the *format's* ambiguity, not of Stripe's API: if
+ * Stripe ever publishes a marker that separates its keys from Clerk's and
+ * WorkOS's, the fix is to narrow the ambiguity entry and this check works
+ * again unchanged.
+ *
+ * Removing the entry from AMBIGUOUS_ISSUERS re-enables sending to Stripe. Do
+ * not do that without a documented way to tell the three issuers apart --
+ * tests/issuer-ambiguity.test.ts fails if you do, which is the point.
+ */
 async function verifyStripeKey(value: string, ctx: VerifyContext): Promise<VerificationResult> {
   // GET /v1/balance is a minimal read-only call sufficient to prove the key works.
   const res = await ctx.fetchImpl(

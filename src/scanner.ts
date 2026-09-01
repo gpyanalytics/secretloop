@@ -87,7 +87,8 @@ export type UnknownReason =
   | "provider-refused"
   | "provider-unavailable"
   | "missing-pair"
-  | "no-verifier";
+  | "no-verifier"
+  | "ambiguous-issuer";
 
 export interface Finding {
   ruleId: string;
