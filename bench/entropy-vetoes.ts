@@ -29,7 +29,7 @@
  * with the predicate inline and the production code untouched; the numbers were
  * identical.
  */
-import { hasOrderedRun, orderedRunStats } from "../src/entropy";
+import { hasOrderedRun, isIdentifierPath, orderedRunStats } from "../src/entropy";
 
 const SEED = 20260831;
 let s = SEED;
@@ -135,21 +135,6 @@ for (let i = 0; i < 6000; i++) {
 // 5. bare hex, added in 0.1.4. See the header.
 for (let i = 0; i < 20000; i++) push("hex-32", draw(32, HEX));
 for (let i = 0; i < 20000; i++) push("hex-64", draw(64, HEX));
-
-// ---------------------------------------------------------------- predicates
-
-/**
- * N7b, still proposed at the commit that introduced this file: a candidate is
- * path-shaped only when it carries at least two separators, every segment is
- * letters with no digits, and at least one segment has a lowercase-to-uppercase
- * transition. Replaced by the production predicate when the veto lands.
- */
-function isIdentifierPath(value: string): boolean {
-  const segments = value.split("/");
-  if (segments.length < 3) return false;
-  if (!segments.every((seg) => /^[A-Za-z]+$/.test(seg))) return false;
-  return segments.some((seg) => /[a-z][A-Z]/.test(seg));
-}
 
 // ------------------------------------------------------------------ scoring
 

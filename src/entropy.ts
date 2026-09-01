@@ -297,6 +297,44 @@ export function hasOrderedRun(value: string): boolean {
 }
 
 /**
+ * Identifier paths, added in 0.1.4 (N7b).
+ *
+ * The other half of the first external report: a Storybook title,
+ * "Components/NavSidebar/TabOverflowMenu", at entropy 4.39. Slash-separated
+ * CamelCase is how a whole ecosystem names things -- stories, routes, i18n
+ * keys, GraphQL operations -- and each segment being a word makes the string
+ * score like a token while carrying no randomness at all.
+ *
+ * All three conditions must hold, and the narrowness is the point:
+ *
+ *   1. at least two "/" separators
+ *   2. every segment is letters only, no digits
+ *   3. at least one segment has a lowercase-to-uppercase transition
+ *
+ * Condition 2 carries the safety. Identifier paths rarely have mid-segment
+ * digits and random tokens almost always do, so it is what keeps this away from
+ * a base64 payload -- and from a 40-character AWS secret key with no
+ * AWS_SECRET_ACCESS_KEY anchor, which has no named rule and depends on this
+ * tier entirely. Do NOT widen the segment class to admit digits or punctuation
+ * without measuring the cost first; the existing path filters in
+ * STRUCTURAL_FALSE_POSITIVES record what happens when a path predicate is
+ * allowed to be roomy.
+ *
+ * Measured before enabling, over the same 140,000-sample realistic-token corpus
+ * as N7a (bench/entropy-vetoes.ts, seed 20260831): 5,202 samples carry two or
+ * more slashes -- 3.7157%, so the veto is genuinely exercised rather than
+ * vacuously safe -- and 0 of them satisfy all three conditions. 0.0000% loss.
+ *
+ * Entropy-tier only, like every other filter in this file.
+ */
+export function isIdentifierPath(value: string): boolean {
+  const segments = value.split("/");
+  if (segments.length < 3) return false;
+  if (!segments.every((seg) => /^[A-Za-z]+$/.test(seg))) return false;
+  return segments.some((seg) => /[a-z][A-Z]/.test(seg));
+}
+
+/**
  * Is the string at `index` the operand of an import, rather than a value?
  *
  * The only filter here that reads POSITION instead of shape, and the choice is
@@ -342,6 +380,7 @@ export function findHighEntropyStrings(text: string, threshold: number): Entropy
 
       if (isStructuralFalsePositive(value, threshold)) continue;
       if (hasOrderedRun(value)) continue;
+      if (isIdentifierPath(value)) continue;
       if (isModuleSpecifier(text, index)) continue;
       if (charsetDiversity(value) < 2) continue;
 
