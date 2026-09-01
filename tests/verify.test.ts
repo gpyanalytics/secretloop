@@ -125,27 +125,36 @@ test("Slack: ok:false response marks token not verified", async () => {
   assert.match(result!.detail, /invalid_auth/);
 });
 
-test("Stripe: 200 on /v1/balance means key is active", async () => {
+/**
+ * These three used to assert live/test-mode/dead verdicts from Stripe.
+ * 0.1.6 stopped asking: `sk_live_`/`sk_test_` is issued by Stripe, Clerk and
+ * WorkOS alike, so a verdict required sending the key to a company that may
+ * not have issued it. The verdict is gone on purpose, and no provider response
+ * can bring it back -- which is what the mocked 200 and 401 below pin.
+ * tests/issuer-ambiguity.test.ts holds the rest of the contract.
+ */
+test("Stripe: a 200 cannot produce a live verdict, because nothing is asked", async () => {
   const finding = makeFinding("stripe-secret-key", "sk_live_fake");
   const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 200 }) });
   assert.ok(result);
-  assert.strictEqual(result!.status, "live");
-  assert.match(result!.detail, /LIVE mode/);
+  assert.strictEqual(result!.status, "unknown");
+  assert.strictEqual(result!.reason, "ambiguous-issuer");
 });
 
-test("Stripe: test-mode key is verified but flagged as test mode", async () => {
+test("Stripe: a test-mode key is equally unasked", async () => {
   const finding = makeFinding("stripe-secret-key", "sk_test_fake");
   const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 200 }) });
   assert.ok(result);
-  assert.strictEqual(result!.status, "live");
-  assert.match(result!.detail, /test mode/);
+  assert.strictEqual(result!.status, "unknown");
+  assert.strictEqual(result!.reason, "ambiguous-issuer");
 });
 
-test("Stripe: 401 means the key is dead", async () => {
+test("Stripe: a 401 cannot produce a dead verdict either", async () => {
   const finding = makeFinding("stripe-secret-key", "sk_live_fake");
   const result = await verifyFinding(finding, { fullText: "", fetchImpl: mockFetch({ status: 401 }) });
   assert.ok(result);
-  assert.strictEqual(result!.status, "dead");
+  assert.strictEqual(result!.status, "unknown");
+  assert.strictEqual(result!.reason, "ambiguous-issuer");
 });
 
 test("Google: 200 means API key is active", async () => {

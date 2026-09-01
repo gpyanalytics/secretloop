@@ -182,6 +182,11 @@ const UNKNOWN_DETAILS: Record<UnknownReason, string> = {
   // verify.ts never emits this reason: it is the bucket report.ts and cli.ts put
   // an unknown with no reason into, so the finding carries verifyReason undefined.
   "no-verifier": "",
+  "ambiguous-issuer":
+    "This credential format is issued by Stripe, Clerk and WorkOS, and nothing in the value " +
+    "says which one issued this key. It was NOT sent to any of them, because checking it " +
+    "would mean handing a live credential to a provider that may not have issued it. " +
+    "Confirm it in the issuing provider's own dashboard.",
 };
 
 const ALL_REASONS = Object.keys(UNKNOWN_REASONS) as UnknownReason[];

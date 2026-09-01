@@ -56,10 +56,29 @@ function recordingFetch(hosts: string[], status = 200, jsonBody: any = {}) {
   }) as typeof fetch;
 }
 
+/**
+ * Credential-shaped values are GENERATED, never written -- the convention
+ * tests/fixtures.ts sets, so this file's own probes do not become findings in
+ * the repository's self-scan. xorshift32, seeded, so both are stable per run.
+ */
+let seed = 20260903;
+function rand(): number {
+  seed ^= seed << 13;
+  seed ^= seed >>> 17;
+  seed ^= seed << 5;
+  return Math.abs(seed) / 2 ** 31;
+}
+const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+function gen(n: number): string {
+  let out = "";
+  for (let i = 0; i < n; i++) out += ALNUM[Math.floor(rand() * ALNUM.length)];
+  return out;
+}
+
 // A Clerk secret key: same prefix as Stripe's, issued by a different company.
-const CLERK_KEY = "sk_live_" + "Y2xlcmtBbWJpZ3VvdXNLZXlTYW1wbGUwMDAwMDAwMA";
+const CLERK_KEY = "sk_live_" + gen(42);
 // A value shaped the way Stripe's own documentation shows.
-const STRIPE_SHAPED = "sk_live_" + "51H8xKfLpQr7TvWnZmB3cJd9";
+const STRIPE_SHAPED = "sk_live_" + gen(24);
 
 // ------------------------------------------- the security-defining assertion
 

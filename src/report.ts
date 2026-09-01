@@ -169,6 +169,11 @@ export const UNKNOWN_REASONS: Record<UnknownReason, { label: string; remedy: str
     label: "no verifier exists for this credential type",
     remedy: "nothing can confirm this one; judge it on format alone",
   },
+  "ambiguous-issuer": {
+    label: "more than one provider issues this credential format",
+    remedy:
+      "checking it would mean sending it to a provider that may not have issued it, so it was not sent — judge it on format, or check it in the issuer's own dashboard",
+  },
 };
 
 /**
