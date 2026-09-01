@@ -268,6 +268,17 @@ test("a base64 key with one slash is reported again", () => {
   // is no longer reported by the entropy tier. Measured at 0 of 140,000
   // realistic tokens (bench/entropy-vetoes.ts); a keyword-anchored credential
   // is unaffected, because generic-api-key-assignment does not consult this.
+  //
+  // DO NOT RESTORE THE OLD VALUE, and do not replace either of these with a
+  // hand-typed one. Both samples are deliberately free of any monotonic run of
+  // six or more consecutive character codes and of any string where 40% of
+  // adjacent pairs are one code apart, because N7a rejects both and a sample
+  // that trips it would fail this test for a reason that has nothing to do
+  // with the path filter it exists to guard. Typed strings drift into
+  // alphabetical stretches -- "0123456789", "JkLmNoPq" -- far more readily
+  // than drawn ones do; that is exactly how the old value acquired its run of
+  // ten. Check any new sample against orderedRunStats() in src/entropy.ts
+  // before adding it.
   for (const v of [
     "R6nK5HlG/ehNexnGZEP0Ccpjw5WdZMcjuKTWW8qj",
     "QqAL/fE9yX9wkpCDh3FSCRMSJ7pbSkoG3O1OhIec",
