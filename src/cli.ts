@@ -45,6 +45,13 @@ export interface Args {
   includeGenerated: boolean;
   /** Report generic-tier findings in test, fixture and example paths. */
   includeFixtures: boolean;
+  /**
+   * Require a secret-like word in the identifier before generic-high-entropy
+   * reports. True by default; `--no-key-context` clears it. Bypasses ONLY that
+   * gate -- the ordered-run and path-shape vetoes, the post-prefix floor and
+   * every named rule are untouched.
+   */
+  keyContext: boolean;
   /** mask: also mask generic high-entropy strings. Off by default -- see HELP. */
   entropy: boolean;
   /**
@@ -74,6 +81,7 @@ export function parseArgs(argv: string[]): Args {
     failOn: "any",
     includeGenerated: false,
     includeFixtures: false,
+    keyContext: true,
     entropy: false,
   };
   const errors: string[] = [];
@@ -137,6 +145,9 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--include-fixtures":
         args.includeFixtures = true;
+        break;
+      case "--no-key-context":
+        args.keyContext = false;
         break;
       case "--entropy":
         args.entropy = true;
@@ -260,6 +271,13 @@ OPTIONS
   --include-fixtures       Also report generic-tier findings in test, fixture
                            and example paths. Named provider rules already fire
                            there; this is only about the generic tiers.
+  --no-key-context         Report generic high-entropy strings whatever they are
+                           called. By default that tier fires only when the
+                           identifier carries a secret-like word (key, token,
+                           secret, password, auth...), because a value's shape
+                           alone is a weak guess. Turning this off restores the
+                           pre-0.1.4 behaviour of that ONE gate; every other
+                           filter and every named rule is unaffected.
   --format <text|json|sarif>   Output format (default: text)
   -o, --output <file>      Write the report to a file instead of stdout
   --no-redact              Print full secret values (dangerous in CI logs)
@@ -582,6 +600,7 @@ async function main(): Promise<void> {
   // the scan beyond what it has always been able to reach.
   if (args.includeGenerated) config.generatedExcludePaths = [];
   if (args.includeFixtures) config.includeFixtures = true;
+  if (!args.keyContext) config.keyContextRequired = false;
 
   let findings: Finding[];
   let texts = new Map<string, string>();

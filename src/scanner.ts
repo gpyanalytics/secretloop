@@ -6,7 +6,7 @@ import {
   SecretRule,
   Severity,
 } from "./rules";
-import { findHighEntropyStrings, shannonEntropy } from "./entropy";
+import { findHighEntropyStrings, hasSecretWord, shannonEntropy } from "./entropy";
 import {
   SecretLoopConfig,
   defaultConfig,
@@ -256,6 +256,30 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       // dropping it only moves the report down a tier unless this does too.
       if (isDocumentationSample(hit.value)) continue;
       if (allowValueRegexes.some((r) => r.test(hit.value))) continue;
+      // The key-name context gate (N8, 0.1.4).
+      //
+      // This tier guesses from shape alone, and on a real frontend monorepo
+      // that guess was wrong every time it fired. What a value is called is the
+      // cheapest evidence there is about whether it is a credential, and a
+      // whole word from the list is a much stronger signal than any refinement
+      // of the value's shape could be.
+      //
+      // Three properties, all load-bearing:
+      //
+      //  - Whole words, never substrings. `author`, `bypass`, `design` and
+      //    `apiVersion` all contain a listed word and none is a credential.
+      //  - An unresolvable identifier falls THROUGH. Absence of context is not
+      //    evidence of innocence -- a bare element of an array literal has no
+      //    key, and suppressing it would blind the tier to unkeyed config.
+      //  - Entropy tier only. Named rules and generic-api-key-assignment carry
+      //    their own evidence and never reach here.
+      if (
+        config.keyContextRequired &&
+        hit.identifier !== undefined &&
+        !hasSecretWord(hit.identifier)
+      ) {
+        continue;
+      }
       // Skip if this span overlaps a rule-based finding already reported.
       const overlaps = findings.some(
         (f) => hit.index < f.endIndex && hit.index + hit.value.length > f.startIndex

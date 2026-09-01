@@ -24,12 +24,30 @@ export function shannonEntropy(input: string): number {
 // quoted strings alone misses .env files and YAML, which is where secrets
 // actually tend to live.
 const QUOTED_TOKEN = /["'`]([A-Za-z0-9+/=_\-.]{20,})["'`]/g;
-const BARE_ASSIGNMENT = /(?:^|\s)[A-Za-z_][A-Za-z0-9_]*\s*[:=]\s*([A-Za-z0-9+/=_\-.]{20,})(?=\s|$)/gm;
+// The identifier is captured rather than skipped as of 0.1.4. This pattern
+// already had to match it to recognise an assignment at all; the key-context
+// gate needs to know what it was, and taking it from here is the assignment
+// model the file already has rather than a second one bolted alongside.
+const BARE_ASSIGNMENT = /(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)\s*[:=]\s*([A-Za-z0-9+/=_\-.]{20,})(?=\s|$)/gm;
+
+/** Which capture group of each pattern holds what. */
+const PATTERNS: Array<{ regex: RegExp; value: number; identifier?: number }> = [
+  { regex: QUOTED_TOKEN, value: 1 },
+  { regex: BARE_ASSIGNMENT, value: 2, identifier: 1 },
+];
 
 export interface EntropyMatch {
   value: string;
   index: number;
   entropy: number;
+  /**
+   * The identifier this literal is assigned to, when one resolves.
+   *
+   * Undefined is a real answer and not a failure: a bare element of an array
+   * literal has no key, and the key-context gate treats that as "no evidence
+   * either way" rather than as evidence of innocence.
+   */
+  identifier?: string;
 }
 
 /**
@@ -366,15 +384,76 @@ function isModuleSpecifier(text: string, index: number): boolean {
   return IMPORT_POSITION.test(before);
 }
 
+/**
+ * The identifier a quoted literal is assigned to, looked for on its own line.
+ *
+ * The documented fallback, used only where the assignment pattern above yields
+ * nothing -- which is every quoted value, since QUOTED_TOKEN matches the quotes
+ * and not what precedes them. Scoped to one line and to the text immediately
+ * before the opening quote, because the failure mode that matters is
+ * mis-association: pinning a literal to the wrong variable would gate it on a
+ * word that has nothing to do with it, and a wrong identifier is worse than
+ * none. When in doubt this returns undefined and the gate falls through.
+ *
+ * Handles the three shapes that carry a key in practice -- `const x = "..."`,
+ * an object or YAML key `x: "..."`, and Go's `x := "..."` -- and deliberately
+ * not computed members like `obj["apiKey"] = "..."`, which would need a parser.
+ */
+function nearestIdentifierOnLine(text: string, index: number): string | undefined {
+  const lineStart = text.lastIndexOf("\n", index - 1) + 1;
+  const before = text.slice(lineStart, index).replace(/["'`]\s*$/, "");
+  return /([A-Za-z_$][A-Za-z0-9_$]*)["'`]?\s*(?::=|[:=])\s*$/.exec(before)?.[1];
+}
+
+/**
+ * The words that make an identifier say "credential", added in 0.1.4 (N8).
+ *
+ * THREE ARE MISSING ON PURPOSE, and they are the whole reason this matches
+ * words rather than substrings:
+ *
+ *   hash   a checksum and a git SHA are not secrets, and `contentHash` and
+ *          `gitSha` are ordinary names.
+ *   sign   it is inside `design` and `assign`, neither of which is a
+ *          credential. `signing` and `signature` are listed in full instead.
+ *   api    `apiVersion`, `apiUrl` and `apiClient` are not evidence of
+ *          anything. `apiKey`, `api_secret` and `API_TOKEN` still open the
+ *          gate, because `key`, `secret` and `token` are words in their own
+ *          right.
+ *
+ * A substring match would also open the gate on `author` (auth) and `bypass`
+ * (pass). Those are common identifiers and this tier is the noisiest one there
+ * is, so the difference is not academic.
+ */
+const SECRET_WORDS = new Set([
+  "key", "token", "secret", "pass", "passwd", "password", "pwd", "auth",
+  "cred", "credential", "credentials", "bearer", "private", "session",
+  "cookie", "signature", "signing", "salt",
+]);
+
+/** camelCase, snake_case, kebab-case and digit boundaries, lowercased. */
+export function identifierWords(identifier: string): string[] {
+  return identifier
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2")
+    .split(/[^A-Za-z]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+}
+
+/** Does this identifier carry a secret-like WORD? */
+export function hasSecretWord(identifier: string): boolean {
+  return identifierWords(identifier).some((word) => SECRET_WORDS.has(word));
+}
+
 export function findHighEntropyStrings(text: string, threshold: number): EntropyMatch[] {
   const matches: EntropyMatch[] = [];
   const seen = new Set<number>();
 
-  for (const pattern of [QUOTED_TOKEN, BARE_ASSIGNMENT]) {
-    pattern.lastIndex = 0;
+  for (const pattern of PATTERNS) {
+    pattern.regex.lastIndex = 0;
     let m: RegExpExecArray | null;
-    while ((m = pattern.exec(text)) !== null) {
-      const value = m[1];
+    while ((m = pattern.regex.exec(text)) !== null) {
+      const value = m[pattern.value];
       const index = m.index + m[0].lastIndexOf(value);
       if (seen.has(index)) continue;
 
@@ -389,7 +468,10 @@ export function findHighEntropyStrings(text: string, threshold: number): Entropy
       const effectiveThreshold = charsetDiversity(value) === 2 ? threshold + 0.2 : threshold;
       if (entropy >= effectiveThreshold) {
         seen.add(index);
-        matches.push({ value, index, entropy });
+        const identifier =
+          (pattern.identifier !== undefined ? m[pattern.identifier] : undefined) ??
+          nearestIdentifierOnLine(text, index);
+        matches.push({ value, index, entropy, identifier });
       }
     }
   }

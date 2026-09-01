@@ -46,6 +46,12 @@ export interface SecretLoopConfig {
    * token committed to a test file is a real leaked token.
    */
   includeFixtures: boolean;
+  /**
+   * Require a secret-like word in the identifier before the entropy pass
+   * reports (N8, 0.1.4). On by default; `--no-key-context` turns it off and
+   * restores pre-0.1.4 generic-high-entropy matching, and nothing else.
+   */
+  keyContextRequired: boolean;
 }
 
 export const defaultConfig: SecretLoopConfig = {
@@ -58,6 +64,7 @@ export const defaultConfig: SecretLoopConfig = {
   maxFileSizeBytes: 1_000_000,
   entropyPassEnabled: true,
   includeFixtures: false,
+  keyContextRequired: true,
 };
 
 /**
@@ -162,6 +169,7 @@ export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
     maxFileSizeBytes: raw.maxFileSizeBytes ?? defaultConfig.maxFileSizeBytes,
     entropyPassEnabled: raw.entropyPassEnabled ?? defaultConfig.entropyPassEnabled,
     includeFixtures: raw.includeFixtures ?? defaultConfig.includeFixtures,
+    keyContextRequired: raw.keyContextRequired ?? defaultConfig.keyContextRequired,
   };
 }
 
