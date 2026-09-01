@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.5 — unreleased
+## 0.1.5
 
 ### Precision — an opt-in key-context gate on the entropy tier
 
