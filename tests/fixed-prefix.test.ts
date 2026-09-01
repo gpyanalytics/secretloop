@@ -187,6 +187,13 @@ const REALISTIC: Array<[label: string, value: string]> = [
   ["pypi-token, at the pattern floor", "pypi-AgEIcHlwaS5vcmc" + gen(50, B64URL)],
   ["intercom-token, real shape", "dG9r" + gen(60, B64)],
   ["intercom-token, at the pattern floor", "dG9r" + gen(50, B64)],
+  // 0.1.3 provider rules, at each rule's own minimum length -- the binding case
+  // for its floor.
+  ["vercel-access-token, at the pattern floor", "vcp_" + gen(24)],
+  ["supabase-secret-key, at the pattern floor", "sb_secret_" + gen(20)],
+  ["neon-api-key, at the pattern floor", "napi_" + gen(32)],
+  ["tailscale-api-key, at the pattern floor", "tskey-api-" + gen(20)],
+  ["tailscale-auth-key, at the pattern floor", "tskey-auth-" + gen(20)],
 ];
 
 suite("\n0.1.3 — realistically shaped tokens still report");
@@ -217,14 +224,53 @@ suite("\n0.1.3 — mechanism hygiene");
  * `sentry-auth-token`, whose 40-character run is declared over 65 symbols but
  * issued as hex, is deliberately NOT on the list.
  */
-test("every rule declaring the floor declares it at the measured threshold", () => {
+/**
+ * Every floor in the rule set, and the measurement each one came from.
+ *
+ * This table replaces an earlier assertion that every floor equalled 3.75. That
+ * held while one family declared floors and stopped holding the moment 0.1.3's
+ * provider rules did, because 3.75 was derived for runs of at least 50
+ * characters over at least 62 symbols and those rules are shorter. Asserting
+ * one global number would have forced either a wrong floor on the new rules or
+ * the deletion of the guard.
+ *
+ * So the guard is stricter now, not looser: a rule may declare a floor only if
+ * that exact value is recorded here, and a value may be recorded here only if
+ * the measurement beside it was actually run. Drift in either direction is red.
+ */
+const MEASURED_FLOORS: Record<string, number> = {
+  // 0.1.2 fixed-prefix family. 3.75 is the midpoint between a worst false
+  // positive of 3.337 bits and a legitimate minimum of 4.1649 over 100,000,000
+  // draws. See POST_PREFIX_ENTROPY_FLOOR in rules.ts.
+  "atlassian-api-token": 3.75,
+  "facebook-access-token": 3.75,
+  "github-fine-grained-pat": 3.75,
+  "intercom-token": 3.75,
+  "jfrog-token": 3.75,
+  "pypi-token": 3.75,
+  "square-access-token": 3.75,
+  "twitter-bearer-token": 3.75,
+  // 0.1.3 provider rules. Each is the highest floor that lost nothing across
+  // 10,000,000 uniform draws at that rule's own minimum length.
+  "vercel-access-token": 3.0,
+  "supabase-secret-key": 2.75,
+  "neon-api-key": 3.5,
+  "tailscale-api-key": 2.75,
+  "tailscale-auth-key": 2.75,
+};
+
+test("every declared floor matches its recorded measurement", () => {
   const declared = rules.filter((r) => r.postPrefixEntropy !== undefined);
   assert.ok(declared.length > 0, "no rule declares postPrefixEntropy");
   for (const r of declared) {
+    assert.ok(
+      r.id in MEASURED_FLOORS,
+      `${r.id} declares a floor with no recorded measurement in this table`
+    );
     assert.strictEqual(
       r.postPrefixEntropy!.min,
-      3.75,
-      `${r.id} declares a threshold other than the measured 3.75`
+      MEASURED_FLOORS[r.id],
+      `${r.id}'s floor drifted from the value that was measured for it`
     );
   }
 });
@@ -234,16 +280,7 @@ test("the floor is enabled on exactly the measured-safe rule set", () => {
     .filter((r) => r.postPrefixEntropy !== undefined)
     .map((r) => r.id)
     .sort();
-  assert.deepStrictEqual(enabled, [
-    "atlassian-api-token",
-    "facebook-access-token",
-    "github-fine-grained-pat",
-    "intercom-token",
-    "jfrog-token",
-    "pypi-token",
-    "square-access-token",
-    "twitter-bearer-token",
-  ]);
+  assert.deepStrictEqual(enabled, Object.keys(MEASURED_FLOORS).sort());
 });
 
 /**

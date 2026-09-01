@@ -73,6 +73,11 @@ export const positiveSamples: Record<string, string> = {
   "paypal-braintree-token": "access_token$production$" + gen(16, LOWER_NUM) + "$" + hex(32),
   "plaid-secret": `plaid_secret = "${hex(30)}"`,
   "openai-api-key": "sk-proj-" + gen(64),
+  // sk-or- is the documented OpenRouter prefix; the hex tail matches the shape
+  // its own docs show. Also the anti-regression fixture for the OpenAI
+  // carve-out -- if /^sk-or-/ ever leaves openai-api-key's allowlist, the
+  // corpus overlap guard fails on this value.
+  "openrouter-api-key": "sk-or-v1-" + hex(64),
   "anthropic-api-key": "sk-ant-api03-" + gen(95),
   "huggingface-token": "hf_" + gen(36),
   "replicate-token": "r8_" + gen(38),
@@ -87,6 +92,8 @@ export const positiveSamples: Record<string, string> = {
   "discord-bot-token": `const discordToken = "M${gen(24)}.${gen(6)}.${gen(30)}";`,
   "discord-webhook": "https://discord.com/api/webhooks/" + gen(18, "0123456789") + "/" + gen(70),
   "telegram-bot-token": gen(9, "123456789") + ":AA" + gen(33),
+  "tailscale-api-key": "tskey-api-" + gen(12) + "-" + gen(20),
+  "tailscale-auth-key": "tskey-auth-" + gen(12) + "-" + gen(20),
   "twilio-api-key": "twilio SK" + hex(32),
   "twilio-auth-token": `twilio_auth_token="${hex(32)}"`,
   "sendgrid-api-key": "SG." + gen(22) + "." + gen(43),
@@ -115,6 +122,9 @@ export const positiveSamples: Record<string, string> = {
   "http-basic-auth-url": "https://svc:" + gen(20) + "@api.internal/v1",
   "snowflake-credentials": `snowflake_password = "${gen(20)}"`,
   "databricks-token": "dapi" + hex(32),
+  "vercel-access-token": "vcp_" + gen(24),
+  "supabase-secret-key": "sb_secret_" + gen(40),
+  "neon-api-key": "napi_" + gen(48),
   "supabase-service-key": "sbp_" + hex(40),
   "planetscale-token": "pscale_tkn_" + gen(40),
   "datadog-api-key": `datadog_api_key="${hex(32)}"`,

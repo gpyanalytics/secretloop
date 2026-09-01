@@ -165,6 +165,42 @@ export function isDocumentationSample(value: string): boolean {
  */
 const POST_PREFIX_ENTROPY_FLOOR = 3.75;
 
+/**
+ * Post-prefix floors for the 0.1.3 provider rules, one per rule.
+ *
+ * 3.75 above is NOT reusable here and the difference is measured, not assumed.
+ * It was derived for variable runs of at least 50 characters over alphabets of
+ * at least 62 symbols. These rules are shorter, and two of them draw from
+ * narrower alphabets, so the same number would reject real credentials -- at a
+ * 24-character Vercel token, 3.75 costs 0.0027% of legitimate keys, and at a
+ * 20-character Supabase tail it costs 0.1125%.
+ *
+ * Each value below is the highest floor that lost NOTHING across 10,000,000
+ * uniform draws at that rule's own minimum length:
+ *
+ *   vercel-access-token   3.00   24 chars over 62 symbols   0/10,000,000
+ *   supabase-secret-key   2.75   20 chars over 63 symbols   0/10,000,000
+ *   neon-api-key          3.50   32 chars over 62 symbols   0/10,000,000
+ *
+ * A low floor is worth less than a high one, and these are honest about that:
+ * at 2.75 the Supabase floor rejects near-homogeneous runs and little else, so
+ * the 20-character minimum is doing most of the work. The floor is the backstop
+ * against the N1 shape, not the primary filter.
+ */
+const FLOOR_VERCEL_ACCESS_TOKEN = 3.0;
+const FLOOR_SUPABASE_SECRET_KEY = 2.75;
+const FLOOR_NEON_API_KEY = 3.5;
+/**
+ * Tailscale, both rules: 2.75, the highest floor with zero loss over
+ * 10,000,000 uniform draws at the 20-character minimum.
+ *
+ * Low, and honestly so -- it rejects near-homogeneous runs and little else. It
+ * does not need to do more. The prefix is ten characters carrying two hyphens
+ * at fixed offsets, which no identifier in a mainstream language can spell, so
+ * the prefix is already the filter and the floor is only the N1 backstop.
+ */
+const FLOOR_TAILSCALE = 2.75;
+
 export const rules: SecretRule[] = [
   // ---------------------------------------------------------------- AWS
   {
@@ -368,7 +404,13 @@ export const rules: SecretRule[] = [
   // ----------------------------------------------------------------- Payments
   {
     id: "stripe-secret-key",
-    description: "Stripe / Clerk secret key",
+    // Stripe, Clerk and WorkOS all issue secret keys as sk_live_/sk_test_.
+    // Clerk documents the collision outright, calling the shape "common among
+    // developer tools to provide a more familiar developer experience", so no
+    // pattern can separate the three. The description names the ambiguity
+    // instead of asserting one provider: a finding that says "Stripe" and means
+    // Clerk sends someone to rotate a key in a dashboard that does not hold it.
+    description: "Stripe / Clerk / WorkOS secret key (format shared by all three)",
     regex: /\b(?:sk|rk)_(?:live|test)_[A-Za-z0-9]{24,}\b/g,
     fullMatch: true,
     keywords: ["sk_live_", "sk_test_", "rk_live_", "rk_test_"],
@@ -444,7 +486,13 @@ export const rules: SecretRule[] = [
     fullMatch: true,
     keywords: ["sk-"],
     entropy: 3.5,
-    allowlist: [/^sk-ant-/, ...DOC_SAMPLE],
+    // /^sk-or-/ joins /^sk-ant-/ for the same reason and by the same mechanism:
+    // both providers issue keys inside OpenAI's `sk-` namespace, and everything
+    // after `sk-` falls inside this rule's own character class, so without the
+    // carve-out this rule claims their keys. An allowlist rather than a
+    // tiebreak, because a tiebreak would bury a rule-design collision that a
+    // red build surfaces.
+    allowlist: [/^sk-ant-/, /^sk-or-/, ...DOC_SAMPLE],
     severity: "critical",
   },
   {
@@ -453,6 +501,30 @@ export const rules: SecretRule[] = [
     regex: /\bsk-ant-(?:api\d{2}|admin\d{2})-[A-Za-z0-9_-]{80,}\b/g,
     fullMatch: true,
     keywords: ["sk-ant-"],
+    severity: "critical",
+  },
+  {
+    // Format source: https://openrouter.ai/docs/features/provisioning-api-keys
+    // shows a created key as "sk-or-v1-abc...123", and OpenRouter's own blog
+    // states that keys "start with sk-or-, which is how a tool knows it's
+    // talking to OpenRouter and not OpenAI directly".
+    //
+    // Anchored on the documented `sk-or-` rather than on the `v1` that appears
+    // only in an example, so a future key version keeps matching.
+    //
+    // NO postPrefixEntropy, and that is measured rather than forgotten. The
+    // variable portion as issued is hexadecimal, which is inherently low
+    // entropy: over 1,000,000 uniform 32-character hex draws -- this rule's
+    // minimum -- a 3.75 floor rejects 85.0968%, a 3.00 floor rejects 0.0111%,
+    // and only 2.50 reaches zero. At 2.50 the floor rejects nothing the
+    // 32-character minimum does not already exclude, so it would be a threshold
+    // that costs real keys and buys nothing. The length is the constraint here.
+    id: "openrouter-api-key",
+    description: "OpenRouter API Key",
+    regex: /\bsk-or-[A-Za-z0-9_-]{32,}\b/g,
+    fullMatch: true,
+    keywords: ["sk-or-"],
+    allowlist: DOC_SAMPLE,
     severity: "critical",
   },
   {
@@ -545,6 +617,40 @@ export const rules: SecretRule[] = [
     fullMatch: true,
     keywords: [":AA"],
     severity: "high",
+  },
+  {
+    // Format source: https://tailscale.com/docs/reference/key-prefixes -- a
+    // dedicated reference page listing every prefix. "tskey-api" is an API
+    // access token, "tskey-client" an OAuth client key, "tskey-scim" a SCIM key
+    // and "tskey-webhook" a webhook key. The page notes the keys are
+    // case-sensitive and states no length, so 20 is a conservative minimum.
+    //
+    // The alternation is CLOSED. An undocumented tskey- type is not a
+    // credential this rule set can name, and inventing one would be the same
+    // error as inventing a format.
+    id: "tailscale-api-key",
+    description: "Tailscale API Access Token",
+    regex: /\btskey-(?:api|client|scim|webhook)-[A-Za-z0-9-]{20,}\b/g,
+    fullMatch: true,
+    keywords: ["tskey-api-", "tskey-client-", "tskey-scim-", "tskey-webhook-"],
+    postPrefixEntropy: { prefix: /^tskey-(?:api|client|scim|webhook)-/, min: FLOOR_TAILSCALE },
+    allowlist: DOC_SAMPLE,
+    severity: "critical",
+  },
+  {
+    // Same documented source and the same shape, kept as a SEPARATE rule
+    // because it is a different credential. An API access token administers the
+    // tailnet; a pre-authentication key provisions a device ONTO it. That is
+    // network access rather than account access, it is revoked in a different
+    // place, and one rotation instruction cannot serve both.
+    id: "tailscale-auth-key",
+    description: "Tailscale Pre-Authentication Key",
+    regex: /\btskey-auth-[A-Za-z0-9-]{20,}\b/g,
+    fullMatch: true,
+    keywords: ["tskey-auth-"],
+    postPrefixEntropy: { prefix: /^tskey-auth-/, min: FLOOR_TAILSCALE },
+    allowlist: DOC_SAMPLE,
+    severity: "critical",
   },
   {
     id: "twilio-api-key",
@@ -690,6 +796,26 @@ export const rules: SecretRule[] = [
     severity: "critical",
   },
   {
+    // Format source: https://vercel.com/docs/accounts/access-tokens --
+    // "Personal access tokens begin with the prefix `vcp_`", with a curl example
+    // using it. https://vercel.com/changelog/new-token-formats-and-secret-scanning
+    // adds the other four: vci_ integration, vca_ app access, vcr_ app refresh,
+    // vck_ API key. Vercel introduced the prefixes expressly so leaked
+    // credentials can be recognised, which is what makes this rule possible.
+    //
+    // 24 is a conservative minimum, not a documented length -- Vercel publishes
+    // none. The class excludes "_", so `vcp_connection_pool_size` stops at the
+    // first underscore and cannot reach the minimum.
+    id: "vercel-access-token",
+    description: "Vercel Access Token",
+    regex: /\bvc[apirk]_[A-Za-z0-9]{24,}\b/g,
+    fullMatch: true,
+    keywords: ["vcp_", "vci_", "vca_", "vcr_", "vck_"],
+    postPrefixEntropy: { prefix: /^vc[apirk]_/, min: FLOOR_VERCEL_ACCESS_TOKEN },
+    allowlist: DOC_SAMPLE,
+    severity: "high",
+  },
+  {
     id: "vercel-token",
     description: "Vercel API Token",
     regex: /(?:vercel[_.-]?(?:api[_.-]?)?token)["']?\s*(?::=|[:=])\s*["']?([A-Za-z0-9]{24})["']?/gi,
@@ -789,11 +915,53 @@ export const rules: SecretRule[] = [
     severity: "critical",
   },
   {
+    // Format source: https://supabase.com/docs/guides/getting-started/api-keys
+    // documents two modern keys -- `sb_secret_...` with "Elevated" privileges
+    // and a "Never expose your secret keys publicly" warning, and
+    // `sb_publishable_...` marked "Safe to expose online: web page, mobile or
+    // desktop app, GitHub actions, CLIs, source code".
+    //
+    // The prefix is `sb_secret_` precisely so the publishable key can never
+    // match. Reporting a publishable key would be a false positive by
+    // definition: it is supposed to be in the source, and a rule that flags it
+    // teaches people to ignore this rule. tests/provider-rules-0.1.3.test.ts
+    // asserts the publishable form reports nothing at all.
+    id: "supabase-secret-key",
+    description: "Supabase Secret Key",
+    regex: /\bsb_secret_[A-Za-z0-9_-]{20,}\b/g,
+    fullMatch: true,
+    keywords: ["sb_secret_"],
+    postPrefixEntropy: { prefix: /^sb_secret_/, min: FLOOR_SUPABASE_SECRET_KEY },
+    allowlist: DOC_SAMPLE,
+    severity: "critical",
+  },
+  {
     id: "supabase-service-key",
     description: "Supabase Personal Access Token",
     regex: /\bsbp_[a-f0-9]{40}\b/g,
     fullMatch: true,
     keywords: ["sbp_"],
+    severity: "critical",
+  },
+  {
+    // Format source: https://neon.com/docs/changelog/2025-01-31 -- "Newly
+    // created Neon API keys are now prefixed with `napi_`." Neon added the
+    // prefix expressly to make the keys findable by secret scanners.
+    //
+    // THE FALSE-POSITIVE RISK HERE IS Node-API, not another provider. `napi_`
+    // prefixes every symbol in Node's native addon interface -- napi_status,
+    // napi_value, napi_create_string_utf8 -- and those appear in quantity in
+    // any C/C++ addon. The class excludes "_", so every one of them stops at
+    // its first underscore and falls far short of 32 characters. Pinned by a
+    // permanent probe in tests/provider-rules-0.1.3.test.ts rather than left to
+    // the reader to verify.
+    id: "neon-api-key",
+    description: "Neon API Key",
+    regex: /\bnapi_[A-Za-z0-9]{32,}\b/g,
+    fullMatch: true,
+    keywords: ["napi_"],
+    postPrefixEntropy: { prefix: /^napi_/, min: FLOOR_NEON_API_KEY },
+    allowlist: DOC_SAMPLE,
     severity: "critical",
   },
   {
