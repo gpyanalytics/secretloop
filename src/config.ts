@@ -46,6 +46,28 @@ export interface SecretLoopConfig {
    * token committed to a test file is a real leaked token.
    */
   includeFixtures: boolean;
+  /**
+   * N8. Require a secret-like word in the identifier before the generic
+   * entropy tier reports a QUOTED string literal.
+   *
+   * OFF, and the default is a measurement result rather than caution. The
+   * number that would justify shipping it on is the fraction of TRUE POSITIVES
+   * it suppresses, and that number cannot be measured with the data available:
+   * the two real-world proxies for "what identifier does a real secret sit
+   * under" bracket it from opposite sides by selection bias. Identifiers taken
+   * from a keyword-anchored detector's own hits match the word list 100% of the
+   * time by construction; identifiers taken from every high-entropy string in
+   * real packages match ~10%, because that population is overwhelmingly hashes
+   * and resource IDs rather than credentials. Any threshold between those two
+   * is chosen, not measured.
+   *
+   * So the false-positive reduction is reported as a figure and the gate is
+   * left to the person who knows how their own repository names things. A
+   * default-on gate would trade an unmeasured number of silent false negatives
+   * for a measured drop in noise, and a false negative in a secret scanner is
+   * the expensive direction.
+   */
+  keyContextRequired: boolean;
 }
 
 export const defaultConfig: SecretLoopConfig = {
@@ -58,6 +80,7 @@ export const defaultConfig: SecretLoopConfig = {
   maxFileSizeBytes: 1_000_000,
   entropyPassEnabled: true,
   includeFixtures: false,
+  keyContextRequired: false,
 };
 
 /**
@@ -162,6 +185,7 @@ export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
     maxFileSizeBytes: raw.maxFileSizeBytes ?? defaultConfig.maxFileSizeBytes,
     entropyPassEnabled: raw.entropyPassEnabled ?? defaultConfig.entropyPassEnabled,
     includeFixtures: raw.includeFixtures ?? defaultConfig.includeFixtures,
+    keyContextRequired: raw.keyContextRequired ?? defaultConfig.keyContextRequired,
   };
 }
 

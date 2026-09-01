@@ -366,17 +366,120 @@ function isModuleSpecifier(text: string, index: number): boolean {
   return IMPORT_POSITION.test(before);
 }
 
-export function findHighEntropyStrings(text: string, threshold: number): EntropyMatch[] {
+/**
+ * N8 -- the key-context gate. OFF by default; see the note on
+ * `keyContextRequired` in config.ts for why that default is a measurement
+ * result rather than caution.
+ *
+ * When enabled, a QUOTED string literal is reported by this tier only if the
+ * identifier it is assigned to carries a secret-like word.
+ *
+ * Whole words only. `author` is not `auth`, `keyboard` is not `key`, `bypass`
+ * is not `pass` and `design` is not `sign`; substring matching turns each of
+ * those into a silent false negative, which is the worst kind this tier can
+ * produce because nothing in the output says a value was dropped.
+ *
+ * `api`, `hash` and `sign` are deliberately absent. They are too common in
+ * identifiers that hold no credential (`apiVersion`, `hashCode`, `signal`) to
+ * carry the gate, and `api` in particular would open it for most of a client
+ * library.
+ */
+const KEY_CONTEXT_WORDS = new Set([
+  "key",
+  "token",
+  "secret",
+  "pass",
+  "passwd",
+  "password",
+  "pwd",
+  "auth",
+  "cred",
+  "credential",
+  "credentials",
+  "bearer",
+  "private",
+  "session",
+  "cookie",
+  "signature",
+  "signing",
+  "salt",
+]);
+
+/**
+ * Splits an identifier into words on camel, snake, kebab and digit boundaries.
+ *
+ * The `(?<=[A-Z])(?=[A-Z][a-z])` alternative is what makes an acronym run
+ * divide correctly: without it `APIToken` is one word and the gate never sees
+ * `token`.
+ */
+export function splitIdentifierWords(identifier: string): string[] {
+  return identifier
+    .split(
+      /[_\-.\s]+|(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])|(?<=[A-Za-z])(?=[0-9])|(?<=[0-9])(?=[A-Za-z])/
+    )
+    .filter(Boolean);
+}
+
+/** True when any whole word of the identifier is in the list. */
+export function identifierSuggestsSecret(identifier: string): boolean {
+  return splitIdentifierWords(identifier).some((w) => KEY_CONTEXT_WORDS.has(w.toLowerCase()));
+}
+
+/**
+ * The identifier a quoted candidate is assigned to, or null.
+ *
+ * THE ONE INVARIANT: the search region ends before the candidate's opening
+ * quote and never crosses a newline, so the identifier is always source text
+ * strictly OUTSIDE the candidate's span. This is not a stylistic preference.
+ * The previous attempt at this gate resolved the identifier out of the
+ * candidate itself -- an FCM registration token reads `AAAA<id>:APA91b<rest>`,
+ * the bare-assignment pattern split it at the token's own colon, and a real
+ * credential was gated on half of itself. A value cannot be evidence about
+ * itself, so no part of it is read here.
+ *
+ * Returns null on anything unclear, and null means fall through: the gate only
+ * ever suppresses when it has a confident, outside-the-span identifier.
+ */
+export function resolveQuotedIdentifier(text: string, quoteIndex: number): string | null {
+  const lineStart = text.lastIndexOf("\n", quoteIndex - 1) + 1;
+  if (quoteIndex <= lineStart) return null;
+  const before = text.slice(lineStart, quoteIndex);
+  // An optional closing quote so a JSON key (`"api_key": "<value>"`) resolves
+  // the same way a YAML or JS one does.
+  const m = /["'`]?([A-Za-z_$][A-Za-z0-9_$]*)["'`]?\s*(?::=|[:=])\s*$/.exec(before);
+  return m ? m[1] : null;
+}
+
+export interface EntropyScanOptions {
+  /** N8. When true, a quoted candidate needs a secret-like identifier. */
+  keyContextRequired?: boolean;
+}
+
+export function findHighEntropyStrings(
+  text: string,
+  threshold: number,
+  options: EntropyScanOptions = {}
+): EntropyMatch[] {
   const matches: EntropyMatch[] = [];
   const seen = new Set<number>();
 
   for (const pattern of [QUOTED_TOKEN, BARE_ASSIGNMENT]) {
+    const quoted = pattern === QUOTED_TOKEN;
     pattern.lastIndex = 0;
     let m: RegExpExecArray | null;
     while ((m = pattern.exec(text)) !== null) {
       const value = m[1];
       const index = m.index + m[0].lastIndexOf(value);
       if (seen.has(index)) continue;
+
+      // N8. Quoted literals only: a bare assignment, a .env line and a value
+      // inside a larger token are never gated, which is also what keeps the
+      // FCM shape out of reach of this gate entirely -- it reaches this tier
+      // through BARE_ASSIGNMENT, not through a quoted literal.
+      if (options.keyContextRequired && quoted) {
+        const identifier = resolveQuotedIdentifier(text, index - 1);
+        if (identifier !== null && !identifierSuggestsSecret(identifier)) continue;
+      }
 
       if (isStructuralFalsePositive(value, threshold)) continue;
       if (hasOrderedRun(value)) continue;
