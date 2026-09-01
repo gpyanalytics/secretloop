@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.1.6 — unreleased
+
+### Fixed — a shared credential format is no longer sent to one of the providers sharing it
+
+`sk_live_`/`sk_test_` is issued by Stripe, Clerk and WorkOS alike. 0.1.5 said so
+in this file and in the rule's own description, and then verified every match
+against Stripe's API anyway — so scanning a codebase that uses Clerk or WorkOS
+and passing `--verify` sent a live secret key to a company that had not issued
+it. Verification's one promise is that a credential reaches its own issuer and
+nobody else, and for two of the three providers sharing this format it was not
+kept.
+
+Such a credential is now **not sent anywhere**. The finding still reports —
+same rule, same severity, same fingerprint, and this repository's self-scan is
+byte-identical — but its liveness reads *unknown*, with a reason that says the
+format has more than one issuer and that checking it would have meant handing it
+to the wrong one. The refusal happens before any verifier runs, so no request is
+built at all.
+
+The cost is stated rather than argued away: a genuine Stripe key is now
+unverified too. No published marker separates the three formats, and guessing
+which issuer a key belongs to sends it either way — so the check is declined
+rather than gambled. Verification is opt-in and occasional; a disclosure is
+permanent.
+
+The record of what left the machine is corrected to match. It fired before the
+check ran, so a refusal would have been logged as a send — and that record's
+only value is that it cannot overstate what was transmitted.
+
+A guard now walks every rule that has a verifier and asserts its credential can
+reach no host but its own provider's. It fails on the previous behaviour, which
+is how this defect would have been caught.
+
 ## 0.1.5
 
 ### Precision — an opt-in key-context gate on the entropy tier
