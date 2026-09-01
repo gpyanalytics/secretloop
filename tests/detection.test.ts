@@ -255,9 +255,33 @@ suite("detection — C2: the relative-path filter no longer eats base64 keys");
  * segment, or an explicit ./ ../ / or drive-letter prefix. Measured at 0.823%.
  */
 test("a base64 key with one slash is reported again", () => {
+  // The second value was "AbCd3fGh/JkLmNoPqRsTuVwXyZ0123456789abcd" until
+  // 0.1.4. It is hand-typed rather than drawn, and it carries "0123456789" --
+  // a monotonic run of ten, which the N7a ordered-run veto rejects by design.
+  // The assertion is unchanged and the property under test is unchanged: 40
+  // base64 characters with exactly one slash, which the 0.1.1 path filter must
+  // not eat. Only the sample is now a uniform draw rather than a typed one, so
+  // it tests the path filter instead of testing the typist.
+  //
+  // The trade N7a makes is recorded here rather than argued away: a credential
+  // that genuinely contains a printed run of six or more consecutive characters
+  // is no longer reported by the entropy tier. Measured at 0 of 140,000
+  // realistic tokens (bench/entropy-vetoes.ts); a keyword-anchored credential
+  // is unaffected, because generic-api-key-assignment does not consult this.
+  //
+  // DO NOT RESTORE THE OLD VALUE, and do not replace either of these with a
+  // hand-typed one. Both samples are deliberately free of any monotonic run of
+  // six or more consecutive character codes and of any string where 40% of
+  // adjacent pairs are one code apart, because N7a rejects both and a sample
+  // that trips it would fail this test for a reason that has nothing to do
+  // with the path filter it exists to guard. Typed strings drift into
+  // alphabetical stretches -- "0123456789", "JkLmNoPq" -- far more readily
+  // than drawn ones do; that is exactly how the old value acquired its run of
+  // ten. Check any new sample against orderedRunStats() in src/entropy.ts
+  // before adding it.
   for (const v of [
     "R6nK5HlG/ehNexnGZEP0Ccpjw5WdZMcjuKTWW8qj",
-    "AbCd3fGh/JkLmNoPqRsTuVwXyZ0123456789abcd",
+    "QqAL/fE9yX9wkpCDh3FSCRMSJ7pbSkoG3O1OhIec",
   ]) {
     assert.ok(
       findHighEntropyStrings(`secret = "${v}"`, 4.3).length > 0,

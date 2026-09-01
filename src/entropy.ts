@@ -222,6 +222,119 @@ function charsetDiversity(value: string): number {
 }
 
 /**
+ * Ordered character runs, added in 0.1.4 (N7a).
+ *
+ * Shannon entropy is blind to ordering: it counts how often each character
+ * occurs and never looks at what follows what. A printed alphabet is therefore
+ * the highest-scoring string there is -- every character exactly once -- and the
+ * first external run of this tool on a real frontend monorepo reported one, an
+ * email-validation character class, at entropy 6.02. No credential scores that.
+ *
+ * Two statistics, and a candidate is rejected on either:
+ *
+ *   longest_run   the longest strictly monotonic run, each character's code one
+ *                 above (or, separately, one below) the last. The reported
+ *                 alphabet carries runs of 26, 26 and 10.
+ *   seq_fraction  adjacent pairs one apart, over all adjacent pairs. This
+ *                 catches the shape a run length cannot see -- consecutive
+ *                 pairs written in alternating directions, where no run ever
+ *                 reaches 3 and half the pairs are still sequential.
+ *
+ * The thresholds are 6 and 0.40. The pair fraction sits high deliberately:
+ * small alphabets produce sequential pairs by chance far more often than base64
+ * does, and 0.40 is well clear of what a 16-symbol alphabet reaches.
+ *
+ * Measured before enabling, over the 140,000-sample realistic-token corpus at
+ * seed 20260831 (bench/entropy-vetoes.ts): 0 rejected by run length, 0 by pair
+ * fraction, 0.0000% loss. Bare hex was added to that corpus for this fix
+ * because the 0.1.3 one carried none: 0 of 20,000 64-character samples and 1 of
+ * 20,000 32-character samples, and an independent 200,000-draw run puts the
+ * 32-character rate at 0.0010%. That value could not have been a candidate
+ * anyway -- lowercase hex is two character classes, so it faces the 4.5 bar,
+ * and a 16-symbol alphabet cannot exceed 4.0 bits.
+ *
+ * Entropy-tier only. Named provider rules never consult this.
+ */
+const ORDERED_RUN_MIN = 6;
+const SEQUENTIAL_PAIR_FRACTION = 0.4;
+
+export interface OrderedRunStats {
+  /** Characters in the longest run of consecutive character codes. */
+  longestRun: number;
+  /** Adjacent pairs one code apart, over all adjacent pairs. */
+  sequentialFraction: number;
+}
+
+export function orderedRunStats(value: string): OrderedRunStats {
+  let longestRun = 1;
+  let current = 1;
+  let direction = 0;
+  let sequential = 0;
+  for (let i = 1; i < value.length; i++) {
+    const delta = value.charCodeAt(i) - value.charCodeAt(i - 1);
+    if (delta === 1 || delta === -1) {
+      sequential++;
+      // A change of direction ends the run and starts a new two-character one:
+      // "abcba" is two runs of three, not one run of five.
+      current = delta === direction ? current + 1 : 2;
+      direction = delta;
+      if (current > longestRun) longestRun = current;
+    } else {
+      direction = 0;
+      current = 1;
+    }
+  }
+  const pairs = value.length - 1;
+  return { longestRun, sequentialFraction: pairs > 0 ? sequential / pairs : 0 };
+}
+
+export function hasOrderedRun(value: string): boolean {
+  const stats = orderedRunStats(value);
+  return (
+    stats.longestRun >= ORDERED_RUN_MIN ||
+    stats.sequentialFraction >= SEQUENTIAL_PAIR_FRACTION
+  );
+}
+
+/**
+ * Identifier paths, added in 0.1.4 (N7b).
+ *
+ * The other half of the first external report: a Storybook title,
+ * "Components/NavSidebar/TabOverflowMenu", at entropy 4.39. Slash-separated
+ * CamelCase is how a whole ecosystem names things -- stories, routes, i18n
+ * keys, GraphQL operations -- and each segment being a word makes the string
+ * score like a token while carrying no randomness at all.
+ *
+ * All three conditions must hold, and the narrowness is the point:
+ *
+ *   1. at least two "/" separators
+ *   2. every segment is letters only, no digits
+ *   3. at least one segment has a lowercase-to-uppercase transition
+ *
+ * Condition 2 carries the safety. Identifier paths rarely have mid-segment
+ * digits and random tokens almost always do, so it is what keeps this away from
+ * a base64 payload -- and from a 40-character AWS secret key with no
+ * AWS_SECRET_ACCESS_KEY anchor, which has no named rule and depends on this
+ * tier entirely. Do NOT widen the segment class to admit digits or punctuation
+ * without measuring the cost first; the existing path filters in
+ * STRUCTURAL_FALSE_POSITIVES record what happens when a path predicate is
+ * allowed to be roomy.
+ *
+ * Measured before enabling, over the same 140,000-sample realistic-token corpus
+ * as N7a (bench/entropy-vetoes.ts, seed 20260831): 5,202 samples carry two or
+ * more slashes -- 3.7157%, so the veto is genuinely exercised rather than
+ * vacuously safe -- and 0 of them satisfy all three conditions. 0.0000% loss.
+ *
+ * Entropy-tier only, like every other filter in this file.
+ */
+export function isIdentifierPath(value: string): boolean {
+  const segments = value.split("/");
+  if (segments.length < 3) return false;
+  if (!segments.every((seg) => /^[A-Za-z]+$/.test(seg))) return false;
+  return segments.some((seg) => /[a-z][A-Z]/.test(seg));
+}
+
+/**
  * Is the string at `index` the operand of an import, rather than a value?
  *
  * The only filter here that reads POSITION instead of shape, and the choice is
@@ -266,6 +379,8 @@ export function findHighEntropyStrings(text: string, threshold: number): Entropy
       if (seen.has(index)) continue;
 
       if (isStructuralFalsePositive(value, threshold)) continue;
+      if (hasOrderedRun(value)) continue;
+      if (isIdentifierPath(value)) continue;
       if (isModuleSpecifier(text, index)) continue;
       if (charsetDiversity(value) < 2) continue;
 

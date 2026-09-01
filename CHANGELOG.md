@@ -1,5 +1,84 @@
 # Changelog
 
+## 0.1.4 — unreleased
+
+### Precision
+
+Two vetoes on `generic-high-entropy` and a clearer exit message. The vetoes come
+from the first external run of this tool on a real frontend monorepo, which
+returned two findings and no true positives. Both were from this one tier and
+both are now fixtures.
+
+No rule ID changed, no entropy threshold changed, no severity or confidence
+changed, and no output format changed. Across this repository, 15 entropy-tier
+findings disappear, **no named-rule finding disappears**, and every surviving
+finding keeps its fingerprint byte for byte.
+
+**Ordered character runs are no longer read as randomness.** Shannon entropy
+counts how often each character occurs and never looks at what follows what, so
+a printed alphabet is the highest-scoring string there is — every character
+exactly once. The reported false positive was an email-validation character
+class at entropy 6.02, higher than any credential scores. A candidate is now
+rejected on either of two order statistics: a monotonic run of six or more
+consecutive character codes, or 40% of adjacent pairs one code apart. Two
+conditions because neither sees the other's shape, and the pair fraction sits
+high because small alphabets produce sequential pairs by chance far more often
+than base64 does.
+
+Measured before enabling, against the same 140,000-sample realistic-token corpus
+0.1.3 used for the post-prefix floor, at one recorded seed: **0 rejected by run
+length, 0 by pair fraction — 0.0000% loss.** Bare 32- and 64-character hex was
+added to that corpus because 0.1.3's carried none and a 16-symbol alphabet is
+where sequential pairs arise by chance: 0 of 20,000 at 64 characters and 1 of
+20,000 at 32, and that one could not have been a candidate anyway — lowercase
+hex is two character classes, so it faces the higher bar, and 16 symbols cannot
+exceed 4.0 bits.
+
+The cost is stated rather than argued away: a credential that genuinely contains
+a printed run of six or more consecutive characters is no longer reported by
+this tier. A keyword-anchored credential is unaffected, because
+`generic-api-key-assignment` does not consult it.
+
+**Slash-separated CamelCase paths are no longer read as credentials.** The other
+reported false positive was a Storybook component title at entropy 4.39. Paths
+like that are how a whole ecosystem names things — stories, routes, i18n keys,
+GraphQL operations — and each segment being a word is what makes the string
+score like a token while carrying no randomness. A candidate is vetoed only when
+all three hold: two or more separators, every segment letters with **no digits**,
+and at least one segment carrying a lowercase-to-uppercase transition.
+
+The letters-only condition is the safety margin. Identifier paths rarely have
+mid-segment digits and random tokens almost always do, so it is what keeps this
+away from a base64 payload and from a 40-character AWS secret key with no
+`AWS_SECRET_ACCESS_KEY` anchor — which has no named rule and depends on this
+tier entirely. Measured against the same corpus: **5,202 of 140,000 samples
+carry two or more slashes (3.7157%), and 0 of them satisfy all three —
+0.0000% loss.** The first number matters as much as the second: it says the
+veto is exercised rather than vacuously safe.
+
+Both vetoes are evaluated inside the entropy tier alone. Named provider rules
+are unconditional and do not consult either.
+
+`bench/entropy-vetoes.ts` regenerates that corpus and imports both predicates
+from the shipped source, so the numbers above cannot drift from what runs.
+
+### Changed — the exit-code message says how many, and against what
+
+`exit 1: findings at or above the fail-on threshold (this is the CI gate, not an
+error)` told a reader the gate had fired and nothing else. It is now:
+
+```
+secretloop: exit 1 — 3 finding(s) at or above --fail-on high (CI gate).
+  Report written to results.sarif. Use --fail-on never for a report-only run.
+```
+
+The count is what **met the threshold**, not what was found: a scan with forty
+mediums and one critical says one under `--fail-on critical`. The second line
+appears only when `-o` was given. Exit-code semantics, finding contents and
+every other line of output are unchanged, and the message stays on stderr — a
+piped report is byte-identical. The README gains an exit-codes section with a
+`--fail-on never` report-only example.
+
 ## 0.1.3
 
 Two false-positive fixes. Both come from a twenty-repository survey run against

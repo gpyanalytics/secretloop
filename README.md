@@ -301,6 +301,41 @@ counting those would make this flag behave exactly like `--fail-on any`.
 Because the flag depends on a verification pass having run, `--fail-on verified`
 without `--verify` is rejected outright rather than silently exiting 0.
 
+### Exit codes
+
+`0` — nothing met the gate. `1` — something did. Any other code is a real
+failure: an unreadable config, a bad flag, a scan that could not run.
+
+Exit 1 is the gate doing its job, not a crash, so it says so on stderr — how
+many findings met the threshold, which threshold that was, and where the report
+went:
+
+```
+secretloop: exit 1 — 3 finding(s) at or above --fail-on high (CI gate).
+  Report written to results.sarif. Use --fail-on never for a report-only run.
+```
+
+The count is the number that **met the threshold**, not the number found: a
+scan with forty mediums and one critical reports one finding under `--fail-on
+critical`. The second line appears only when `-o` was given; without it there is
+no file to point at.
+
+**Report-only runs.** To scan and publish results without ever failing the
+build — an adoption run on a repository with pre-existing findings, a scheduled
+report, a step whose findings you want visible but not blocking:
+
+```bash
+secretloop scan --format sarif -o results.sarif --fail-on never
+```
+
+That always exits 0 and still writes every finding. When you are ready to gate,
+`--write-baseline` accepts what is already there so only new findings fail:
+
+```bash
+secretloop scan --write-baseline .secretloop-baseline.json
+secretloop scan --baseline .secretloop-baseline.json --fail-on high
+```
+
 ## Controlling false positives
 
 False-positive fatigue is what gets scanners muted, so suppression is

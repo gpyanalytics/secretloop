@@ -1,0 +1,96 @@
+# Benchmark repository identities and pinned commits
+#
+# Written for 0.1.4 because the 0.1.4 precision slice could not reproduce the
+# 20-repository benchmark: the clones were deleted after measurement, as the
+# study's own safety rules required, and nothing recorded which commit each
+# was at. This file exists so the identities that ARE on record stop depending
+# on someone reading prose to find them.
+#
+# STRICTLY RECOVERED, NEVER INFERRED. Every line below is copied from a file
+# in this repository or its git history. Nothing was cloned, resolved against
+# a remote, guessed from a date, or reconstructed. Where a value is not on
+# record it says "unknown" -- a wrong SHA in a file called repos.txt is worse
+# than an absent one, because the next person would trust it.
+#
+# Sources:
+#   docs/BENCHMARK.md      the 20-repository study, measured 30-31 Aug 2026
+#   bench/MULTI-CORPUS.md  the 14-repository false-positive corpus
+#   bench/COMMANDS.md      tool invocations, corpus A and corpus B
+#   bench/BASELINE.md      recorded corpus A / corpus B baseline
+
+
+## 20-repository benchmark (docs/BENCHMARK.md)
+#
+# Measured 30-31 August 2026 against SecretLoop 0.1.2 at commit 16f02d8.
+# All twenty attempted, all twenty measured, none substituted.
+#
+# COMMIT SHAS ARE UNRECOVERABLE. The study records the measurement dates, the
+# clone depth used for the three bounded repositories, and that every clone was
+# read, scanned and deleted -- but no per-repository commit. Re-cloning today
+# would give different trees and different counts, so this benchmark is NOT
+# reproducible and must not be presented as if it were.
+#
+# repository                     language              commit
+pallets/flask                    Python                unknown
+psf/requests                     Python                unknown
+django/django                    Python                unknown
+ansible/ansible                  Python (config-heavy) unknown
+gin-gonic/gin                    Go                    unknown
+docker/compose                   Go (config-heavy)     unknown
+hashicorp/terraform              Go                    unknown
+kubernetes/kubernetes            Go                    unknown   # bounded: last 1000 commits
+tokio-rs/tokio                   Rust                  unknown
+rust-lang/cargo                  Rust                  unknown
+expressjs/express                JS/TS                 unknown
+nestjs/nest                      JS/TS                 unknown
+facebook/react                   JS/TS                 unknown
+curl/curl                        C                     unknown
+redis/redis                      C                     unknown
+laravel/laravel                  PHP                   unknown
+rails/rails                      Ruby                  unknown
+spring-projects/spring-boot      Java                  unknown
+elastic/elasticsearch            Java                  unknown   # bounded: last 1000 commits
+dotnet/runtime                   C#                    unknown   # bounded: last 1000 commits
+#
+# Three repositories exceeded 1 GB and were re-cloned at --depth 1000, then
+# scanned with --max-commits 1000. Their history rows are labelled bounded in
+# docs/BENCHMARK.md and are not full-history measurements.
+#
+# Four findings were flagged for responsible-disclosure handling. Their
+# repository names, paths and detector identities are intentionally omitted
+# from docs/BENCHMARK.md and are therefore not recoverable here either. They
+# were not investigated, decoded, verified or read.
+
+
+## 14-repository false-positive corpus (bench/MULTI-CORPUS.md)
+#
+# This one IS pinned. Commits are recorded as 12 hex characters, exactly as
+# the source table gives them; they are not expanded here because expanding
+# them would require resolving against a remote.
+#
+# repository                          commit
+aws/aws-sdk-js-v3                     e53a25aafbdd
+stripe/stripe-node                    6592470f1c70
+stripe/stripe-js                      8daa6fad5d31
+googleapis/google-cloud-node          c5fea74ac47b
+supabase/supabase-js                  b3b939a405ae
+langchain-ai/langchainjs              ffadf8515774
+openai/openai-node                    eea2292a4a52
+anthropics/anthropic-sdk-typescript   7f3898c525b1
+vercel/ai                             1c6854096fbe
+facebook/react-native                 c6b137cac9fe
+expo/expo                             f1882313ed84
+flutter/flutter                       634d370c3ab2
+getsentry/sentry-javascript           fade8e2ddd3d
+open-telemetry/opentelemetry-js       b85eb28343ff
+#
+# Inclusion means a repository was scanned. It does not mean the project uses
+# SecretLoop, endorses it, or was consulted.
+
+
+## Corpus B, the real-noise repository (bench/COMMANDS.md, bench/BASELINE.md)
+#
+# identity   unknown -- deliberately withheld, not lost. bench/COMMANDS.md
+#            states the repository is not named there and that the path shown
+#            is not a real one.
+# commit     unknown -- referred to only as "its pinned commit".
