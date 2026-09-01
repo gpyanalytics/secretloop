@@ -2,6 +2,74 @@
 
 ## 0.1.5 — unreleased
 
+### Precision — an opt-in key-context gate on the entropy tier
+
+`--key-context`, and `keyContextRequired` in config, report a **quoted**
+generic high-entropy string only when the identifier it is assigned to carries
+a secret-like word: `key`, `token`, `secret`, `pass`, `password`, `auth`,
+`cred`, `bearer`, `private`, `session`, `cookie`, `signature`, `signing`,
+`salt` and the obvious spellings around them. Nothing else changes — no rule ID,
+no threshold, no severity, no output format, and no fingerprint.
+
+**It ships off, and the default is a measurement result rather than caution.**
+The number that would justify turning it on for everyone is the fraction of
+*true positives* it suppresses, and that number cannot be measured with
+available data. Estimating it requires knowing the identifiers real secrets are
+stored under; the two real-world proxies bracket it from opposite sides by
+selection bias. Identifiers taken from a keyword-anchored detector's own hits
+match the word list **100.00%** of the time — that detector only fires on such
+names, so the population is selected to match. Identifiers taken from every
+high-entropy string in real packages match **10.54%**, because that population
+is overwhelmingly hashes and resource IDs rather than credentials. Any
+threshold placed between 0% and 89% suppression is chosen, not measured. So the
+noise reduction is published as a figure, the gate is opt-in, and the trade is
+left to whoever knows how their own repository names things. A false negative
+in a secret scanner is the expensive direction, and a default-on gate would buy
+a measured drop in noise with an unmeasured number of silent misses.
+
+**Measured noise reduction**, over 123,940 files of fourteen published SDKs and
+frameworks at pinned commits, holding 20,396 candidates: **14.36% suppressed**
+(2,928). That aggregate is concentrated — one generated-client monorepo carries
+80.10% of the candidates and suppresses 1.02% of them — so the figure without it
+is reported beside it: **68.06%** (2,762 of 4,058). Neither number is the true
+one; together they bound how much the answer depends on which repositories are
+in the corpus. Per-repository rates run from 0.00% to 90.46%, which is the
+result restated: this gate's value depends on naming conventions, which is
+exactly why it is a choice.
+
+Of the candidates, 91.58% are quoted literals but only 15.72% have a resolvable
+identifier at all. The remaining 75.86% — array elements, bare JSON values,
+anything with no assignment in front of it — fall through untouched, and 8.42%
+are unquoted and never gated.
+
+**The identifier never comes from inside the candidate.** The search region
+ends before the opening quote and never crosses a newline, so no part of a
+value is ever evidence about itself. This is the fixed constraint the design is
+built around rather than an implementation detail: the previous attempt derived
+the identifier from the candidate, and since a Firebase Cloud Messaging
+registration token reads `AAAA<id>:APA91b<rest>`, the bare-assignment pattern
+split it at the token's own colon and gated a real credential on half of
+itself. Resolution returns nothing on anything unclear, and nothing means fall
+through — the gate only ever suppresses when it has a confident,
+outside-the-span identifier.
+
+Matching is whole-word after a camel, snake, kebab and digit split, never
+substring: `author` is not `auth`, `keyboard` is not `key`, `bypass` is not
+`pass`, `design` is not `sign`. `api`, `hash` and `sign` are excluded outright —
+too common in identifiers holding nothing, and `api` alone would open the gate
+for most of a client library.
+
+Quoted literals only. Bare assignments, `.env`-style lines and values inside
+larger tokens are never gated, and bare-assignment support is out of scope.
+The flag reaches this gate and nothing else: the ordered-run and path-shape
+vetoes, the post-prefix entropy floors and every provider rule are unaffected
+by it in both positions.
+
+`bench/keyed-corpus.ts` reproduces the measurement and imports its predicates
+from the shipped source, so the numbers cannot drift from what runs.
+`bench/keyed-repos.txt` records every repository and the full commit it was
+read at.
+
 ### Rules
 
 Six new provider rules — 103 rules to 109. No existing rule ID changed, no
