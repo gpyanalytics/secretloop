@@ -7,19 +7,27 @@ import { scanText, Finding, ENTROPY_RULE_ID } from "../src/scanner";
 import { defaultConfig, SecretLoopConfig } from "../src/config";
 
 /**
- * 0.1.4 — the three precision gates on `generic-high-entropy`.
+ * 0.1.4 — the two precision vetoes on `generic-high-entropy`.
  *
  * The first external run on a real frontend monorepo produced two findings and
  * both were false positives, both from this one tier. The two values are
  * committed verbatim under tests/fixtures/false-positives/ and are the anchor
- * for everything below; the synthetic cases exist so each gate is pinned on its
+ * for everything below; the synthetic cases exist so each veto is pinned on its
  * own rather than only through the two shapes that happened to be reported.
  *
- *   N7a  ordered-run veto      — Shannon entropy is blind to ordering, so a
- *                                printed alphabet scores higher than a key.
- *   N7b  path-shape veto       — an identifier path is not a credential.
- *   N8   key-name context gate — the tier fires only under an identifier whose
- *                                WORDS say credential.
+ *   N7a  ordered-run veto  — Shannon entropy is blind to ordering, so a
+ *                            printed alphabet scores higher than a key.
+ *   N7b  path-shape veto   — an identifier path is not a credential.
+ *
+ * A third gate, N8, would have required a secret-like WORD in the identifier
+ * before this tier fired at all. It is DEFERRED TO 0.1.5 and its cases were
+ * removed from this file rather than skipped: measured against the suite's own
+ * documented true positives it suppressed 198 of 276 against a 5% budget, and
+ * the measurement exposed a resolution defect -- an FCM token reads
+ * "AAAA<id>:APA91b<rest>", so the assignment pattern split it at the token's
+ * own colon and gated a real credential on half of itself. The work survives on
+ * the n8-key-context branch; nothing in this file depends on it, and the two
+ * vetoes below are pinned without it.
  *
  * Every veto here is evaluated inside the entropy tier alone. Named provider
  * rules are unconditional and the anti-regression suite at the bottom is what
@@ -137,27 +145,6 @@ function scanFixtureFile(name: string, extraArgs: string[] = []): Finding[] {
   }
 }
 
-function scanSnippetViaCli(body: string, extraArgs: string[] = []): {
-  status: number | null;
-  findings: Finding[];
-  stderr: string;
-} {
-  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-precision-0.1.4-"));
-  try {
-    mkdirSync(path.join(dir, "src"), { recursive: true });
-    writeFileSync(path.join(dir, "src", "config.js"), body, "utf8");
-    const res = spawnSync(
-      "node",
-      [CLI, "scan", "--format", "json", "--fail-on", "never", ...extraArgs, "--path", dir],
-      { encoding: "utf8" }
-    );
-    const findings = res.status === 0 ? (JSON.parse(res.stdout).findings as Finding[]) : [];
-    return { status: res.status, findings, stderr: res.stderr };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
 const entropyOf = (findings: Finding[]) => findings.filter((f) => f.ruleId === ENTROPY_RULE_ID);
 
 // ------------------------------------------------- N7a: the ordered-run veto
@@ -199,43 +186,38 @@ test("the reported storybook title no longer fires, end to end", () => {
 
 // ------------------------------------------------ N8: the key-context gate
 
-suite("0.1.4 N8 — one literal, three placements");
+suite("0.1.4 — one literal, two placements, both still reported");
 
-test("under a non-secret identifier the literal no longer fires", () => {
-  assert.strictEqual(entropyHits(assigned("columnWidth", SECRET)).length, 0);
-});
-
-test("under a secret-like identifier the same literal still fires", () => {
+/**
+ * The surviving half of what was going to be N8's three-placement comparison.
+ * The suppression case went with N8; these two did not, because they are what
+ * says the two vetoes leave an ordinary credential alone wherever it sits.
+ * Neither depends on identifier context existing.
+ */
+test("under a secret-like identifier the literal fires", () => {
   assert.strictEqual(entropyHits(assigned("sessionToken", SECRET)).length, 1);
 });
 
-test("with no resolvable identifier the same literal still fires", () => {
-  // Absence of context is not evidence of innocence, so the gate falls through
-  // rather than suppressing.
+test("with no resolvable identifier the same literal fires", () => {
   assert.strictEqual(entropyHits(bare(SECRET)).length, 1);
 });
 
 // --------------------------------------------- N8: whole words, not substrings
 
-suite("0.1.4 N8 — the word list matches words, not substrings");
+suite("0.1.4 — the same literal under credential-shaped identifiers");
 
-const CLOSED_GATE = [
-  "author",      // contains "auth"
-  "design",      // contains "sign"
-  "assignee",    // contains "sign"
-  "bypass",      // contains "pass"
-  "apiVersion",  // "api" is not evidence of a credential
-  "apiUrl",
-  "contentHash", // a checksum is not a secret
-  "gitSha",
-];
-for (const name of CLOSED_GATE) {
-  test(`${name} does not open the gate`, () => {
-    assert.strictEqual(entropyHits(assigned(name, SECRET)).length, 0);
-  });
-}
-
-const OPEN_GATE = [
+/**
+ * Seven names a leaked credential actually gets given. 0.1.4 does not read the
+ * identifier at all, so these assert only that neither veto rejects the value
+ * -- which is the point: an over-broad ordered-run or path-shape predicate
+ * would show up here first, under exactly the names that matter most.
+ *
+ * The mirror set -- author, design, assignee, bypass, apiVersion, apiUrl,
+ * contentHash, gitSha, which must NOT be read as credential context -- went
+ * with N8 to the n8-key-context branch. It asserts a gate that does not exist
+ * in this slice.
+ */
+const CREDENTIAL_NAMES = [
   "apiKey",
   "API_TOKEN",
   "db_pass",
@@ -244,40 +226,15 @@ const OPEN_GATE = [
   "private_key",
   "signingSecret",
 ];
-for (const name of OPEN_GATE) {
-  test(`${name} opens the gate`, () => {
+for (const name of CREDENTIAL_NAMES) {
+  test(`a high-entropy literal under ${name} still reports`, () => {
     assert.strictEqual(entropyHits(assigned(name, SECRET)).length, 1);
   });
 }
 
-// ------------------------------------------------------ the escape hatch
-
-suite("0.1.4 — --no-key-context restores pre-N8 matching, and nothing else");
-
-test("--no-key-context restores a suppressed value under a non-secret identifier", () => {
-  const body = assigned("value", AWS_SECRET);
-  const gated = scanSnippetViaCli(body);
-  assert.strictEqual(gated.status, 0, gated.stderr);
-  assert.strictEqual(entropyOf(gated.findings).length, 0, "N8 did not suppress under `value`");
-
-  const ungated = scanSnippetViaCli(body, ["--no-key-context"]);
-  assert.strictEqual(ungated.status, 0, ungated.stderr);
-  assert.strictEqual(entropyOf(ungated.findings).length, 1, "--no-key-context did not restore it");
-});
-
-test("--no-key-context leaves the ordered-run and path-shape vetoes in force", () => {
-  const runOnly = scanSnippetViaCli(assigned("value", SEQUENTIAL_PAIRS), ["--no-key-context"]);
-  assert.strictEqual(runOnly.status, 0, runOnly.stderr);
-  assert.strictEqual(entropyOf(runOnly.findings).length, 0, "N7a was disabled by the escape hatch");
-
-  const pathOnly = scanSnippetViaCli(bare(PATH_SHAPED), ["--no-key-context"]);
-  assert.strictEqual(pathOnly.status, 0, pathOnly.stderr);
-  assert.strictEqual(entropyOf(pathOnly.findings).length, 0, "N7b was disabled by the escape hatch");
-});
-
 // --------------------------------------------------------- anti-regression
 
-suite("0.1.4 — anti-regression: what these gates must never remove");
+suite("0.1.4 — anti-regression: what these vetoes must never remove");
 
 test("a provider credential still reports, whatever the identifier says", () => {
   const found = allHits(assigned("columnWidth", PROVIDER_TOKEN));
