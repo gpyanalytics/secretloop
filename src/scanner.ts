@@ -250,7 +250,9 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   findings.push(...merged);
 
   if (config.entropyPassEnabled && !excluded.has(ENTROPY_RULE_ID)) {
-    for (const hit of findHighEntropyStrings(text, config.entropyThreshold)) {
+    for (const hit of findHighEntropyStrings(text, config.entropyThreshold, {
+      keyContextRequired: config.keyContextRequired,
+    })) {
       if (isPlaceholder(hit.value)) continue;
       // A published sample has the randomness of a real key, so the named rules
       // dropping it only moves the report down a tier unless this does too.

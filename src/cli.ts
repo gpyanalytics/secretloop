@@ -45,6 +45,8 @@ export interface Args {
   includeGenerated: boolean;
   /** Report generic-tier findings in test, fixture and example paths. */
   includeFixtures: boolean;
+  /** N8: gate the quoted generic entropy tier on the identifier. Off by default. */
+  keyContext: boolean;
   /** mask: also mask generic high-entropy strings. Off by default -- see HELP. */
   entropy: boolean;
   /**
@@ -74,6 +76,7 @@ export function parseArgs(argv: string[]): Args {
     failOn: "any",
     includeGenerated: false,
     includeFixtures: false,
+    keyContext: false,
     entropy: false,
   };
   const errors: string[] = [];
@@ -137,6 +140,9 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--include-fixtures":
         args.includeFixtures = true;
+        break;
+      case "--key-context":
+        args.keyContext = true;
         break;
       case "--entropy":
         args.entropy = true;
@@ -260,6 +266,12 @@ OPTIONS
   --include-fixtures       Also report generic-tier findings in test, fixture
                            and example paths. Named provider rules already fire
                            there; this is only about the generic tiers.
+  --key-context            Report a quoted generic high-entropy string only if
+                           the identifier it is assigned to carries a
+                           secret-like word (key, token, secret, password...).
+                           OFF by default: it trades unreported real secrets
+                           for less noise, and how well that trade goes depends
+                           on how your repository names things.
   --format <text|json|sarif>   Output format (default: text)
   -o, --output <file>      Write the report to a file instead of stdout
   --no-redact              Print full secret values (dangerous in CI logs)
@@ -597,6 +609,7 @@ async function main(): Promise<void> {
   // the scan beyond what it has always been able to reach.
   if (args.includeGenerated) config.generatedExcludePaths = [];
   if (args.includeFixtures) config.includeFixtures = true;
+  if (args.keyContext) config.keyContextRequired = true;
 
   let findings: Finding[];
   let texts = new Map<string, string>();
