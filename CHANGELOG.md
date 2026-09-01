@@ -33,6 +33,20 @@ A guard now walks every rule that has a verifier and asserts its credential can
 reach no host but its own provider's. It fails on the previous behaviour, which
 is how this defect would have been caught.
 
+### Documentation
+
+- `SECURITY.md` now states what the tool does with your code and your
+  credentials: scanning is local and dependency-free, the two features that can
+  reach the network are named with the control each one answers to, and the
+  editor's `enableLiveVerification` setting is called out because refusing
+  `--verify` alone does not cover it.
+- Rule counts in `README.md` no longer name an exact figure that goes stale on
+  the next rule, and the verifier figures are corrected: fifteen providers
+  rather than eighteen, and seventeen rules that can transmit rather than
+  eighteen.
+- A new README entry answers why credential-shaped values in test fixtures are
+  reported, what already stands down there, and which suppressions exist.
+
 ## 0.1.5
 
 ### Precision — an opt-in key-context gate on the entropy tier

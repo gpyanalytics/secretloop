@@ -75,11 +75,11 @@ handoff between them:
 ```
    detect  ──►  verify  ──►  remediate / rotate
      │            │                  │
-  103 rules   18 providers    redact · extract to .env
+  100+ rules  15 providers    redact · extract to .env
   + entropy   read-only API    · revoke at the provider
 ```
 
-1. **Detect** — 103 provider rules plus an entropy pass, across your working
+1. **Detect** — 100+ provider rules plus an entropy pass, across your working
    tree, staged changes, and full git history.
 2. **Verify** — a read-only call to the provider proves whether the credential
    still works. A dead test token never interrupts you; a live production key
@@ -177,12 +177,12 @@ where the work still falls on a human.
 |---|---|---|---|---|
 | Working-tree + pre-commit scan | ✅ | ✅ | ✅ | ✅ |
 | Full git history scan | ✅ | ✅ | ✅ | ✅ |
-| Live credential verification | ❌ | ✅ | ✅ | ✅ (18 rules) |
+| Live credential verification | ❌ | ✅ | ✅ | ✅ (17 rules) |
 | SARIF / CI output | ✅ | ✅ | ✅ | ✅ |
 | Baseline for existing findings | ✅ | ❌ | ✅ | ✅ |
 | Fix applied in the editor | ❌ | ❌ | ❌ | ✅ |
 | One-click rotate at the provider | ❌ | ❌ | partial | ✅ where the API allows |
-| Detector count | ~160 | ~800 | ~450 | 103 |
+| Detector count | ~160 | ~800 | ~450 | 100+ |
 | Price for a small team | free | free tier | enterprise | free |
 
 **Read that table honestly.** On raw detector count SecretLoop is behind, and
@@ -193,9 +193,9 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
 
 ## What it does
 
-- **Detect** — 103 provider rules with a keyword prescreen (so a large rule set
+- **Detect** — 100+ provider rules with a keyword prescreen (so a large rule set
   stays fast), plus an entropy pass for credentials with no recognizable format.
-- **Verify, when you ask for it** — read-only API calls to 18 providers confirm
+- **Verify, when you ask for it** — read-only API calls to 15 providers confirm
   whether a credential is *currently active*. A dead test token never interrupts
   you.
 
@@ -278,8 +278,8 @@ secretloop scan --verify --fail-on verified --format sarif -o results.sarif
 `--fail-on verified` fails on a **confirmed-live** credential and on one whose
 check **reached no verdict** — a provider that could not be reached, answered
 403, or rate-limited the request. It does *not* fail on rules that have no
-verifier at all: 85 of the 103 rules cannot be checked against a provider, and
-counting those would make this flag behave exactly like `--fail-on any`.
+verifier at all: only 17 rules can be checked against a provider, and counting
+the rest would make this flag behave exactly like `--fail-on any`.
 
 > **This is stricter than it used to be.** A runner without network egress
 > previously passed green: every check returned "unknown", nothing was ever
@@ -358,6 +358,44 @@ first-class rather than an afterthought:
   reach you: git SHAs, SHA-256 digests, lockfile integrity hashes, UUIDs, data
   URIs, file paths, and version strings.
 
+### Why are the fake keys in my test fixtures flagged?
+
+Because a scanner cannot tell that they are fake. A credential-shaped string in
+a fixture file and a credential-shaped string in production code are the same
+bytes; the only thing separating them is intent, which is not in the file.
+
+The entropy pass already stands down there — a generic high-entropy string in a
+test, fixture or example path is not reported unless you pass
+`--include-fixtures`. What still fires everywhere is a **named provider rule**,
+and that is deliberate. A real token committed to a test file is a real leaked
+token: it works, it is public, and the attacker reading your repository does not
+care which directory it sits in. Fixture directories are one of the most common
+places a real key gets pasted "just to check something" — and the fakes around
+it are exactly what makes it invisible to a human reviewer.
+
+The other half of the argument is what tolerance costs. A scanner that stays
+quiet about credential-shaped values in test paths teaches you that its warnings
+are optional, and a tool you have learned to scroll past protects nothing on the
+day it is right.
+
+So there is no flag that suppresses named-rule findings in fixtures, and that
+absence is a decision rather than a gap. What there is instead is per-finding
+suppression you can review:
+
+- `secretloop:allow` on the finding's line or the line above it — the finding is
+  annotated where it lives, so the next reader sees the judgement and can
+  disagree with it. `secretloop-ignore` and `gitleaks:allow` are accepted too.
+- `--write-baseline` — accept everything present today and fail only on what is
+  new, which is the right move for a repository adopting scanning with a
+  backlog.
+- `.secretloop.json` — `allowValues` for a specific published sample,
+  `excludeRules` to turn a rule off entirely, `excludePaths` for a directory.
+
+The best fix, where you can take it, is to make the fake obviously fake:
+generate fixture credentials at runtime instead of writing a literal. This
+repository does that for its own test corpus, which is why scanning itself
+reports nothing from it.
+
 ## Commands
 
 All of these are in the Command Palette under **SecretLoop**:
@@ -405,13 +443,13 @@ secretloop/
 ├── src/
 │   ├── extension.ts     # activation, diagnostics, code actions, commands
 │   ├── scanner.ts       # rule + entropy detection, confidence tiers, suppression
-│   ├── rules.ts         # 103 provider rules with keyword prescreen + allowlists
+│   ├── rules.ts         # 100+ provider rules with keyword prescreen + allowlists
 │   ├── entropy.ts       # Shannon entropy pass with structural FP filtering
 │   ├── config.ts        # .secretloop.json, glob matching, fingerprints, baseline
 │   ├── history.ts       # git history scanning (git log -p parser)
 │   ├── walk.ts          # file enumeration honoring .gitignore via git ls-files
 │   ├── report.ts        # text / JSON / SARIF output
-│   ├── verify.ts        # live verification calls for 18 providers
+│   ├── verify.ts        # live verification calls for 15 providers
 │   ├── rotate.ts        # self-revoke or dashboard-deeplink rotation per provider
 │   ├── remediate.ts     # redact / extract-to-.env logic
 │   ├── hooks.ts         # install/uninstall the git pre-commit hook
@@ -566,7 +604,7 @@ and the pre-commit hook installer.
 
 The full plan lives in [`docs/ROADMAP.md`](docs/ROADMAP.md). The short version:
 
-- **Detector parity is not the goal.** 103 rules against gitleaks' ~160 and
+- **Detector parity is not the goal.** 100+ rules against gitleaks' ~160 and
   TruffleHog's 800+, and closing that gap is explicitly out of scope — nobody
   switches scanners for parity. Coverage gets added where a real user hits a
   real gap, not to move a number.
