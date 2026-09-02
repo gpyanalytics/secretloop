@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.7
+
+Republish. The 0.1.6 VS Code Marketplace package accidentally bundled dev
+dependencies (built from a working tree instead of a clean checkout),
+producing an oversized VSIX. No code, rule, or behaviour change from 0.1.6;
+the npm package and Open VSX were unaffected. This release ships the
+correctly packaged extension.
+
 ## 0.1.6
 
 ### Fixed — a shared credential format is no longer sent to one of the providers sharing it
