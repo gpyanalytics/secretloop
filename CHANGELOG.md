@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.6 — unreleased
+## 0.1.6
 
 ### Fixed — a shared credential format is no longer sent to one of the providers sharing it
 
