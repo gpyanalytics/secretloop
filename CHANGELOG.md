@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 — unreleased
+## 0.2.0 — 2026-09-04
 
 A local MCP server, so an AI coding agent can drive the scanner without the
 scanner becoming an AI product. Detection is unchanged from 0.1.7 and stays
