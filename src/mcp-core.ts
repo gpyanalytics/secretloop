@@ -31,7 +31,7 @@ import {
   resolveConfigFile,
   globToRegExp,
 } from "./config";
-import { listFilesWithExclusions, findRepoRoot } from "./walk";
+import { listFilesWithExclusions, findRepoRoot, SkipReason } from "./walk";
 import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
 import { scanHistory, isGitRepo } from "./history";
 // Metadata only, and from verify-meta rather than verify: importing verify.ts
@@ -638,9 +638,22 @@ export function toolScan(input: ScanInput): ToolResult {
   // there. containWithinWorkspace below stays as the second layer: it is what
   // get_finding re-checks against, where no walker runs.
   let walkerOutsideExcluded = 0;
+  // Enumerated but never read, tallied from the SAME classification the CLI
+  // discloses: scanFiles reports each skip through onSkipped, whichever way the
+  // file list was built. Counting here rather than re-deriving it is the point
+  // -- a second opinion about which files were skipped is exactly how the two
+  // surfaces would come to describe the same scan differently.
+  let readOversized = 0;
+  let readUnreadable = 0;
+  let readOutside = 0;
+  const countSkip = (reason: SkipReason): void => {
+    if (reason === "oversized") readOversized++;
+    else if (reason === "outside") readOutside++;
+    else readUnreadable++;
+  };
   try {
     if (include.length === 0) {
-      const result = scanWorkspaceScan(root, config);
+      const result = scanWorkspaceScan(root, config, { onSkipped: countSkip });
       scanned = result.scanned;
       generatedExcluded = result.generatedExcluded;
       walkerOutsideExcluded = result.outsideExcluded;
@@ -660,7 +673,7 @@ export function toolScan(input: ScanInput): ToolResult {
       }).files.filter((rel) => matchers.some((m) => m.test(rel)));
       const files = candidates.filter((rel) => classifyPath(rel, config) === "none");
       generatedExcluded = candidates.length - files.length;
-      scanned = scanFiles(root, files, config);
+      scanned = scanFiles(root, files, config, { onSkipped: countSkip });
     }
   } catch (err) {
     return fail(`scan failed: ${quoteUntrusted((err as Error).message)}`);
@@ -706,8 +719,13 @@ export function toolScan(input: ScanInput): ToolResult {
         statement: `Scanned ${describeScope(scanned.length, "file", {
           generatedExcluded,
           suppressed: scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0),
-          outsideExcluded: walkerOutsideExcluded + outsideExcluded,
+          // The read enforces containment too, and can disagree with the walk
+          // if a link is retargeted between them. Summed the way the CLI sums
+          // it, so the same tree yields the same sentence.
+          outsideExcluded: walkerOutsideExcluded + outsideExcluded + readOutside,
           fixtureSuppressed: scanned.reduce((n, f) => n + (f.fixtureSuppressed ?? 0), 0),
+          oversizedExcluded: readOversized,
+          unreadableExcluded: readUnreadable,
         })}.`,
       },
       config: describeConfig(root, config),

@@ -255,6 +255,53 @@ test("a scan that skipped generated files discloses it, as the CLI does", () => 
   assert.strictEqual(p.summary.total, 0, "the generated file should not have been scanned");
 });
 
+test("a scan that could not read a file discloses it, exactly as the CLI does", () => {
+  // The skip that was silent on this surface until 0.2.0. describeScope gained
+  // the two clauses in report.ts, and the MCP copy was brought level -- but the
+  // sentence stayed silent anyway, because the counts were never threaded from
+  // the read to the call site. Matching function, unmatched plumbing: the pin
+  // has to be on the produced sentence, not on the function alone.
+  //
+  // Both planted values sit in files the scanner never opens, which is the
+  // whole point: the disclosure is what tells you a credential could be hiding
+  // where nothing looked.
+  const [big, binary] = tokens(2);
+  const dir = repo("skip-disclosure", {
+    "small.js": "const ok = 1;\n",
+    "huge.js": `const t = "${big}";\n` + "// pad\n".repeat(4000),
+    ".secretloop.json": JSON.stringify({ maxFileSizeBytes: 4096 }) + "\n",
+  });
+  writeFileSync(
+    path.join(dir, "bin.js"),
+    Buffer.concat([Buffer.from([0, 1, 2, 0, 255]), Buffer.from(`const t = "${binary}";`)])
+  );
+
+  resetSessions();
+  const p = payload(toolScan({ path: dir }));
+  // small.js and .secretloop.json: the config file is itself scanned.
+  assert.strictEqual(p.scope.filesScanned, 2, "the two readable files");
+  assert.strictEqual(
+    p.scope.statement,
+    `Scanned ${cliDescribeScope(2, "file", {
+      oversizedExcluded: 1,
+      unreadableExcluded: 1,
+    })}.`,
+    `MCP scope statement drifted from the CLI's: ${p.scope.statement}`
+  );
+  // And neither unread credential is anywhere in what was emitted.
+  const emitted = JSON.stringify(p);
+  assert.ok(!emitted.includes(big), "the oversized file's credential was emitted");
+  assert.ok(!emitted.includes(binary), "the binary file's credential was emitted");
+});
+
+test("a scan with nothing to skip says nothing about skips", () => {
+  const dir = repo("no-skip-disclosure", { "a.js": "const ok = 1;\n" });
+  resetSessions();
+  const p = payload(toolScan({ path: dir }));
+  assert.strictEqual(p.scope.statement, `Scanned ${cliDescribeScope(1, "file")}.`);
+  assert.doesNotMatch(p.scope.statement, /not scanned/, "a clean scan claimed a skip");
+});
+
 test("validateRoot's refusals match the CLI's, word for word", () => {
   const missing = path.join(ROOT, "definitely-absent");
   const aFile = path.join(dirtyDir, "app.js");
