@@ -106,10 +106,21 @@ export interface ScopeNotes {
   suppressed?: number;
   outsideExcluded?: number;
   fixtureSuppressed?: number;
+  /** Files enumerated but skipped for exceeding maxFileSizeBytes. */
+  oversizedExcluded?: number;
+  /** Files enumerated but skipped as binary, or unreadable at the read. */
+  unreadableExcluded?: number;
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
-  const { generatedExcluded = 0, suppressed = 0, outsideExcluded = 0, fixtureSuppressed = 0 } = notes;
+  const {
+    generatedExcluded = 0,
+    suppressed = 0,
+    outsideExcluded = 0,
+    fixtureSuppressed = 0,
+    oversizedExcluded = 0,
+    unreadableExcluded = 0,
+  } = notes;
   let out =
     count === 0
       ? `0 ${noun}(s) — nothing was scanned, so this is not a clean result`
@@ -129,6 +140,14 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     out +=
       `; ${fixtureSuppressed} generic finding(s) suppressed in test/fixture paths ` +
       `(--include-fixtures to report them)`;
+  }
+  if (oversizedExcluded > 0) {
+    out +=
+      `; ${oversizedExcluded} file(s) not scanned — larger than maxFileSizeBytes ` +
+      `(raise it in .secretloop.json to cover them)`;
+  }
+  if (unreadableExcluded > 0) {
+    out += `; ${unreadableExcluded} file(s) not scanned — binary or unreadable`;
   }
   return out;
 }

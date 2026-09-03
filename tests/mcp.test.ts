@@ -200,7 +200,17 @@ test("describeScope matches the CLI's, word for word", () => {
     { suppressed: 3 },
     { outsideExcluded: 2 },
     { fixtureSuppressed: 7 },
+    { oversizedExcluded: 5 },
+    { unreadableExcluded: 9 },
     { generatedExcluded: 1, suppressed: 2, outsideExcluded: 3, fixtureSuppressed: 4 },
+    {
+      generatedExcluded: 1,
+      suppressed: 2,
+      outsideExcluded: 3,
+      fixtureSuppressed: 4,
+      oversizedExcluded: 5,
+      unreadableExcluded: 6,
+    },
   ];
   for (const count of [0, 1, 2, 41, 855]) {
     for (const noun of ["file", "staged file", "commit"]) {
