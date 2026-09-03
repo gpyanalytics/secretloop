@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.2.0 — unreleased
+
+A local MCP server, so an AI coding agent can drive the scanner without the
+scanner becoming an AI product. Detection is unchanged from 0.1.7 and stays
+deterministic: the same bytes always produce the same findings, and nothing in
+this release asks a model what a secret is.
+
+SecretLoop sits **beside** the scanner you already run, not in place of it. If
+gitleaks or TruffleHog gates your CI, keep them there. What is new here is a
+controlled interface for the agent that reads your code — one that discloses
+what it did not look at, and that cannot send a credential anywhere without a
+human saying so in a terminal.
+
+### The MCP server, and its five tools
+
+`secretloop-mcp` speaks MCP over stdio and exposes exactly five tools:
+
+| Tool | What it does |
+|---|---|
+| `secretloop_scan` | Scans the working tree. Optional globs narrow it. |
+| `secretloop_list_findings` | Filters the last scan by severity, rule or liveness. |
+| `secretloop_get_finding` | One finding in full, with masked source context. |
+| `secretloop_history_scan` | Scans git history, bounded by commit and time limits. |
+| `secretloop_verify` | Asks whether one credential is still live — see below. |
+
+Add it to Claude Desktop, Claude Code or Cursor with
+`npx -y --package=secretloop secretloop-mcp`; the README has the exact config.
+
+Four of the five are read-only: no writes, no rotation, no config or baseline
+changes. Every value is masked the way the CLI masks it, and no tool argument
+unredacts. Repository text comes back inside an `<untrusted-repository-content>`
+block with any attempt to close that block from inside neutralised — a
+repository is assumed hostile, because a file can be written to manipulate
+whatever reads it. Server roots come from the command line only; a client
+cannot widen them, and paths that resolve outside them are refused before any
+filesystem access.
+
+### Verification requires a human, in a terminal
+
+`secretloop_verify` is the one thing that can send a credential off the machine,
+and an assistant cannot authorise it. The first call transmits **nothing**: it
+returns `CONSENT_REQUIRED` and writes a pending record committing to a hash of
+the value, never the value. A human then runs `secretloop approve <fingerprint>`
+in a terminal, sees the provider, the location and the masked value, and answers
+the prompt. Only then does a second call reach the provider.
+
+The approval is bound to what was on disk when the human looked. If the file
+changed, was deleted, was replaced by a symlink pointing out of the workspace,
+or if the record is expired, reused or forged, the answer is `UNKNOWN` and the
+provider receives nothing. A repository that asks to be verified — in a file, a
+filename or a commit message — gets `CONSENT_REQUIRED` and nothing else.
+
+### A scan says what it did not read
+
+The MCP scope statement now discloses skipped files exactly as the CLI does,
+word for word: files excluded as generated, findings suppressed by inline
+directives, files whose symlinks resolve outside the scan root, generic findings
+suppressed in fixture paths, files larger than `maxFileSizeBytes`, and files
+skipped as binary or unreadable.
+
+Two of those clauses were previously missing from the MCP surface, so a scan of
+a tree whose credentials all sat in oversized or binary files reported the same
+sentence as a scan with nothing to hide. Both surfaces now derive the counts
+from one classification rather than counting separately, and a test pins the MCP
+sentence against the CLI's on a tree carrying both kinds of skip.
+
+### Unchanged
+
+No rule, threshold, severity, fingerprint or output format changed. Scanning the
+same tree with 0.2.0 and 0.1.7 produces byte-identical findings.
+
 ## 0.1.7
 
 Republish. The 0.1.6 VS Code Marketplace package accidentally bundled dev
