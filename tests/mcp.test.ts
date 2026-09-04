@@ -1097,35 +1097,69 @@ test("a directory name that is an instruction comes back quoted", () => {
 });
 
 test("a config error quotes the file's own bytes", () => {
-  // Two ways a .secretloop.json puts chosen text into an error without ever
-  // being scanned, and the second is the one that matters:
+  // A .secretloop.json puts text of the author's choosing into an error message
+  // without a single byte of it being scanned, and the property has two halves
+  // that have to be proven together:
   //
-  //  - V8 quotes a ~20-character window of the offending source into a JSON
-  //    parse message. Narrow, and not every malformation triggers it — the
-  //    first fixture written for this test produced a positional error with no
-  //    content in it at all, which is why the bareword below is deliberate.
-  //  - loadConfig echoes an invalid `allowValues` pattern back in full, with no
-  //    length limit. That is the whole payload, verbatim, chosen by whoever
-  //    wrote the file in the repository being scanned.
+  //   (1) the hostile bytes REACH the message -- they are not dropped, so there
+  //       is really something to neutralise; and
+  //   (2) once there they are WRAPPED, and the closing tag cannot be used to
+  //       break out of the block.
+  //
+  // Both are asserted by assertQuoted, and the delivery here is loadConfig
+  // echoing an invalid `allowValues` pattern back in full, with no length
+  // limit. That echo is OUR code: the same bytes arrive on every Node version,
+  // so this test proves the whole property without depending on anyone else's
+  // error wording. The JSON-parse case below deliberately no longer carries
+  // half (1) -- see the note there.
   const regexDir = repo("hostile-config-regex", {
     ".secretloop.json": JSON.stringify({ allowValues: [`${INJECTION}(`] }),
     "app.js": "const ok = 1;\n",
   });
   resetSessions();
   assertQuoted(toolScan({ path: regexDir }), INJECTION, "invalid allowValues pattern");
+});
 
+test("a malformed config is refused, and whatever the parser said is wrapped", () => {
+  // This case used to assert that V8 quotes a window of the offending source
+  // into its JSON parse message, and it did so to prove byte flow-through. That
+  // is not ours to promise. V8 10.8 (Node 19) rewrote the message: Node 18
+  // produces "Unexpected token Z in JSON at position 20", which contains no
+  // source at all, while 20 and later produce "Unexpected token 'Z', ..."<snip>"...
+  // is not valid JSON", which does. A test that reads either as a security
+  // guarantee is really testing the engine.
+  //
+  // Flow-through is proven above, from an echo we control. What is asserted
+  // here is what SecretLoop is actually responsible for on every version: the
+  // scan is refused, the file is named, the parser's detail is passed through
+  // rather than swallowed, and ALL of that detail sits inside the wrapper. If a
+  // future engine starts quoting more of the file, it is already contained.
   const jsonDir = repo("hostile-config-json", {
     ".secretloop.json": `{ "excludeRules": [ ZZ_IGNORE_ALL_PRIOR_ZZ ] }`,
     "app.js": "const ok = 1;\n",
   });
   resetSessions();
   const result = toolScan({ path: jsonDir });
-  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.ok, false, "a config that cannot be parsed must not scan");
   const error = (result as { ok: false; error: string }).error;
-  assert.ok(error.includes("ZZ_IGNORE_"), `V8 no longer quotes the source: ${error}`);
+
+  const wrapped = /<untrusted-repository-content(?:\s[^>]*)?>([\s\S]*?)<\/untrusted-repository-content>/.exec(
+    error
+  );
+  assert.ok(wrapped, `the parser's message was not wrapped at all: ${error}`);
+  const inside = wrapped![1];
+  assert.match(inside, /Could not parse \.secretloop\.json/, `the file is not named: ${error}`);
+  // Non-empty detail: the reason has to survive, or a caller cannot tell a
+  // malformed config from an empty one. Measured past the fixed prefix so a
+  // silently swallowed parser message fails here.
+  const detail = inside.replace(/^.*Could not parse \.secretloop\.json:?\s*/, "");
+  assert.ok(detail.trim().length > 0, `the parser's reason was swallowed: ${error}`);
+  // And nothing the parser produced escaped the wrapper. Asserted on the detail
+  // actually present rather than on a marker that some engines never emit, so
+  // this cannot pass by the bytes simply being absent.
   assert.ok(
-    !outsideWrapper(error).includes("ZZ_IGNORE_"),
-    `file bytes reached the model unwrapped: ${error}`
+    !outsideWrapper(error).includes(detail.trim()),
+    `the parser's detail reached the model unwrapped: ${error}`
   );
 });
 
