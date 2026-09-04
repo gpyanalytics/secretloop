@@ -21,6 +21,35 @@ jobs:
       - run: npm run compile
       - run: npm test
 
+  packaging:
+    # The release checks, run on every change rather than only at release time.
+    # 0.1.6 shipped a VSIX carrying dev dependencies because it was packaged from
+    # a working tree instead of a clean checkout, and 0.1.7 existed only to
+    # republish it. smoke:vsix is the check that catches exactly that -- it diffs
+    # the built archive against scripts/vsix-manifest.txt -- and it had never run
+    # anywhere but a maintainer's laptop.
+    #
+    # A separate job on purpose: GitHub gives each job its own runner and its own
+    # checkout, so this packages from a clean install the way a release does. The
+    # setup-node cache holds ~/.npm, the download cache, and never a populated
+    # node_modules -- sharing one of those between jobs would reproduce the
+    # contamination this job exists to detect.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # 20 rather than the test matrix's 18/20: @vscode/vsce declares
+          # `engines.node >= 20`, so smoke:vsix cannot run on 18. The package
+          # itself still supports 18 -- that is what the test job covers.
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - name: Smoke the npm tarball
+        run: npm run smoke:tarball
+      - name: Smoke the VSIX
+        run: npm run smoke:vsix
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
