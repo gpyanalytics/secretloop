@@ -45,12 +45,12 @@ jobs:
           # the installed package, package-lock.json and the registry entry for
           # that immutable version (checked 2026-09-04).
           #
-          # Not 20, which satisfies vsce but reached end-of-life on 2026-04-30
-          # per the Node release schedule: no security patches, and it leaves
-          # the runner images in time. The LTS majors in support on that date
-          # are 22 (maintenance, EOL 2027-04-30) and 24 (active, EOL
-          # 2028-04-30); 22 is the lower of the two, so it is the floor this
-          # job pins to rather than the only version that would work.
+          # Not 20, because Node 20 reached end-of-life on 2026-04-30 per the
+          # Node release schedule and is no longer a supported release line.
+          # The LTS majors in support on that date are 22 (maintenance, EOL
+          # 2027-04-30) and 24 (active, EOL 2028-04-30); 22 is the lower of the
+          # two, so it is the floor this job pins to rather than the only
+          # version that would work.
           #
           # The package itself still supports node >= 18. The test matrix is
           # what covers that, and this job says nothing about it.
