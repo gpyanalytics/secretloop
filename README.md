@@ -406,9 +406,8 @@ file it goes in and the key it goes under:
 npx -y --package=secretloop secretloop-mcp
 ```
 
-**Validated:** VS Code with GitHub Copilot in agent mode, exercised in a real
-agent session — tool discovery, the consent gate, and the verdicts that came
-back.
+**Verified in a VS Code + GitHub Copilot agent-mode session during
+development.**
 
 **Documented, not individually validated:** the clients below. Each one's
 documented configuration supports connecting a local stdio MCP server, and the
