@@ -73,6 +73,14 @@ docs/**
 # negation: src/ and tests/ still contribute zero entries.
 !docs/icon.png
 
+# The release checklist. Maintainer documentation with no runtime role in the
+# extension host -- nothing loads it, and a user installing from the
+# Marketplace has no use for our publishing procedure. Listed for the same
+# reason as the entry below: a root-level .md is not covered by anything above,
+# so it ships by default. smoke:vsix caught this one on the commit that added
+# it, which is the manifest diff doing its job.
+RELEASING.md
+
 # Unreported findings from scanning other people's code, held for responsible
 # disclosure. A root-level .md is not covered by anything above -- README.md,
 # LICENSE and SECURITY.md ship from exactly that position -- so this one would
