@@ -471,7 +471,7 @@ written (checked 2026-09-05):
 match what you see, that client's own MCP documentation is the authority, and
 the server invocation above is the only part that is ours.
 
-### The four tools
+### The five tools
 
 | Tool | What it does |
 |---|---|
@@ -479,15 +479,29 @@ the server invocation above is the only part that is ours.
 | `secretloop_list_findings` | Filters the last scan's findings by severity, rule or liveness. |
 | `secretloop_get_finding` | One finding in full, with masked source context. |
 | `secretloop_history_scan` | Scans git history, bounded by a commit and time limit. |
+| `secretloop_verify` | Asks a provider whether one credential is still live — only after a human approves it. |
 
-All four are **read-only**: no writes, no rotation, no config or baseline
+The first four are **read-only**: no writes, no rotation, no config or baseline
 changes, and nothing destructive.
+
+`secretloop_verify` is the exception, and the only tool that can send anything.
+It transmits a credential to that credential's own provider, and only after the
+consent gate is satisfied: the first call returns `CONSENT_REQUIRED` and
+transmits nothing, and a person runs `secretloop approve <fingerprint>` in a
+terminal before a second call can run the check. It is **opt-in, one-time, and
+approved by a human in a terminal** — never by the assistant and never by a tool
+argument. [Verifying a credential is live](#verifying-a-credential-is-live-secretloop_verify)
+sets out the whole flow.
 
 ### What crosses the boundary, and what does not
 
-- **No credential is ever transmitted.** Liveness verification is the only thing
-  in SecretLoop that contacts a third party, and it is deliberately not exposed
-  as a tool. Nothing an assistant can call will send a credential anywhere.
+- **No credential is transmitted without a human approving that one credential.**
+  Liveness verification is the only thing in SecretLoop that contacts a third
+  party, and `secretloop_verify` is the only tool that can reach it. An
+  assistant cannot authorise it: the first call transmits nothing and returns
+  `CONSENT_REQUIRED`, and the check runs only after a person has run
+  `secretloop approve <fingerprint>` in a terminal. Every other tool sends
+  nothing anywhere.
 - **Values are redacted, always.** Every value is masked the same way the CLI
   masks it — the format prefix and the last four characters, as in
   `ghp_****…6789`, never the credential. There is no flag, argument or tool that
