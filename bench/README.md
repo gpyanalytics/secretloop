@@ -55,7 +55,7 @@ Carried over from the benchmark report that produced it, because a benchmark
 whose limits are not written down gets quoted as if it had none.
 
 1. **It does not measure detector breadth.** Eight secret kinds are planted.
-   SecretLoop ships 103 rules; this exercises a handful of them.
+   SecretLoop ships 109 rules; this exercises a handful of them.
 2. **The alphabets are the generator's choice, and they matter.** Passwords drawn
    from an alphanumeric alphabet scored 10/10; the same generator with `!@#$%`
    added scored 2/10. Recall here is a property of the corpus as much as of the

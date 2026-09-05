@@ -41,7 +41,7 @@ For the editor, install **SecretLoop** from the VS Code Marketplace, or from a
 `.vsix`:
 
 ```bash
-code --install-extension secretloop-0.1.0.vsix
+code --install-extension secretloop-0.2.0.vsix
 ```
 
 The extension scans as you type and puts *redact*, *extract to `.env`* and
@@ -266,6 +266,8 @@ secretloop history               # every commit, for secrets already pushed
   --baseline <file>               # ignore already-accepted findings
   --write-baseline <file>         # accept everything currently found
   --rev-range origin/main..HEAD   # history: scan only this range
+  --key-context                   # entropy tier: require a secret-like
+                                  # identifier on quoted values (opt-in)
 ```
 
 Typical CI use — fail the build on credentials that still work, and on any the

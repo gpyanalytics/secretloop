@@ -106,5 +106,5 @@ direct simulation in the Stage C2 work, not this corpus.
 
 Kept for the record. Corpus A tree 0.768/0.860 entropy-on and 0.808/0.840
 named-only; corpus B 150 tree false positives at 0.809 per KLOC, all from
-`generic-high-entropy` and `generic-api-key-assignment`, with zero of the 103
+`generic-high-entropy` and `generic-api-key-assignment`, with zero of the 109
 named rules firing.
