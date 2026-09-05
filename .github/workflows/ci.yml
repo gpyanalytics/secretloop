@@ -21,6 +21,47 @@ jobs:
       - run: npm run compile
       - run: npm test
 
+  packaging:
+    # The release checks, run on every change rather than only at release time.
+    # 0.1.6 shipped a VSIX carrying dev dependencies because it was packaged from
+    # a working tree instead of a clean checkout, and 0.1.7 existed only to
+    # republish it. smoke:vsix is the check that catches exactly that -- it diffs
+    # the built archive against scripts/vsix-manifest.txt -- and it had never run
+    # anywhere but a maintainer's laptop.
+    #
+    # A separate job on purpose: GitHub gives each job its own runner and its own
+    # checkout, so this packages from a clean install the way a release does. The
+    # setup-node cache holds ~/.npm, the download cache, and never a populated
+    # node_modules -- sharing one of those between jobs would reproduce the
+    # contamination this job exists to detect.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          # Read from the resolved install rather than the declared range:
+          # package.json asks for "^3.0.0", which settles nothing about what
+          # is installed. @vscode/vsce 3.9.2 requires node ">= 20" -- agreed by
+          # the installed package, package-lock.json and the registry entry for
+          # that immutable version (checked 2026-09-04).
+          #
+          # Not 20, because Node 20 reached end-of-life on 2026-04-30 per the
+          # Node release schedule and is no longer a supported release line.
+          # The LTS majors in support on that date are 22 (maintenance, EOL
+          # 2027-04-30) and 24 (active, EOL 2028-04-30); 22 is the lower of the
+          # two, so it is the floor this job pins to rather than the only
+          # version that would work.
+          #
+          # The package itself still supports node >= 18. The test matrix is
+          # what covers that, and this job says nothing about it.
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Smoke the npm tarball
+        run: npm run smoke:tarball
+      - name: Smoke the VSIX
+        run: npm run smoke:vsix
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
