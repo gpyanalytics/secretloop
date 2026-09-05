@@ -12,10 +12,19 @@ Two surfaces already reach editors other than VS Code, with no new work:
 - **The CLI.** `secretloop scan` runs in any editor's integrated terminal, and
   reads the same `.secretloop.json` the extension does — so a JetBrains or
   Neovim user gets identical verdicts, just without the inline UI.
-- **The MCP server.** Standard MCP over stdio, so it connects to any client
-  that supports a local stdio server: VS Code with Copilot, Cursor, Windsurf,
-  Cline, Zed, Claude Desktop. See the README for the per-client configuration
-  — the invocation is the same everywhere; only the file and the key differ.
+- **The MCP server.** Standard MCP over stdio, so it is *reachable* from
+  clients that support a local stdio server. Connection paths are documented
+  from each client's own documentation — VS Code with Copilot, Cursor,
+  Windsurf, Cline, Zed — and the invocation is identical everywhere; only the
+  file and the key differ, and the keys genuinely differ (Zed uses
+  `context_servers`, the others `mcpServers`).
+
+  Reachable is not the same as supported, and the distinction is worth keeping
+  intact here. **VS Code with Copilot** is the only client exercised in a real
+  agent session. The rest are **documented, not individually validated**, which
+  is what the README says and what this file should keep saying. A backlog is
+  an easy place for that to quietly become "we support six clients"; it should
+  not.
 
 So the gap is narrower than "SecretLoop is VS Code only" suggests. What is
 missing in other editors is the *native inline experience* — diagnostics on the
@@ -28,15 +37,23 @@ Build a native port only when a real user asks for that specific editor.
   up with enterprise and IT-services work; also a separate plugin API in
   Kotlin/Java, a separate marketplace, and a UI rewrite rather than a port.
   First in line if demand shows.
-- **Zed** — the MCP path is already documented and shipped, so connectivity is
-  not the open question. What remains unproven is whether anyone wants the
-  inline UI on top of it. Do not start editor-specific work until someone says
-  the MCP integration is not enough.
 - **Neovim / Vim** — served by the CLI today. A native plugin is nice to have,
   and low priority.
 - **Sublime Text / Emacs** — the CLI serves them. Skip until asked.
+- **Zed** — MCP connectivity is already documented and shipped, so that is not
+  the open question. Only an explicit ask for the inline UI would un-park
+  anything here.
 
 **Trigger:** a real user names the editor. Until then, parked.
+
+One thing this gate needs that does not exist yet: **somewhere for the signal
+to arrive.** Nothing in the README invites it and no issue template asks which
+editor, so a user who wants JetBrains support has no obvious way to say so — and
+a gate nobody can trigger reads as "no demand" indefinitely, which is not the
+same finding as "no demand". A line in the README ("Using an editor without
+inline support? Open an issue naming it") and/or a field in an issue template
+would make the rule operable. Until one exists, treat silence here as absence of
+evidence rather than evidence of absence.
 
 ## Rules and detection (evidence-gated)
 
@@ -94,6 +111,4 @@ Small, none urgent.
   should be committed: build and test, security-tool guards, packaging
   integrity, regression safety, docs accuracy, and the conditional adversarial
   review when a release touches the MCP, consent, verify or workspace surface.
-- **Tag at the release commit.** The tag has drifted behind `main` between
-  releases more than once. Tag the commit being released, not an earlier one.
 - **Prune stale worktrees** left over from previous releases.
