@@ -35,7 +35,7 @@ The fact that constrains everything else:
 | **GitGuardian** | 450+ detectors plus generic | paid tiers only | **free ≤25 devs**; ~$8–15k/yr for 10–20 devs |
 | **GitHub Secret Scanning** | partner patterns | partner-notified | free on public repos; GHAS for private |
 | **Gitleaks** | ~150 rules | none | free, open source |
-| **SecretLoop** | 103 rules | 18 providers, **tri-state** | free |
+| **SecretLoop** | 109 rules | 15 providers, **tri-state** | free |
 
 **GitGuardian's free tier covers 25 developers.** Almost every startup you would
 naturally talk to is already covered for free by a better-funded competitor. The
@@ -45,8 +45,8 @@ SMB segment is not underserved — it is un-monetisable.
 
 ## 2. Where SecretLoop genuinely wins today
 
-**The loop.** The only tool that finds a secret, proves it is live, and offers
-rotation as a quick-fix *in the place the developer is already looking*.
+**The loop.** SecretLoop finds a secret, checks whether it's live, and offers
+rotation as a quick-fix right where the developer is working.
 GitGuardian does guided rotation from a dashboard. TruffleHog verifies and stops.
 
 **The liveness tri-state.** Every other tool has a binary verified/unverified.
@@ -54,7 +54,8 @@ That is the exact bug fixed in this codebase — a 403 reading as "revoked" when
 it can equally mean live-but-scoped. Real correctness advantage, invisible in a
 feature table.
 
-**Where it loses, plainly:** 103 rules against 800. 18 verifiers against 800. No
+**Where it loses, plainly:** 109 rules against 800. 18 rules have verifiers
+(covering 15 providers), 17 of which can transmit — against 800. No
 org layer at all.
 
 ---
@@ -81,9 +82,10 @@ Start competing on:
 
 > **Where can SecretLoop apply the secret intelligence it already has?**
 
-The same engine — 103 rules, 18 verifiers, tri-state liveness, fingerprints,
+The same engine — 109 rules, 18 rules with verifiers across 15 providers,
+tri-state liveness, fingerprints,
 baselines — can be pointed at repo, `.env`, MCP config, agent config, agent
-rules, skills, logs, sessions. The 103 rules stop being a weakness and become
+rules, skills, logs, sessions. The 109 rules stop being a weakness and become
 sufficient infrastructure for a surface nobody has covered well.
 
 **Pragmatic exception:** add detectors for the top ~50 things that actually

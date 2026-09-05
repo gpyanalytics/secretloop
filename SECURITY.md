@@ -21,13 +21,27 @@ Two features can reach the network, and neither runs on its own.
 
 **Verification** asks a provider whether a detected credential still works,
 which means sending that credential to that provider. It is off by default and
-has a separate control on each surface: the `--verify` flag on the command line,
-and the `secretloop.enableLiveVerification` setting in the editor. Turning the
-setting on matters more than it looks — verification then runs as part of the
-ordinary on-save scan rather than as a separate action you take each time, and
-the extension may offer to enable it in a prompt. If your policy is that no
-credential leaves the machine, refusing `--verify` is only half of it; pin the
-setting off as well.
+has a separate control on each of three surfaces:
+
+- the `--verify` flag on the command line;
+- the `secretloop.enableLiveVerification` setting in the editor;
+- the `secretloop approve` consent gate, for the `secretloop_verify` tool an
+  MCP client can call.
+
+Turning the editor setting on matters more than it looks — verification then
+runs as part of the ordinary on-save scan rather than as a separate action you
+take each time, and the extension may offer to enable it in a prompt.
+
+The third surface is the one to check if an AI coding agent is connected. An
+assistant can *ask* for a verification, but it cannot grant one: the first call
+transmits nothing and returns `CONSENT_REQUIRED`, and the check runs only after
+a person has run `secretloop approve <fingerprint>` in a terminal, which refuses
+to run without one. Approval is opt-in, one-time, and bound to a single
+credential.
+
+If your policy is that no credential leaves the machine, all three have to be
+closed: do not pass `--verify`, pin `secretloop.enableLiveVerification` off, and
+either do not connect the MCP server or never approve a request.
 
 Eighteen of the rules have a verifier, covering fifteen providers. A credential
 matched by any other rule is never transmitted, whatever the flag says. One of

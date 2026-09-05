@@ -24,9 +24,9 @@ plan or code yet.
 A developer-focused secret detection, verification and remediation tool —
 VS Code extension plus standalone CLI, one engine.
 
-- **Detect** — 103 provider rules with a keyword prescreen, plus an entropy pass.
+- **Detect** — 109 provider rules with a keyword prescreen, plus an entropy pass.
   Working tree, staged changes, and full git history.
-- **Verify** — read-only API calls to 18 providers confirm whether a credential
+- **Verify** — read-only API calls to 15 providers confirm whether a credential
   is currently active. **Off by default**, with a prompt that names the provider
   before the first call.
 - **Remediate** — redact, extract to `.env`, or open the provider's revocation
@@ -184,7 +184,7 @@ Each looked correct. The signal was that it went green before the change.
 
 ### Measure before designing
 
-- A per-rule specificity score for 103 rules died once the corpus showed every
+- A per-rule specificity score for 109 rules died once the corpus showed every
   overlap involves exactly one rule.
 - A 512 MB `maxBuffer` sat **24 bytes above** V8's string limit and could never
   fire — the error users actually got named neither git nor history.
