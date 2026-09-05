@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.1 — 2026-09-05
+
+Documentation accuracy only — no code, detection, or behaviour change from
+0.2.0. The scanner, the rules and the MCP layer are byte-identical: `git diff
+v0.2.0..v0.2.1 -- src/` is empty.
+
+- `SECURITY.md` now names all three credential-egress surfaces: the `--verify`
+  flag on the command line, the `secretloop.enableLiveVerification` setting in
+  the editor, and the `secretloop approve` consent gate for the
+  `secretloop_verify` tool an MCP client can call. It previously named two and
+  told a reader that closing one was half the job, which left the surface an AI
+  agent can reach unmentioned.
+- Corrected counts across the docs: **109 rules**, and three numbers that had
+  been used interchangeably — **18 rules have verifiers**, covering **15
+  providers**, **17** of which can transmit.
+- `--key-context` and the previously undocumented configuration keys are
+  documented, and the install example names the current version.
+
 ## 0.2.0 — 2026-09-04
 
 A local MCP server, so an AI coding agent can drive the scanner without the
