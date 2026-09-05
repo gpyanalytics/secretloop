@@ -336,7 +336,7 @@ secretloop scan --write-baseline .secretloop-baseline.json
 secretloop scan --baseline .secretloop-baseline.json --fail-on high
 ```
 
-## Use SecretLoop from Claude / Cursor (MCP)
+## Use SecretLoop from an AI coding agent (MCP)
 
 SecretLoop ships an MCP server, so an AI assistant you already use can run the
 scanner and reason about the results. **There is no AI inside SecretLoop** — no
@@ -395,7 +395,82 @@ file to **Solution Items** so Visual Studio reloads it when you edit it.
 In both, MCP tools are available to Copilot **only in agent mode** — pick
 **Agent** from the mode dropdown at the bottom of the chat pane.
 
-### The four tools
+### Other MCP clients
+
+SecretLoop's MCP server uses the standard MCP protocol over stdio and can be
+connected to MCP-compatible clients that support local stdio servers. Every
+client below launches the *same* server — the invocation never changes, only the
+file it goes in and the key it goes under:
+
+```
+npx -y --package=secretloop secretloop-mcp
+```
+
+**Verified in a VS Code + GitHub Copilot agent-mode session during
+development.**
+
+**Documented, not individually validated:** the clients below. Each one's
+documented configuration supports connecting a local stdio MCP server, and the
+connection path is taken from that client's own current documentation.
+SecretLoop has not individually validated these clients, and the experience will
+not be identical across them — clients differ in how they surface tools, how
+they ask for approval, and how much of a result they show.
+
+Config keys genuinely differ between clients, so copy the shape for *your*
+client rather than adapting another's.
+
+**Windsurf** — `mcpServers`, in `~/.codeium/windsurf/mcp_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "secretloop": {
+      "command": "npx",
+      "args": ["-y", "--package=secretloop", "secretloop-mcp"]
+    }
+  }
+}
+```
+
+**Cline** — also `mcpServers`, either through the MCP Servers panel or by
+editing the settings file directly (`~/.cline/mcp.json` for the CLI; the IDE
+extension exposes the same thing through its settings):
+
+```json
+{
+  "mcpServers": {
+    "secretloop": {
+      "command": "npx",
+      "args": ["-y", "--package=secretloop", "secretloop-mcp"]
+    }
+  }
+}
+```
+
+**Zed** — a different key, `context_servers`, in Zed's settings file (`zed: open
+settings file`, or Settings → AI → MCP Servers → Add Server → Add Local Server):
+
+```json
+{
+  "context_servers": {
+    "secretloop": {
+      "command": "npx",
+      "args": ["-y", "--package=secretloop", "secretloop-mcp"],
+      "env": {}
+    }
+  }
+}
+```
+
+Config paths and key names are the ones each client documented when this was
+written (checked 2026-09-05):
+[Windsurf](https://docs.devin.ai/desktop/cascade/mcp) ·
+[Cline](https://docs.cline.bot/mcp/configuring-mcp-servers) ·
+[Zed](https://zed.dev/docs/ai/mcp). Clients move these; if a path here does not
+match what you see, that client's own MCP documentation is the authority, and
+the server invocation above is the only part that is ours.
+
+### The five tools
 
 | Tool | What it does |
 |---|---|
@@ -403,15 +478,29 @@ In both, MCP tools are available to Copilot **only in agent mode** — pick
 | `secretloop_list_findings` | Filters the last scan's findings by severity, rule or liveness. |
 | `secretloop_get_finding` | One finding in full, with masked source context. |
 | `secretloop_history_scan` | Scans git history, bounded by a commit and time limit. |
+| `secretloop_verify` | Asks a provider whether one credential is still live — only after a human approves it. |
 
-All four are **read-only**: no writes, no rotation, no config or baseline
+The first four are **read-only**: no writes, no rotation, no config or baseline
 changes, and nothing destructive.
+
+`secretloop_verify` is the exception, and the only tool that can send anything.
+It transmits a credential to that credential's own provider, and only after the
+consent gate is satisfied: the first call returns `CONSENT_REQUIRED` and
+transmits nothing, and a person runs `secretloop approve <fingerprint>` in a
+terminal before a second call can run the check. It is **opt-in, one-time, and
+approved by a human in a terminal** — never by the assistant and never by a tool
+argument. [Verifying a credential is live](#verifying-a-credential-is-live-secretloop_verify)
+sets out the whole flow.
 
 ### What crosses the boundary, and what does not
 
-- **No credential is ever transmitted.** Liveness verification is the only thing
-  in SecretLoop that contacts a third party, and it is deliberately not exposed
-  as a tool. Nothing an assistant can call will send a credential anywhere.
+- **No credential is transmitted without a human approving that one credential.**
+  Liveness verification is the only thing in SecretLoop that contacts a third
+  party, and `secretloop_verify` is the only tool that can reach it. An
+  assistant cannot authorise it: the first call transmits nothing and returns
+  `CONSENT_REQUIRED`, and the check runs only after a person has run
+  `secretloop approve <fingerprint>` in a terminal. Every other tool sends
+  nothing anywhere.
 - **Values are redacted, always.** Every value is masked the same way the CLI
   masks it — the format prefix and the last four characters, as in
   `ghp_****…6789`, never the credential. There is no flag, argument or tool that
