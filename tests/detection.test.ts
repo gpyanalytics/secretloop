@@ -447,4 +447,78 @@ test("db-connection-string is not exempted by the same mechanism", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+suite("detection — 0.2.x: bare {IDENT} placeholders in URL credentials");
+
+/**
+ * The one http-basic-auth-url false positive that survived the example-domain
+ * fix, and a different mechanism from it: the captured "password" is a Python
+ * f-string placeholder, `{` + an identifier + `}`. It names the value; it is
+ * not the value.
+ *
+ * isPlaceholder already rejects the shell and template forms -- `${NAME}` and
+ * `$NAME` -- through EXPANSION. EXPANSION is start-anchored on purpose, so that
+ * a password merely CONTAINING a dollar sign still reports, and that anchoring
+ * convention cannot express "the whole value is a brace placeholder". A bare
+ * `{NAME}` therefore misses every guard and is reported as a credential.
+ *
+ * Four rules can produce a value shaped like this, because four have captures
+ * whose alphabet admits braces: generic-api-key-assignment (whose class lists
+ * `{}` explicitly), db-connection-string, http-basic-auth-url and
+ * snowflake-credentials. Every other rule's capture is a positive character
+ * class with no brace in it, and the entropy tier cannot reach this shape at
+ * all -- both of its candidate patterns are `[A-Za-z0-9+/=_.-]`.
+ *
+ * Fixtures are synthetic and assembled at runtime: no complete
+ * `scheme://user:password@host` literal belongs in this source, and the
+ * placeholder is built from parts rather than copied from the corpus.
+ */
+
+const IDENT_PLACEHOLDER = "{" + ["SESSION", "HANDLE"].join("_") + "}";
+
+/** A credential-bearing URL on an ordinary host, assembled from parts. */
+function urlWithPassword(password: string): string {
+  return ["https://", "svc", ":", password, "@", "api.internal", "/v1"].join("");
+}
+
+const reportsAuthUrl = (password: string) =>
+  ids(`fetch("${urlWithPassword(password)}")`).includes("http-basic-auth-url");
+
+test("a bare {IDENT} placeholder is not reported as a URL credential", () => {
+  assert.ok(
+    !reportsAuthUrl(IDENT_PLACEHOLDER),
+    `a bare brace placeholder was reported as a credential: ${IDENT_PLACEHOLDER}`
+  );
+});
+
+test("an ordinary credential in the same URL shape still reports", () => {
+  // The anti-regression half. A guard that removes the placeholder and the
+  // credential beside it is worse than the placeholder.
+  const real = ["Qx7", "mt4Rd", "p2"].join("");
+  assert.ok(reportsAuthUrl(real), `a real URL credential stopped reporting: ${real}`);
+});
+
+test("a password merely containing a brace fragment still reports", () => {
+  // Proves the guard is anchored at BOTH ends. `{key}` sits inside a longer
+  // value here, which is a password with punctuation in it, not a placeholder.
+  const embedded = ["ab", "{key}", "cd1X9"].join("");
+  assert.ok(reportsAuthUrl(embedded), `anchoring failed -- value was swallowed: ${embedded}`);
+});
+
+test("a whole-value brace whose body is not an identifier still reports", () => {
+  // Proves the identifier grammar. A hyphen cannot appear in an identifier, so
+  // this is not a placeholder shape and must survive the guard.
+  const notIdent = ["{key", "-", "value}"].join("");
+  assert.ok(reportsAuthUrl(notIdent), `grammar too wide -- value was swallowed: ${notIdent}`);
+});
+
+test("the existing ${IDENT} and $IDENT suppression is unchanged", () => {
+  // Pinned beside the new case so that widening the brace form cannot quietly
+  // narrow the dollar form it sits next to.
+  const braced = "$" + IDENT_PLACEHOLDER;
+  const bare = "$" + ["SESSION", "HANDLE"].join("_");
+  assert.ok(!reportsAuthUrl(braced), `\${IDENT} expansion reported: ${braced}`);
+  assert.ok(!reportsAuthUrl(bare), `$IDENT expansion reported: ${bare}`);
+});
+
 finish();
