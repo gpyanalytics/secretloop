@@ -615,6 +615,33 @@ function clearsPostPrefixFloor(value: string, rule: SecretRule): boolean {
  */
 const EXPANSION = /^\$\{|^\$[A-Za-z_]/;
 
+/**
+ * A whole-value brace placeholder: `{DATABASE_PASSWORD}`, `{SESSION_HANDLE}`.
+ *
+ * The same defect as EXPANSION in a notation EXPANSION cannot reach. Python
+ * f-strings, `str.format` templates and most CI substitution syntaxes name a
+ * value with braces and no leading sigil, so the guard above -- which keys on
+ * `$` -- never sees them. The six-repository precision benchmark left exactly
+ * one http-basic-auth-url false positive standing after the example-domain
+ * fix, and this was it: a template naming a password, captured as one.
+ *
+ * SEPARATE FROM EXPANSION RATHER THAN FOLDED INTO IT, because the two need
+ * opposite anchoring and merging them would silently change the older one.
+ * EXPANSION is anchored only at the start, deliberately, so that a password
+ * merely CONTAINING a dollar sign still reports. A brace form cannot be
+ * start-anchored on the same terms: `{key}abc123` is a password with
+ * punctuation in it, not a placeholder, so this is anchored at both ends and
+ * matches only when the entire value is the template.
+ *
+ * DELIBERATELY NOT `\{.*\}`. The body must be an identifier, so a value whose
+ * braces wrap anything a program could not name -- `{key-value}`, `{}`,
+ * `{1abc}`, `{a b}` -- is left to report. The cost of the grammar is stated
+ * rather than hidden: a genuine credential that happens to be wrapped in
+ * braces AND is identifier-shaped is suppressed by this. Nothing in the corpus
+ * looked like that, and every observed instance of the shape was a template.
+ */
+const BRACE_PLACEHOLDER = /^\{[A-Za-z_][A-Za-z0-9_]*\}$/;
+
 function isPlaceholder(value: string): boolean {
   const lower = value.toLowerCase();
   if (placeholderDenylist.has(lower)) return true;
@@ -626,6 +653,8 @@ function isPlaceholder(value: string): boolean {
   // db-connection-string, http-basic-auth-url — reported `${gen(20)}` as a
   // credential. Constrained-alphabet captures exclude $ { } and never could.
   if (EXPANSION.test(value)) return true;
+  // The brace notation of the same idea, which EXPANSION's `$` anchor misses.
+  if (BRACE_PLACEHOLDER.test(value)) return true;
   return false;
 }
 

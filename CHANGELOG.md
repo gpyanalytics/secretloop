@@ -39,6 +39,36 @@ its host is registrable, so the mechanism above cannot reach it, and its actual
 cause is a different one — an f-string placeholder captured as a password —
 which is not addressed here.
 
+A third fix, in the scanner rather than in any rule, closing the one false
+positive the two above knowingly left standing.
+
+- **Bare `{IDENT}` placeholders are no longer reported as URL credentials.**
+  `isPlaceholder` already rejected the shell and template forms, `${NAME}` and
+  `$NAME`, through its `EXPANSION` guard. Python f-strings, `str.format`
+  templates and most CI substitution syntaxes name a value with braces and no
+  leading sigil, so that guard — which keys on `$` — never saw them, and a
+  template naming a password was captured as the password. This was the single
+  `http-basic-auth-url` false positive left in `requests` by the example-domain
+  fix above, and it is a different mechanism: a gap in the scanner's shared
+  placeholder guard, not in any rule. No rule pattern changed.
+
+  The new check is anchored at both ends and requires the body to be an
+  identifier, so it matches only a value that is *entirely* a template.
+  `{key}abc123` is a password containing punctuation and still reports; so do
+  `{key-value}`, `{}` and `{1abc}`, whose braces wrap something no program
+  could name. Its cost is stated rather than hidden: a genuine credential that
+  is both brace-wrapped and identifier-shaped would be suppressed. Nothing in
+  the corpus looked like that.
+
+  Because `isPlaceholder` runs for every rule before any allowlist, the change
+  reaches the four rules whose captures admit braces —
+  `generic-api-key-assignment`, `db-connection-string`, `http-basic-auth-url`
+  and `snowflake-credentials`. Every other rule's capture is a positive
+  character class with no brace in it, and the entropy tier cannot produce this
+  shape at all: both of its candidate patterns are `[A-Za-z0-9+/=_.-]`.
+  Measured across the six pinned repositories, the change removes exactly one
+  finding and adds none.
+
 ## 0.2.1 — 2026-09-05
 
 Documentation accuracy only — no code, detection, or behaviour change from
