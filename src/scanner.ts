@@ -219,7 +219,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       }
       const value = rule.fullMatch ? m[0] : m[1];
       if (!value) continue;
-      if (!passesFilters(value, rule, allowValueRegexes)) continue;
+      if (!passesFilters(value, m[0], rule, allowValueRegexes)) continue;
 
       const startIndex = rule.fullMatch ? m.index : captureStart(m, value);
       const line = lineOf(startIndex, lineStarts);
@@ -564,9 +564,17 @@ function buildFinding(input: {
   };
 }
 
-function passesFilters(value: string, rule: SecretRule, allowValues: RegExp[]): boolean {
+function passesFilters(
+  value: string,
+  wholeMatch: string,
+  rule: SecretRule,
+  allowValues: RegExp[]
+): boolean {
   if (isPlaceholder(value)) return false;
   if (rule.allowlist?.some((r) => r.test(value))) return false;
+  // Reads the match, not the capture: see matchAllowlist in rules.ts for why a
+  // URL-credential rule cannot decide this from the password alone.
+  if (rule.matchAllowlist?.some((r) => r.test(wholeMatch))) return false;
   if (allowValues.some((r) => r.test(value))) return false;
   if (rule.entropy !== undefined && shannonEntropy(value) < rule.entropy) return false;
   if (!clearsPostPrefixFloor(value, rule)) return false;

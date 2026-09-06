@@ -52,6 +52,8 @@ const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const B64URL = ALNUM + "_-";
 const B64 = ALNUM + "+/=";
 const PCT = ALNUM + "%";
+/** onepassword-service-account's own class, [A-Za-z0-9+/=_-] -- 67 symbols. */
+const OPS = ALNUM + "+/=_-";
 
 /** A uniformly drawn run. Credential-shaped values are generated, never written. */
 function gen(n: number, alphabet = ALNUM): string {
@@ -153,6 +155,53 @@ test("declines base64 of a mostly-zero blob at the measured worst case", () => {
   );
 });
 
+// --------------------------------- N-op: snake_case identifiers (RED)
+
+suite("\n0.2.x N-op — onepassword-service-account must decline snake_case runs");
+
+/**
+ * The worst instance of the fixed-prefix shape in the rule set, and the one the
+ * six-repository precision benchmark actually caught.
+ *
+ * `ops_` in front of `[A-Za-z0-9+/=_-]{40,}` puts every prefix character inside
+ * the variable class AND admits `_` into that class, so the pattern describes
+ * one unbroken run of snake_case. Any forty-character lowercase identifier
+ * beginning with `ops_` satisfies it -- which is how the benchmark found the
+ * rule reporting a test-fixture directory name, at severity critical, out of a
+ * manifest that merely mentioned the fixture.
+ *
+ * Not caught by anything already present. `isPlaceholder` needs one repeated
+ * character; DOC_SAMPLE needs a documentation word, and an ordinary compound
+ * identifier contains none.
+ *
+ * SYNTHETIC, and assembled from words at runtime rather than written out. The
+ * fixture has to reproduce the MECHANISM -- a lowercase snake_case run just
+ * over the 40-character minimum, landing in the same entropy band as the class
+ * the benchmark observed -- not the benchmark's own string, and no complete
+ * `ops_`-prefixed run belongs in this source either way.
+ */
+const OPS_TAIL = ["capture", "fixture", "harness", "regression", "runner"].join("_");
+const OPS_IDENTIFIER = "ops_" + OPS_TAIL;
+
+test("declines a 41-character snake_case identifier that fits the pattern", () => {
+  const post = after(OPS_IDENTIFIER, "ops_");
+  const h = shannonEntropy(post);
+  // Pin the fixture to the observed false-positive band rather than to any
+  // value that merely happens to fail, so it cannot drift into a shape the
+  // benchmark never saw.
+  assert.ok(
+    h > 3.6 && h < 3.7,
+    `fixture drifted off the observed false-positive band: H=${h.toFixed(4)}`
+  );
+  assert.strictEqual(post.length, 41, "fixture should sit just over the 40-character minimum");
+  assert.ok(
+    !ruleIdsFor(`{ "args": "run ${OPS_IDENTIFIER}.out" }`).includes(
+      "onepassword-service-account"
+    ),
+    "onepassword-service-account fired on a plain identifier"
+  );
+});
+
 // ------------------------------------------------------ anti-regression (RED)
 
 /**
@@ -194,6 +243,13 @@ const REALISTIC: Array<[label: string, value: string]> = [
   ["neon-api-key, at the pattern floor", "napi_" + gen(32)],
   ["tailscale-api-key, at the pattern floor", "tskey-api-" + gen(20)],
   ["tailscale-auth-key, at the pattern floor", "tskey-auth-" + gen(20)],
+  // The final character is drawn from ALNUM rather than the full class on
+  // purpose. The rule's pattern ends in `\b`, and `+ / = -` are not word
+  // characters, so a token ending in one would need the {40,} quantifier to
+  // give a character back -- which at exactly forty it cannot do. That would
+  // make the fixture fail for a reason unrelated to the floor it exists to
+  // test, on whichever seeds happen to land there.
+  ["onepassword-service-account, at the pattern floor", "ops_" + gen(39, OPS) + gen(1)],
 ];
 
 suite("\n0.1.3 — realistically shaped tokens still report");
@@ -257,6 +313,12 @@ const MEASURED_FLOORS: Record<string, number> = {
   "neon-api-key": 3.5,
   "tailscale-api-key": 2.75,
   "tailscale-auth-key": 2.75,
+  // 0.2.x, from the six-repository precision benchmark. 3.75 is the highest
+  // 0.25-step floor that lost nothing across 10,000,000 uniform draws at the
+  // rule's own 40-character minimum over its own 67-symbol class; the least
+  // random of those draws carried 3.9776 bits. See
+  // FLOOR_ONEPASSWORD_SERVICE_ACCOUNT in rules.ts.
+  "onepassword-service-account": 3.75,
 };
 
 test("every declared floor matches its recorded measurement", () => {
