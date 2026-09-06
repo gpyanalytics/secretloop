@@ -119,6 +119,11 @@ Two measured cases where the corpus, not the scanner, decides the score:
 
 ## Comparing against other scanners
 
+`precision/` is a separate, reproducible head-to-head against gitleaks: six
+pinned repositories, working tree only, every one of 918 findings triaged by
+hand. gitleaks wins it on precision (0.413 against 0.360), and every true
+positive on both sides is a committed test fixture. See `precision/README.md`.
+
 `COMMANDS.md` records the exact gitleaks and TruffleHog invocations used, with
 pinned versions and the file-set exclusions needed to make the comparison fair —
 `trufflehog filesystem` walks `node_modules` and `.git/objects`, which the other
