@@ -119,10 +119,10 @@ scope, framed as a disclosure decision, not from another value heuristic.
 ## Reproduce
 
 ```
-# features + search (benchmark scratch dir)
+# features + search (see bench/precision/ for the pinned collection; characterize_ghe.py + predicate_search.py live in the benchmark scratch dir)
 python3 characterize_ghe.py --triage triage.csv --results secretloop_benchmarks/results --out ghe_features.csv
 python3 predicate_search.py --features ghe_features.csv
-# gate: insert bench/n9-emit.ts before the scoring section of a COPY of
+# gate: insert bench/n9-emit.ts.snippet before the scoring section of a COPY of
 # bench/entropy-vetoes.ts, run it, then judge the emitted features
 python3 bench/n9_gate.py n9_gate_features.tsv
 ```
