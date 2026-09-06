@@ -1,0 +1,55 @@
+
+472 findings across 5 repositories with findings, working tree only, verification off
+
+## Precision by tool
+
+tool          found    TP    FP   UNK  precision    pess.     opt.
+secretloop      472   173   299     0      0.367    0.367    0.367
+
+## Precision by repository
+
+repo                            secretloop
+                 found  TP  FP UNK    prec
+axios                3   1   2   0   0.333
+deno                85  28  57   0   0.329
+flask                6   0   6   0   0.000
+kubernetes         374 140 234   0   0.374
+requests             4   4   0   0   1.000
+
+## False positives by rule
+
+secretloop -- 299 FP across 4 rule(s)
+      279  generic-high-entropy  (93%)
+       17  generic-api-key-assignment  (6%)
+        2  db-connection-string  (1%)
+        1  private-key-block  (0%)
+
+## False positives by reason
+
+secretloop
+      123  long identifier or type name
+       27  literal placeholder
+       26  digest or checksum
+       22  path or resource identifier
+       22  key identifier, not a credential
+       19  documentation example
+       16  mime type
+       10  generated resource name
+        8  command-line flag string
+        8  detached signature, not a credential
+        8  test name / xml fixture text
+        4  encoded data, not a credential
+        3  version string
+        2  public key material
+        1  pem marker string, no key material
+
+
+## Precision, discounting test fixtures
+
+tool            TP    FP  precision
+secretloop       0   472      0.000
+
+    173 of the true positives are committed test fixtures -- key
+    material and tokens that are real credentials by shape but guard
+    nothing. Treating them as noise is the harsher reading, and the
+    one that matches what a user triaging their own repository does.
