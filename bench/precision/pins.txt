@@ -1,0 +1,17 @@
+# Pinned commits for the six-repository precision baseline.
+#
+# clone_pinned.sh reads this file. A line with a 40-hex SHA is used as-is; a
+# line whose commit column is "HEAD" is resolved against the remote at clone
+# time and REWRITTEN here with the SHA it resolved to, so the second run of
+# this baseline scans the same bytes as the first.
+#
+# Do not hand-edit a SHA to something you have not cloned. An unpinnable
+# baseline is the defect bench/repos.txt was written to stop repeating.
+#
+# name        url                                              commit
+requests      https://github.com/psf/requests                  dae7ef63b4df6eded86637f251fc4e3a06c3b479
+express       https://github.com/expressjs/express             023767fe9872e029271df1418f73401bff20ff40
+flask         https://github.com/pallets/flask                 d318b683471101618febed18996405ad26462110
+axios         https://github.com/axios/axios                   b8d67bbbd6b381e1f4b1887e32686fcc89c5b0a8
+deno          https://github.com/denoland/deno                 83bb8d5780505d0b4f30c089680ce98b0e7a4770
+kubernetes    https://github.com/kubernetes/kubernetes         b2ec8b6fefac451a2dedafc4dd71f2f16c7a6abe
