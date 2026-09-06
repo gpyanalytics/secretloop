@@ -358,4 +358,93 @@ test("a real key in the same embedding still reports", () => {
   );
 });
 
+// ---------------------------------------------------------------------------
+suite("detection — 0.2.x: URL credentials on RFC 2606 example domains");
+
+/**
+ * From the six-repository precision benchmark: all but one http-basic-auth-url
+ * false positive was a sentence of documentation pointing at a domain that
+ * exists so documentation can point at it.
+ *
+ * The captured passwords are the point. They were ordinary lowercase strings
+ * that clear the rule's 3.0-bit entropy gate and are not documentation WORDS,
+ * so no allowlist over the value could separate them from a weak real
+ * password. The host separates them absolutely: RFC 2606 reserves these names
+ * so they can never resolve to anyone's machine, which means there is no
+ * account behind the credential to compromise.
+ *
+ * Hence matchAllowlist, which reads the whole match instead of the capture.
+ *
+ * FIXTURES ARE SYNTHETIC AND ASSEMBLED AT RUNTIME. A complete
+ * `scheme://user:password@host` literal in this file would be a finding in
+ * SecretLoop's scan of its own repository, and silencing that with an inline
+ * allow directive would hide a value the suite deliberately introduced.
+ * Building each URL from parts keeps it fully real to the scanner under test
+ * while leaving no scan-visible credential in this source.
+ */
+
+/** A credential-bearing URL, assembled so no whole one appears in this file. */
+function authUrl(host: string, path = "/v1"): string {
+  return ["https://", "svc", ":", "Qx7", "mt4Rd", "p2", "@", host, path].join("");
+}
+
+const RESERVED_HOSTS: Array<[string, string]> = [
+  ["example.com", "example.com"],
+  ["example.net", "example.net"],
+  ["example.org", "example.org"],
+  ["a subdomain of a reserved domain", "api.example.com"],
+];
+
+for (const [label, host] of RESERVED_HOSTS) {
+  test(`declines URL credentials on ${label}`, () => {
+    const found = ids(`fetch("${authUrl(host)}")`);
+    assert.ok(
+      !found.includes("http-basic-auth-url"),
+      `http-basic-auth-url fired on a reserved documentation domain: ${found.join(",")}`
+    );
+  });
+}
+
+/**
+ * The exemption is keyed to the host and closed at the host's end, so neither
+ * a lookalike registrable name nor a reserved label sitting elsewhere in the
+ * URL can claim it. Every one of these must STILL report.
+ *
+ * The last two are what a substring match would have lost silently: a name
+ * ending in the reserved one is a different domain an attacker can register,
+ * and a reserved word in the path or fragment says nothing about the host.
+ */
+const REPORTING_HOSTS: Array<[string, string, string]> = [
+  ["an ordinary private host", "api.internal", "/v1"],
+  ["a hyphenated lookalike", "evil-example.com", "/v1"],
+  ["a reserved name as the leftmost label", "example.com.attacker.net", "/v1"],
+  ["a reserved word in the path and fragment", "request.com", "/url.html#test"],
+];
+
+for (const [label, host, path] of REPORTING_HOSTS) {
+  test(`still reports URL credentials on ${label}`, () => {
+    const found = ids(`fetch("${authUrl(host, path)}")`);
+    assert.ok(
+      found.includes("http-basic-auth-url"),
+      `the reserved-domain exemption swallowed a real finding: ${found.join(",")}`
+    );
+  });
+}
+
+/**
+ * Scoped to the rule that was measured. db-connection-string has the same
+ * URL-authority shape and produced no reserved-domain false positive in the
+ * benchmark, so it does not declare the list -- and this pins that, because
+ * widening the mechanism to a second rule is a change to argue from evidence
+ * rather than to make by tidying.
+ */
+test("db-connection-string is not exempted by the same mechanism", () => {
+  const url = ["postgres://", "svc", ":", "Alpha", "-97xQ-", "one", "@", "db.example.com", ":5432/app"].join("");
+  const found = ids(`DATABASE_URL=${url}`);
+  assert.ok(
+    found.includes("db-connection-string"),
+    `the exemption leaked to db-connection-string: ${found.join(",")}`
+  );
+});
+
 finish();

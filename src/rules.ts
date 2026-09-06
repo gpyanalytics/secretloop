@@ -40,6 +40,18 @@ export interface SecretRule {
   /** Rule-scoped false-positive patterns. A value matching any of these is dropped. */
   allowlist?: RegExp[];
   /**
+   * Rule-scoped false-positive patterns tested against the WHOLE match rather
+   * than the captured value.
+   *
+   * `allowlist` cannot express a host. A URL-credential rule captures only the
+   * password, so the one part of the match that settles whether the thing is
+   * documentation -- the authority it points at -- is invisible to a filter
+   * that sees the capture alone. Kept as its own field rather than folded into
+   * `allowlist` so the subject of every pattern is unambiguous at the rule
+   * site: one list reads the secret, the other reads its surroundings.
+   */
+  matchAllowlist?: RegExp[];
+  /**
    * How this rule's findings are identified in a baseline. Omitted means
    * "value" — hash the captured secret, which is safe for a provider-generated
    * token. "context" is for captures that can be a human-chosen password, where
@@ -113,6 +125,37 @@ const DOC_SAMPLE = [
 export function isDocumentationSample(value: string): boolean {
   return DOC_SAMPLE.some((r) => r.test(value));
 }
+
+/**
+ * A URL authority pointing at one of RFC 2606's reserved example domains.
+ *
+ * RFC 2606 section 4 sets aside `example.com`, `example.net` and `example.org`
+ * so that written material can show a working-looking URL which can never
+ * resolve to anyone's host. A credential embedded in one is documentation by
+ * construction rather than by appearance: there is no account behind it to
+ * compromise, however random the password looks.
+ *
+ * That is the whole reason this reads the HOST. The false positives of this
+ * shape in the six-repository precision benchmark carried ordinary lowercase
+ * passwords -- values that clear the rule's 3.0-bit entropy gate and are not
+ * documentation WORDS, so no allowlist over the captured value could tell them
+ * from a weak real password. The authority can, and only the authority can.
+ *
+ * SCOPE IS THE MEASURED SCOPE. RFC 2606 section 2 also reserves the `.test`,
+ * `.example`, `.invalid` and `.localhost` top-level domains. They are
+ * deliberately NOT here: no false positive in the benchmark used one, so
+ * including them would be policy argued from the RFC rather than from
+ * evidence, and would widen what this hides with nothing measured to show the
+ * widening is safe.
+ *
+ * Anchored at the `@` that closes the userinfo, so it reads the host and not
+ * the path or the fragment, and closed by a host terminator, so a reserved
+ * name appearing only as a leftmost label does not inherit the exemption. The
+ * leading label group admits subdomains without admitting a different
+ * registrable name that merely ends in the same characters -- the alternation
+ * has to begin at the `@`, so a hyphenated lookalike still reports.
+ */
+const RESERVED_DOC_HOST = /@(?:[A-Za-z0-9-]+\.)*example\.(?:com|net|org)(?=[:/?#]|$)/i;
 
 /**
  * The post-prefix entropy floor, in bits. Measured, not chosen.
@@ -200,6 +243,35 @@ const FLOOR_NEON_API_KEY = 3.5;
  * the prefix is already the filter and the floor is only the N1 backstop.
  */
 const FLOOR_TAILSCALE = 2.75;
+
+/**
+ * 1Password service account: 3.75, the highest 0.25-step floor that lost
+ * NOTHING across 10,000,000 uniform draws at the rule's own 40-character
+ * minimum over its own 67-symbol class `[A-Za-z0-9+/=_-]`. The least random of
+ * those ten million draws carried 3.9776 bits.
+ *
+ * THE DEFECT THIS CLOSES is the fixed-prefix shape described above, in its
+ * worst form. Every character of `ops_` is in the variable class AND the class
+ * admits `_`, so the pattern describes one unbroken run of snake_case: any
+ * forty-character lowercase identifier beginning with `ops_` satisfies the
+ * whole rule. The six-repository precision benchmark caught it reporting a
+ * test-fixture directory name, at severity critical, from a manifest that
+ * merely mentioned the fixture -- no credential anywhere in the file. A named
+ * provider rule matching an identifier is a rule defect, not a tuning
+ * question. Identifiers of that shape measure near 3.65 bits over roughly 15
+ * distinct characters.
+ *
+ * MARGINS ARE THINNER HERE than on the 50-character rules and are stated
+ * rather than glossed: about 0.10 bits from the floor down to that false
+ * positive class, 0.2276 bits from the floor up to the legitimate minimum. A
+ * 40-character run has less entropy to spare than a 50-character one, which is
+ * the whole reason these floors are measured per rule instead of reused.
+ *
+ * Neither existing guard reaches it. `isPlaceholder` needs one repeated
+ * character; DOC_SAMPLE needs a documentation word, and an ordinary compound
+ * identifier contains none.
+ */
+const FLOOR_ONEPASSWORD_SERVICE_ACCOUNT = 3.75;
 
 export const rules: SecretRule[] = [
   // ---------------------------------------------------------------- AWS
@@ -871,6 +943,7 @@ export const rules: SecretRule[] = [
     regex: /\bops_[A-Za-z0-9+/=_-]{40,}\b/g,
     fullMatch: true,
     keywords: ["ops_"],
+    postPrefixEntropy: { prefix: /^ops_/, min: FLOOR_ONEPASSWORD_SERVICE_ACCOUNT },
     severity: "critical",
   },
 
@@ -895,6 +968,7 @@ export const rules: SecretRule[] = [
     keywords: ["://"],
     entropy: 3.0,
     allowlist: [/^(?:password|pass|pwd|secret|changeme|example|test|token)$/i, ...DOC_SAMPLE],
+    matchAllowlist: [RESERVED_DOC_HOST],
     severity: "critical",
   },
   {

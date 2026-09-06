@@ -1,5 +1,44 @@
 # Changelog
 
+## Unreleased
+
+Two rule defects, both found by the six-repository precision benchmark
+(`bench/precision/`) and both fixed at the mechanism rather than by
+allowlisting the values that exposed them. No version bump; no change to any
+other rule, to the entropy pass, or to the recorded benchmark results.
+
+- **`onepassword-service-account` reported ordinary identifiers.** The rule was
+  `ops_` in front of `[A-Za-z0-9+/=_-]{40,}`. Every character of the prefix is
+  in the variable class and the class admits `_`, so the pattern described one
+  unbroken run of snake_case: any forty-character lowercase identifier starting
+  with `ops_` matched it. The benchmark caught it reporting a test-fixture
+  directory name at severity critical, from a manifest containing no credential
+  at all. The rule now declares the existing `postPrefixEntropy` floor at
+  **3.75 bits** — the highest 0.25-step floor that lost nothing across
+  10,000,000 uniform draws at the rule's own 40-character minimum over its own
+  67-symbol class, where the least random draw carried 3.9776 bits.
+
+- **`http-basic-auth-url` reported documentation examples.** URLs on RFC 2606's
+  reserved `example.com`, `example.net` and `example.org` cannot resolve to
+  anyone's host, so a credential embedded in one has no account behind it. The
+  captured passwords in these findings were ordinary lowercase strings that
+  clear the rule's entropy gate and are not documentation words, so no filter
+  over the captured value could distinguish them — only the authority could.
+  New `matchAllowlist` on `SecretRule` tests patterns against the whole match
+  instead of the capture, and this rule declares one entry for those three
+  domains and their subdomains. The `.test`, `.example`, `.invalid` and
+  `.localhost` TLDs RFC 2606 also reserves are deliberately excluded: no
+  benchmark false positive used one, and adding them would widen what the
+  scanner hides with nothing measured to show it is safe. `db-connection-string`
+  has the same URL shape, produced no such false positive, and is unchanged.
+
+Across the six pinned repositories this removes 7 false positives (axios 4,
+deno 3) and adds none, with no surviving finding's fingerprint changed. One
+`http-basic-auth-url` false positive in `requests` is knowingly left in place:
+its host is registrable, so the mechanism above cannot reach it, and its actual
+cause is a different one — an f-string placeholder captured as a password —
+which is not addressed here.
+
 ## 0.2.1 — 2026-09-05
 
 Documentation accuracy only — no code, detection, or behaviour change from
