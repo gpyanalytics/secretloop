@@ -1,6 +1,16 @@
 import { Finding, scanText } from "./scanner";
 import { SecretLoopConfig } from "./config";
-import { listFilesWithExclusions, readTextFileResult, SkipReason } from "./walk";
+import {
+  listFilesWithExclusions,
+  readTextFileResult,
+  readBinaryCandidate,
+  SkipReason,
+} from "./walk";
+import {
+  detectPkcs12Bytes,
+  pkcs12HeaderAccepts,
+  PKCS12_HEADER_BYTES,
+} from "./pkcs12";
 
 /**
  * Scanning a tree, through one path for every caller.
@@ -60,6 +70,13 @@ export function scanFiles(
 ): ScannedFile[] {
   const scanned: ScannedFile[] = [];
   for (const relPath of files) {
+    // The file-level PKCS#12 detector runs first and independently. It has its
+    // own non-dereferencing, size-gated read (see readBinaryCandidate), because
+    // a DER container is NUL-dense and never survives the text path's binary
+    // check -- so no SecretRule could ever see one. Content-driven and
+    // extension-independent: a renamed .bin still reports.
+    const binary = detectPkcs12(root, relPath, config);
+
     // An open buffer wins over disk, and is scanned whatever its size: it is
     // what the user is actually looking at -- and it is never a skip, because
     // it is already text.
@@ -67,6 +84,19 @@ export function scanFiles(
     if (text === undefined) {
       const read = readTextFileResult(root, relPath, config);
       if (!("text" in read)) {
+        // A container the binary detector reported was scanned, so it is not a
+        // skip. Counting it as "binary or unreadable" as well would disclose a
+        // file as unscanned in the same run that reports a finding from it.
+        if (binary) {
+          scanned.push({
+            path: relPath,
+            text: "",
+            findings: [binary],
+            suppressed: 0,
+            fixtureSuppressed: 0,
+          });
+          continue;
+        }
         options.onSkipped?.(read.skipped);
         continue;
       }
@@ -80,9 +110,34 @@ export function scanFiles(
       onSuppressed: (n) => (suppressed += n),
       onFixtureSuppressed: (n) => (fixtureSuppressed += n),
     });
-    scanned.push({ path: relPath, text, findings, suppressed, fixtureSuppressed });
+    scanned.push({
+      path: relPath,
+      text,
+      findings: binary ? [binary, ...findings] : findings,
+      suppressed,
+      fixtureSuppressed,
+    });
   }
   return scanned;
+}
+
+/**
+ * The PKCS#12 container check for one path, or null.
+ *
+ * Kept beside the text scan rather than in a second pipeline: findings from
+ * both reach the same ScannedFile list, so report, SARIF, baseline and MCP
+ * serialization are untouched.
+ */
+function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
+  const candidate = readBinaryCandidate(
+    root,
+    relPath,
+    config,
+    pkcs12HeaderAccepts,
+    PKCS12_HEADER_BYTES
+  );
+  if (!("bytes" in candidate)) return null;
+  return detectPkcs12Bytes(candidate.bytes, relPath);
 }
 
 /** Scans everything in scope for the project, per its own configuration. */

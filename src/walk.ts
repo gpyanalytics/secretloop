@@ -1,4 +1,14 @@
-import { readdirSync, statSync, readFileSync, realpathSync, existsSync } from "fs";
+import {
+  readdirSync,
+  statSync,
+  lstatSync,
+  readFileSync,
+  openSync,
+  readSync,
+  closeSync,
+  realpathSync,
+  existsSync,
+} from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
@@ -190,6 +200,62 @@ export function readTextFileResult(
     // A NUL byte in the first block is the standard heuristic for "binary".
     if (buf.subarray(0, 8000).includes(0)) return { skipped: "unreadable" };
     return { text: buf.toString("utf8") };
+  } catch {
+    return { skipped: "unreadable" };
+  }
+}
+
+export type BinaryCandidate = { bytes: Buffer } | { skipped: SkipReason };
+
+/**
+ * The binary detector's OWN candidate read, deliberately separate from the
+ * text path above.
+ *
+ * Two differences from readTextFileResult, both required by the frozen PKCS#12
+ * design and neither of which changes text scanning:
+ *
+ *   NON-DEREFERENCING. This uses `lstatSync`, not `statSync`, so a symlink is
+ *   rejected as a candidate before any byte is read. The text path follows an
+ *   in-root link on purpose; the binary detector must not, or one container
+ *   would report twice under two paths. `isInsideRoot` is still consulted, but
+ *   only to establish containment.
+ *
+ *   SIZE BEFORE READ. The effective `maxFileSizeBytes` gate runs against the
+ *   entry's own size and rejects before opening for content. The default is an
+ *   operational default, not a parser ceiling: an operator who raises it is
+ *   supported, so nothing here assumes a bound smaller than the configured one.
+ *
+ * `headerAccepts` is an optional cheap prefilter. Only the first
+ * `headerBytes` are read for it, so scanning a large tree does not pay a full
+ * read per file for a format almost no file has.
+ */
+export function readBinaryCandidate(
+  root: string,
+  relPath: string,
+  config: SecretLoopConfig,
+  headerAccepts?: (head: Buffer, size: number) => boolean,
+  headerBytes = 16
+): BinaryCandidate {
+  if (!isInsideRoot(root, relPath)) {
+    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "unreadable" };
+  }
+  const full = path.join(root, relPath);
+  try {
+    // lstat: the entry itself, never its target.
+    const stat = lstatSync(full);
+    if (!stat.isFile()) return { skipped: "unreadable" };
+    if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
+    if (headerAccepts) {
+      const head = Buffer.alloc(Math.min(headerBytes, stat.size));
+      const fd = openSync(full, "r");
+      try {
+        readSync(fd, head, 0, head.length, 0);
+      } finally {
+        closeSync(fd);
+      }
+      if (!headerAccepts(head, stat.size)) return { skipped: "unreadable" };
+    }
+    return { bytes: readFileSync(full) };
   } catch {
     return { skipped: "unreadable" };
   }

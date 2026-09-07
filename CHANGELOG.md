@@ -69,6 +69,48 @@ positive the two above knowingly left standing.
   Measured across the six pinned repositories, the change removes exactly one
   finding and adds none.
 
+A file-level detector for PKCS#12 keystores, the first detector that is not a
+regex rule. No version bump.
+
+- **New `pkcs12-private-key` detector.** A `.pfx`/`.p12` container is DER, and
+  DER is NUL-dense, so it is dropped by the binary check before `scanText` ever
+  runs — no `SecretRule` could see one at any severity. This is therefore a
+  file-level detector beside the walker's read rather than a rule, and
+  **`rules.ts` stays at 109**. Verifier counts are unchanged at 18 rules across
+  15 providers, 17 of which can transmit.
+
+- **Content-driven and extension-independent.** Detection is a structural
+  ASN.1 walk, never a byte search for key OIDs: a container renamed `.bin`, or
+  with no extension at all, still reports, and a key OID sitting inside a
+  certificate payload does not. Qualifying evidence is a DIRECT plaintext
+  `keyBag` or `pkcs8ShroudedKeyBag` decoded at the structural `SafeBag.bagId`
+  position, reached through a supported outer `pkcs7-data` `authSafe`.
+
+- **One finding per qualifying container.** Multiplicity is 1. That is a
+  finding-unit decision, not an inability to count: direct plaintext key bags
+  are perfectly countable, and SecretLoop deliberately reports the container.
+
+- **A bag-neutral descriptor.** The finding value is the synthesized,
+  non-secret sentence `PKCS#12 keystore, <n> bytes, private-key material
+  present`. It never claims the key is shrouded, because either bag type can
+  qualify. No DER, key bytes, or container digest reaches any output surface.
+
+- **Non-dereferencing candidate scope.** The detector reads candidate bytes
+  only when `lstat` says the directory entry is itself a regular file, so a
+  symlink alias never yields a second finding for the same container. The
+  existing text scanner's symlink behaviour is unchanged.
+
+Three classes of key material are deliberately NOT detected. In each case the
+detector does not look, which is not the same as the location being empty — no
+claim is made about what is there, or about how common these shapes are:
+
+1. material reachable only through an accepted opaque inner `encryptedData` or
+   `envelopedData` sibling, which is never decrypted;
+2. material reachable only through a nested `safeContentsBag`, which is
+   recognised but never traversed;
+3. material reachable only through an outer `pkcs7-signedData` `authSafe`,
+   whose payload is not parsed and whose signature is not verified.
+
 ## 0.2.1 — 2026-09-05
 
 Documentation accuracy only — no code, detection, or behaviour change from
