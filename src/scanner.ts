@@ -740,7 +740,25 @@ export function maskFindings(text: string, findings: Finding[]): string {
     );
 }
 
+/**
+ * The one finding value that is not a secret.
+ *
+ * The PKCS#12 file-level detector reports a synthesized descriptor rather than
+ * container bytes, and its frozen output contract requires the rendered value
+ * to be that same sentence -- masking it would replace a truthful statement
+ * with a meaningless one, and there is nothing in it to protect. Matched by
+ * shape here rather than by importing the detector, which would make this
+ * module and that one mutually dependent.
+ */
+// This exemption is intentionally limited to the exact synthesized,
+// non-secret descriptor shape frozen by D.3a, whose rendered value
+// must remain identical to its internal value. redactValue is
+// value-shaped rather than finding-provenance-aware, so this is a
+// global exemption for that exact descriptor shape; do not broaden it.
+const NON_SECRET_DESCRIPTOR = /^PKCS#12 keystore, \d+ bytes, private-key material present$/;
+
 export function redactValue(value: string): string {
+  if (NON_SECRET_DESCRIPTOR.test(value)) return value;
   if (value.length <= 8) return "*".repeat(value.length);
   if (value.length < 16) return `${value.slice(0, 2)}${"*".repeat(value.length - 2)}`;
   return `${value.slice(0, 4)}${"*".repeat(Math.min(value.length - 8, 20))}${value.slice(-4)}`;
