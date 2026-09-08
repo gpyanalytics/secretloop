@@ -9,6 +9,7 @@ import {
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
 import { findEncodedCandidates, EncodedTransform } from "./encoded";
 import { ArchiveSource } from "./archive";
+import { isApiDocument } from "./api-document";
 import {
   SecretLoopConfig,
   defaultConfig,
@@ -187,6 +188,14 @@ export interface ScanOptions {
    */
   onFixtureSuppressed?: (count: number) => void;
   /**
+   * Called once when this text was recognized as an API description document
+   * and the generic entropy pass was therefore not run over it (the tier was
+   * enabled and `includeApiDocumentEntropy` was not). A document count, not a
+   * finding count: the pass never executes, so there is nothing to count, and a
+   * report must still be able to say the scan chose not to look here.
+   */
+  onApiDocumentScoped?: () => void;
+  /**
    * Honour inline `secretloop:allow` / `gitleaks:allow` directives.
    *
    * Default true, which is every scanning caller: the working tree, the staged
@@ -311,7 +320,23 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   findings.length = 0;
   findings.push(...merged);
 
-  if (config.entropyPassEnabled && !excluded.has(ENTROPY_RULE_ID)) {
+  // The one gate the entropy-scope freeze adds, and where it says it goes: inside
+  // the tier's own branch, so it can never touch a named finding and is inert
+  // whenever the tier is off. Whole-document: a recognized API description is
+  // not offered to the entropy pass at all, and the caller is told so. The
+  // logical path is the archive member's own when there is one -- the
+  // container's name says nothing about what a member is. A text with no path
+  // (mask's stdin) has no extension and is never classified.
+  const logicalPath = options.source ? options.source.member : options.filePath;
+  const apiDocument =
+    config.entropyPassEnabled &&
+    !excluded.has(ENTROPY_RULE_ID) &&
+    !config.includeApiDocumentEntropy &&
+    logicalPath !== undefined &&
+    isApiDocument(logicalPath, text);
+  if (apiDocument) options.onApiDocumentScoped?.();
+
+  if (config.entropyPassEnabled && !excluded.has(ENTROPY_RULE_ID) && !apiDocument) {
     for (const hit of findHighEntropyStrings(text, config.entropyThreshold, {
       keyContextRequired: config.keyContextRequired,
     })) {

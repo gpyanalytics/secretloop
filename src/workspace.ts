@@ -45,6 +45,12 @@ export interface ScannedFile {
   suppressed?: number;
   /** Generic findings dropped because this file is test/fixture material. */
   fixtureSuppressed?: number;
+  /**
+   * Texts (this file, or its archive members) recognized as API description
+   * documents and scanned without the generic entropy pass. 0 or 1 for a plain
+   * file; a per-member sum for an archive. Absent means none were counted.
+   */
+  apiDocumentsScoped?: number;
 }
 
 export interface ScanFilesOptions {
@@ -111,6 +117,7 @@ export function scanFiles(
             findings: [binary],
             suppressed: 0,
             fixtureSuppressed: 0,
+            apiDocumentsScoped: 0,
           });
           continue;
         }
@@ -121,11 +128,13 @@ export function scanFiles(
     }
     let suppressed = 0;
     let fixtureSuppressed = 0;
+    let apiDocumentsScoped = 0;
     const findings = scanText(text, {
       config,
       filePath: relPath,
       onSuppressed: (n) => (suppressed += n),
       onFixtureSuppressed: (n) => (fixtureSuppressed += n),
+      onApiDocumentScoped: () => apiDocumentsScoped++,
     });
     scanned.push({
       path: relPath,
@@ -133,6 +142,7 @@ export function scanFiles(
       findings: binary ? [binary, ...findings] : findings,
       suppressed,
       fixtureSuppressed,
+      apiDocumentsScoped,
     });
   }
   return scanned;
@@ -184,6 +194,7 @@ function scanArchive(
   const findings: Finding[] = [];
   let suppressed = 0;
   let fixtureSuppressed = 0;
+  let apiDocumentsScoped = 0;
   for (const entry of listing.members) {
     const source: ArchiveSource = {
       kind: "archive-member",
@@ -207,12 +218,15 @@ function scanArchive(
         source,
         onSuppressed: (n) => (suppressed += n),
         onFixtureSuppressed: (n) => (fixtureSuppressed += n),
+        // Classified on the member's own path and text (scanText reads
+        // `source.member`), never on the container's name.
+        onApiDocumentScoped: () => apiDocumentsScoped++,
       })
     );
   }
   for (let i = 0; i < listing.skipped.oversized; i++) options.onSkipped?.("oversized");
   for (let i = 0; i < listing.skipped.unreadable; i++) options.onSkipped?.("unreadable");
-  return { path: relPath, text: "", findings, suppressed, fixtureSuppressed };
+  return { path: relPath, text: "", findings, suppressed, fixtureSuppressed, apiDocumentsScoped };
 }
 
 /** Scans everything in scope for the project, per its own configuration. */

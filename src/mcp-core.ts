@@ -110,6 +110,8 @@ export interface ScopeNotes {
   oversizedExcluded?: number;
   /** Files enumerated but skipped as binary, or unreadable at the read. */
   unreadableExcluded?: number;
+  /** Texts recognized as API description documents and scanned without generic entropy. */
+  apiDocumentsScoped?: number;
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
@@ -120,6 +122,7 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     fixtureSuppressed = 0,
     oversizedExcluded = 0,
     unreadableExcluded = 0,
+    apiDocumentsScoped = 0,
   } = notes;
   let out =
     count === 0
@@ -140,6 +143,11 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     out +=
       `; ${fixtureSuppressed} generic finding(s) suppressed in test/fixture paths ` +
       `(--include-fixtures to report them)`;
+  }
+  if (apiDocumentsScoped > 0) {
+    out +=
+      `; ${apiDocumentsScoped} API description document(s) scanned without generic entropy ` +
+      `(--include-api-document-entropy to include them)`;
   }
   if (oversizedExcluded > 0) {
     out +=
@@ -598,6 +606,7 @@ function describeConfig(root: string, config: SecretLoopConfig) {
     file: found ? ".secretloop.json" : null,
     excludedRules: config.excludeRules,
     entropyPassEnabled: config.entropyPassEnabled,
+    includeApiDocumentEntropy: config.includeApiDocumentEntropy,
     note: found
       ? "A project configuration was applied. Rules it excludes were never run, " +
         "so their absence from these findings is not evidence of their absence " +
@@ -708,6 +717,9 @@ export function toolScan(input: ScanInput): ToolResult {
       scope: {
         filesScanned: scanned.length,
         outsideExcluded: walkerOutsideExcluded + outsideExcluded,
+        // Documents the entropy tier was not run over, as a number beside the
+        // sentence that also says it -- the count is metadata, never a path.
+        apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
         // The one sentence that keeps an empty enumeration from reading as a
         // pass. Word-for-word the CLI's, and pinned to it by test rather than
         // by import — see the note on describeScope above.
@@ -724,6 +736,7 @@ export function toolScan(input: ScanInput): ToolResult {
           // it, so the same tree yields the same sentence.
           outsideExcluded: walkerOutsideExcluded + outsideExcluded + readOutside,
           fixtureSuppressed: scanned.reduce((n, f) => n + (f.fixtureSuppressed ?? 0), 0),
+          apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
           oversizedExcluded: readOversized,
           unreadableExcluded: readUnreadable,
         })}.`,

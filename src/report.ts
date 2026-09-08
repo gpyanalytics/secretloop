@@ -81,6 +81,8 @@ export interface ScopeNotes {
   oversizedExcluded?: number;
   /** Files enumerated but skipped as binary, or unreadable at the read. */
   unreadableExcluded?: number;
+  /** Texts recognized as API description documents and scanned without generic entropy. */
+  apiDocumentsScoped?: number;
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
@@ -91,6 +93,7 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     fixtureSuppressed = 0,
     oversizedExcluded = 0,
     unreadableExcluded = 0,
+    apiDocumentsScoped = 0,
   } = notes;
   const base =
     count === 0
@@ -122,6 +125,14 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     out +=
       `; ${fixtureSuppressed} generic finding(s) suppressed in test/fixture paths ` +
       `(--include-fixtures to report them)`;
+  }
+  // A document the entropy tier chose not to look at must not read like one
+  // that had nothing in it. A document count, not a finding count: the pass
+  // never ran there, so there is no finding to count.
+  if (apiDocumentsScoped > 0) {
+    out +=
+      `; ${apiDocumentsScoped} API description document(s) scanned without generic entropy ` +
+      `(--include-api-document-entropy to include them)`;
   }
   // The last skip that was silent, and the biggest one on a real repository.
   // A file enumerated and then dropped at the read was simply absent from the

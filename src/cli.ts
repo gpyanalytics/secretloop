@@ -47,6 +47,8 @@ export interface Args {
   includeGenerated: boolean;
   /** Report generic-tier findings in test, fixture and example paths. */
   includeFixtures: boolean;
+  /** Raise-only restore of generic entropy inside recognized API description documents. */
+  includeApiDocumentEntropy: boolean;
   /** N8: gate the quoted generic entropy tier on the identifier. Off by default. */
   keyContext: boolean;
   /** mask: also mask generic high-entropy strings. Off by default -- see HELP. */
@@ -87,6 +89,7 @@ export function parseArgs(argv: string[]): Args {
     failOn: "any",
     includeGenerated: false,
     includeFixtures: false,
+    includeApiDocumentEntropy: false,
     keyContext: false,
     entropy: false,
     includeEntropy: false,
@@ -155,6 +158,9 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--include-fixtures":
         args.includeFixtures = true;
+        break;
+      case "--include-api-document-entropy":
+        args.includeApiDocumentEntropy = true;
         break;
       case "--key-context":
         args.keyContext = true;
@@ -299,6 +305,15 @@ OPTIONS
   --include-fixtures       Also report generic-tier findings in test, fixture
                            and example paths. Named provider rules already fire
                            there; this is only about the generic tiers.
+  --include-api-document-entropy
+                           Also run the generic high-entropy heuristic inside
+                           recognized API description documents (OpenAPI,
+                           Swagger, AsyncAPI in .json/.yaml/.yml). With
+                           --include-entropy, such documents are otherwise
+                           scanned by every named rule but not by the entropy
+                           heuristic, and the scan says how many. Does nothing
+                           unless generic entropy is enabled; never affects
+                           named rules. Not applicable to history or mask.
   --key-context            Report a quoted generic high-entropy string only if
                            the identifier it is assigned to carries a
                            secret-like word (key, token, secret, password...).
@@ -557,6 +572,8 @@ interface ScannedList {
   oversized: number;
   unreadable: number;
   outside: number;
+  /** Texts recognized as API description documents and scanned without generic entropy. */
+  apiDocumentsScoped: number;
 }
 
 function scanFileList(root: string, files: string[], config: SecretLoopConfig): ScannedList {
@@ -577,6 +594,7 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
     texts: new Map(scanned.map((s) => [s.path, s.text])),
     suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
     fixtureSuppressed: scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0),
+    apiDocumentsScoped: scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0),
     oversized,
     unreadable,
     outside,
@@ -673,6 +691,8 @@ async function main(): Promise<void> {
   // the scan beyond what it has always been able to reach.
   if (args.includeGenerated) config.generatedExcludePaths = [];
   if (args.includeFixtures) config.includeFixtures = true;
+  // Same shape as the fixture switch: the flag can restore, never suppress.
+  if (args.includeApiDocumentEntropy) config.includeApiDocumentEntropy = true;
   if (args.keyContext) config.keyContextRequired = true;
   // Raise-only, like every flag above it: the project file decides the baseline
   // and the flag can turn the tier on for one run, never off. scanner.ts reads
@@ -754,6 +774,7 @@ async function main(): Promise<void> {
       // sentence already names it.
       outsideExcluded: listed.outsideExcluded + result.outside,
       fixtureSuppressed: result.fixtureSuppressed,
+      apiDocumentsScoped: result.apiDocumentsScoped,
       oversizedExcluded: result.oversized,
       unreadableExcluded: result.unreadable,
     });
@@ -899,7 +920,10 @@ async function runMask(args: Args): Promise<number> {
 
   const text = buf.toString("utf8");
   const findings = scanText(text, {
-    config: { ...config, entropyPassEnabled: args.entropy, includeFixtures: true },
+    // includeApiDocumentEntropy true: a stream has no path, so nothing could be
+    // classified anyway, and a scrubber must never mask less because a
+    // scanner-scope policy applies elsewhere. Pre-scope behaviour, by contract.
+    config: { ...config, entropyPassEnabled: args.entropy, includeFixtures: true, includeApiDocumentEntropy: true },
     // A directive is a triage decision about a repository. This is a stream
     // someone asked to be scrubbed, and honouring `# gitleaks:allow` on the
     // line beside a credential put that credential on stdout unmasked and
