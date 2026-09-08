@@ -463,6 +463,7 @@ export function severityForTier(f: Finding): vscode.DiagnosticSeverity {
  * no provider path to offer.
  */
 export function offersRotation(f: Finding): boolean {
+  if (f.source) return false; // an archive member is never verified, so never live
   if (!isVerifiable(f.ruleId)) return false;
   return (
     f.confidence === "verified-live" ||
@@ -497,6 +498,7 @@ export function offersRotation(f: Finding): boolean {
  * report.ts for the same reasoning.
  */
 export function offersEnvExtraction(f: Finding): boolean {
+  if (f.source) return false; // no document to edit; the archive is never rewritten
   return f.file ? !isFixturePath(f.file) : true;
 }
 
@@ -513,6 +515,9 @@ export class SecretCodeActionProvider implements vscode.CodeActionProvider {
     const actions: vscode.CodeAction[] = [];
 
     for (const finding of findings) {
+      // Belt and braces: member findings never enter findingsByDocument, and
+      // if one ever did, no action here may rewrite an archive.
+      if (finding.source) continue;
       const findingRange = new vscode.Range(
         document.positionAt(finding.startIndex),
         document.positionAt(finding.endIndex)
@@ -862,9 +867,12 @@ function renderScannedFile(root: string, scanned: ScannedFile): void {
   diagnosticCollection.set(
     uri,
     scanned.findings.map((f) => {
+      // A member finding is anchored to the archive file itself: its offsets
+      // are into the member text, which no document holds, so the range is the
+      // start of the file and the message carries the member and its line.
       const diag = new vscode.Diagnostic(
-        new vscode.Range(at(f.startIndex), at(f.endIndex)),
-        diagnosticMessage(f),
+        f.source ? new vscode.Range(at(0), at(0)) : new vscode.Range(at(f.startIndex), at(f.endIndex)),
+        f.source ? `[archive member ${f.source.member}, line ${f.line}] ${diagnosticMessage(f)}` : diagnosticMessage(f),
         severityForTier(f)
       );
       diag.code = f.ruleId;
@@ -1161,12 +1169,13 @@ async function writeBaseline(): Promise<void> {
   if (!root) return;
 
   const config = loadConfig(root);
-  const { listFiles, readTextFile } = await import("./walk");
+  // Through the shared scan, not a private read loop: the CLI's --write-baseline
+  // goes through scanFiles, and a baseline written here must cover the same
+  // findings -- including archive members and PKCS#12 containers, which the
+  // old text-only loop could never see.
   const fingerprints = new Set<string>();
-  for (const rel of listFiles(root, config)) {
-    const text = readTextFile(root, rel, config);
-    if (text === null) continue;
-    for (const f of scanText(text, { config, filePath: rel })) {
+  for (const scannedFile of scanWorkspaceScan(root, config).scanned) {
+    for (const f of scannedFile.findings) {
       if (f.fingerprint) fingerprints.add(f.fingerprint);
     }
   }

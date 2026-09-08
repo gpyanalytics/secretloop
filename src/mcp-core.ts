@@ -1326,6 +1326,15 @@ export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
         `or dead. Judge it on format alone.`
     );
   }
+  // Nor for an archive member: the consent flow re-reads the finding from disk
+  // to commit to what would be sent, and a member has no file to re-read.
+  if (known.source) {
+    return fail(
+      `This finding is inside an archive member (${known.source.container}, member ` +
+        `${known.source.member}). Archive-member findings are not verified in this version. ` +
+        `No consent is requested and nothing will be transmitted. Judge it on format alone.`
+    );
+  }
   // No record for an encoded finding either. A pending record is a promise
   // that approval will send the credential, and verifyFinding refuses encoded
   // findings before any transmission -- so minting one would ask a human to

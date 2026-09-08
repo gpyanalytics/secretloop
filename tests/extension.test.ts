@@ -192,6 +192,11 @@ const UNKNOWN_DETAILS: Record<UnknownReason, string> = {
     "Verification of encoded findings is not supported: the encoded text is not the " +
     "credential, and SecretLoop does not keep the decoded form, so nothing was sent to " +
     "GitHub. Liveness could not be determined — confirm it in the provider's own dashboard.",
+  "unsupported-container":
+    "This finding is inside an archive member (zip container dist/bundle.zip, member " +
+    "src/config.env). Archive-member findings are not verified in this version: the member " +
+    "cannot be re-read from disk to confirm what would be sent, so nothing was sent to GitHub. " +
+    "Liveness could not be determined — confirm it in the provider's own dashboard.",
   "ambiguous-issuer":
     "This credential format is issued by Stripe, Clerk and WorkOS, and nothing in the value " +
     "says which one issued this key. It was NOT sent to any of them, because checking it " +
