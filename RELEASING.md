@@ -128,6 +128,27 @@ Run against the **built artifacts**, not the source tree.
       untouched. They record what shipped at the time and are correct as
       history.
 
+### The strong-verb rule
+
+Every strong verb or guarantee in public copy must map to an implementation or
+test **at the strength claimed**. Weaker mechanisms are not written up as
+stronger ones.
+
+- [ ] Each use of *does*, *prevents*, *sends*, *never*, *always*, *fixes*,
+      *rotates*, *guarantees* in changed public copy has a named source file,
+      test, or official vendor URL behind it.
+- [ ] No mechanism was upgraded in the writing:
+      guidance or a link **is not** rotation ·
+      masking **is not** a guarantee a raw value can never appear anywhere ·
+      a refusal **is not** universal prevention ·
+      a local default **is not** "never transmits" ·
+      a remediation UI **is not** automatic remediation.
+- [ ] Capability claims name their surface. A VS Code action is not a CLI or
+      MCP capability, and must not be written as one.
+- [ ] Competitor claims cite current official vendor documentation with the
+      date accessed, and no measurement is attributed to a tool that was not
+      benchmarked.
+
 ## 7. Release order and mechanics — order matters
 
 - [ ] **Release commits go through a PR** so the required checks actually run.

@@ -1,7 +1,7 @@
 {
   "name": "secretloop",
   "displayName": "SecretLoop",
-  "description": "SecretLoop detects exposed secrets, verifies whether they are live, and helps developers rotate and remediate them. A GPY Analytics product.",
+  "description": "SecretLoop finds exposed secrets locally, verifies supported credentials with explicit consent, and helps developers remediate them. A GPY Analytics product.",
   "icon": "docs/icon.png",
   "version": "0.2.1",
   "publisher": "gpyanalytics",
