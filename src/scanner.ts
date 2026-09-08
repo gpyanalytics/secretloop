@@ -8,6 +8,7 @@ import {
 } from "./rules";
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
 import { findEncodedCandidates, EncodedTransform } from "./encoded";
+import { ArchiveSource } from "./archive";
 import {
   SecretLoopConfig,
   defaultConfig,
@@ -86,6 +87,9 @@ export type LivenessStatus = "live" | "dead" | "unknown";
  *                             from decoding an encoded source span, and v1
  *                             never sends either the encoded text or the
  *                             decoded form. Refused before any transmission.
+ * - `unsupported-container` — the finding is inside an archive member, which
+ *                             no surface can re-read from disk to confirm what
+ *                             would be sent. Refused before any transmission.
  */
 export type UnknownReason =
   | "network"
@@ -94,7 +98,8 @@ export type UnknownReason =
   | "missing-pair"
   | "no-verifier"
   | "ambiguous-issuer"
-  | "unsupported-transform";
+  | "unsupported-transform"
+  | "unsupported-container";
 
 export interface Finding {
   ruleId: string;
@@ -148,6 +153,13 @@ export interface Finding {
    * credential. Deliberately absent from every report projection.
    */
   encoding?: EncodedTransform;
+  /**
+   * Set when the scanned text was an archive member rather than a file. `file`
+   * is the display path `<container>!/<member>`; this is the identity behind
+   * it. Path and kind strings only, never bytes. Absent -- not undefined -- for
+   * every filesystem finding, so their objects and fingerprints are unchanged.
+   */
+  source?: ArchiveSource;
 }
 
 export interface ScanOptions {
@@ -194,6 +206,8 @@ export interface ScanOptions {
   filePath?: string;
   /** Commit SHA when scanning history. */
   commit?: string;
+  /** The archive member this text came from, when it did. See Finding.source. */
+  source?: ArchiveSource;
 }
 
 /**
@@ -493,6 +507,7 @@ function assignFingerprints(findings: Finding[], text: string, filePath: string)
       value: f.value,
       context,
       transform: f.encoding,
+      source: f.source,
     });
   };
 
@@ -553,6 +568,7 @@ function escalateCollisions(
         value: f.value,
         context: contextOf(f, ordinal),
         transform: f.encoding,
+        source: f.source,
       });
     });
   }
@@ -669,6 +685,7 @@ function buildFinding(input: {
     // Omitted rather than set to undefined so a plaintext finding's object
     // shape -- and every deep-equality test over it -- is unchanged.
     ...(input.encoding ? { encoding: input.encoding } : {}),
+    ...(options.source ? { source: options.source } : {}),
   };
 }
 

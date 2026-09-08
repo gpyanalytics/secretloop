@@ -11,6 +11,14 @@ import {
   pkcs12HeaderAccepts,
   PKCS12_HEADER_BYTES,
 } from "./pkcs12";
+import {
+  openArchive,
+  archiveHeaderAccepts,
+  displayPath,
+  ArchiveSource,
+  ARCHIVE_HEADER_BYTES,
+} from "./archive";
+import { classifyPath } from "./config";
 
 /**
  * Scanning a tree, through one path for every caller.
@@ -77,6 +85,15 @@ export function scanFiles(
     // extension-independent: a renamed .bin still reports.
     const binary = detectPkcs12(root, relPath, config);
 
+    // The container layer, one level deep, beside the PKCS#12 hook and through
+    // the same non-dereferencing, size-gated read. An archive is scanned as
+    // ONE file whose findings come from its members; nothing is extracted.
+    const archive = binary ? null : scanArchive(root, relPath, config, options);
+    if (archive) {
+      scanned.push(archive);
+      continue;
+    }
+
     // An open buffer wins over disk, and is scanned whatever its size: it is
     // what the user is actually looking at -- and it is never a skip, because
     // it is already text.
@@ -138,6 +155,64 @@ function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
   );
   if (!("bytes" in candidate)) return null;
   return detectPkcs12Bytes(candidate.bytes, relPath);
+}
+
+/**
+ * One outer archive as a ScannedFile, or null when the path is not a supported
+ * archive (the caller then treats it exactly as before).
+ *
+ * Every member goes through the decision a file goes through, in the same
+ * order: the PKCS#12 structural detector on its bytes, then the NUL heuristic,
+ * then scanText -- which brings the named rules, inline directives, fixture
+ * suppression, encoded-v1 decoding and the configured entropy mode with it.
+ * The member's display path is what scanText sees as `filePath`, so the
+ * project's excludePaths and fixture segments apply to members through the
+ * one glob engine that exists. Skipped members are disclosed through the
+ * existing skip reasons.
+ */
+function scanArchive(
+  root: string,
+  relPath: string,
+  config: SecretLoopConfig,
+  options: ScanFilesOptions
+): ScannedFile | null {
+  const candidate = readBinaryCandidate(root, relPath, config, archiveHeaderAccepts, ARCHIVE_HEADER_BYTES);
+  if (!("bytes" in candidate)) return null;
+  const listing = openArchive(candidate.bytes, relPath, config.maxFileSizeBytes);
+  if (!listing) return null;
+
+  const findings: Finding[] = [];
+  let suppressed = 0;
+  let fixtureSuppressed = 0;
+  for (const entry of listing.members) {
+    const source: ArchiveSource = {
+      kind: "archive-member",
+      container: relPath,
+      containerKind: listing.containerKind,
+      member: entry.member,
+    };
+    const filePath = displayPath(source);
+    if (classifyPath(filePath, config) !== "none") continue;
+
+    const container = detectPkcs12Bytes(entry.bytes, filePath, source);
+    if (container) findings.push(container);
+    if (entry.bytes.subarray(0, 8000).includes(0)) {
+      if (!container) options.onSkipped?.("unreadable");
+      continue;
+    }
+    findings.push(
+      ...scanText(entry.bytes.toString("utf8"), {
+        config,
+        filePath,
+        source,
+        onSuppressed: (n) => (suppressed += n),
+        onFixtureSuppressed: (n) => (fixtureSuppressed += n),
+      })
+    );
+  }
+  for (let i = 0; i < listing.skipped.oversized; i++) options.onSkipped?.("oversized");
+  for (let i = 0; i < listing.skipped.unreadable; i++) options.onSkipped?.("unreadable");
+  return { path: relPath, text: "", findings, suppressed, fixtureSuppressed };
 }
 
 /** Scans everything in scope for the project, per its own configuration. */

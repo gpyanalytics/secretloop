@@ -207,6 +207,21 @@ export async function verifyFinding(
   // the credential type at all, and it is the bucket an unknown with no
   // recorded reason falls into. This is the opposite -- a verifier exists and
   // was deliberately not given the finding.
+  // An archive member first, ahead of the encoded check: the container reason
+  // wins when both apply. No surface can re-read a member from disk to confirm
+  // what would be sent, and the consent flow needs exactly that, so one rule
+  // covers the CLI, the editor and MCP alike.
+  if (finding.source) {
+    return unknown(
+      "unsupported-container",
+      `This finding is inside an archive member (${finding.source.containerKind} container ` +
+        `${finding.source.container}, member ${finding.source.member}). Archive-member findings ` +
+        `are not verified in this version: the member cannot be re-read from disk to confirm ` +
+        `what would be sent, so nothing was sent to ${providers[finding.ruleId] ?? "the provider"}. ` +
+        `Liveness could not be determined — confirm it in the provider's own dashboard.`
+    );
+  }
+
   if (finding.encoding) {
     return unknown(
       "unsupported-transform",
@@ -364,7 +379,7 @@ export async function verifyFindings(
   // outbound record's whole value is that it cannot overstate what left the
   // machine -- the same reason a cache hit does not fire it.
   const record = onOutbound && ((f: Finding) => {
-    if (!isAmbiguousIssuer(f.ruleId) && !f.encoding) onOutbound(f);
+    if (!isAmbiguousIssuer(f.ruleId) && !f.encoding && !f.source) onOutbound(f);
   });
   const check = cache
     ? (f: Finding) => cache.verify(f, contextFor(f), record)

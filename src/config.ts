@@ -343,6 +343,13 @@ export interface FingerprintInput {
    * therefore unchanged.
    */
   transform?: string;
+  /**
+   * The archive member a finding came from, when it did. Folded into the hashed
+   * material as a NUL-separated structural boundary, so a member and a real
+   * file whose display paths are the same string cannot share a fingerprint.
+   * Absent for every filesystem finding, whose material is therefore unchanged.
+   */
+  source?: { kind: "archive-member"; container: string; containerKind: string; member: string };
 }
 
 /** Baseline schema version. Bumped to 2 because fingerprint semantics changed. */
@@ -385,7 +392,12 @@ export function createContextFingerprint(
 export function createFingerprint(input: FingerprintInput): string {
   // NUL-separated for the same reason consent record ids are: it cannot occur
   // in a transform name, so no encoded material can be mistaken for one.
-  const material = input.transform ? `${input.transform}\0` : "";
+  // Container boundary first, then transform, then the value or context: the
+  // order is what makes container precedence over transform deterministic.
+  const container = input.source
+    ? `${input.source.kind}\0${input.source.containerKind}\0${input.source.container}\0${input.source.member}\0`
+    : "";
+  const material = container + (input.transform ? `${input.transform}\0` : "");
   switch (input.strategy) {
     case "context":
       return createContextFingerprint(input.filePath, input.ruleId, material + (input.context ?? ""));

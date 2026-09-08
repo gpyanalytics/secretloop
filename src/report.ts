@@ -179,6 +179,11 @@ export const UNKNOWN_REASONS: Record<UnknownReason, { label: string; remedy: str
     remedy:
       "the encoded text is not the credential and the decoded form is never kept, so nothing was sent — judge it on format, or check it in the provider's own dashboard",
   },
+  "unsupported-container": {
+    label: "the credential is inside an archive member",
+    remedy:
+      "archive members are not verified in this version, so nothing was sent — judge it on format, or check it in the provider's own dashboard",
+  },
 };
 
 /**
@@ -511,12 +516,23 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
           partialFingerprints: f.fingerprint
             ? { "secretloopFingerprint/v2": f.fingerprint }
             : undefined,
+          // An archive member is not an artifact code scanning can open, so the
+          // physical location names the archive itself -- a real file -- and
+          // the member rides in SARIF's own logicalLocations. The line is
+          // relative to the member, which the message says in words.
           locations: [
             {
               physicalLocation: {
-                artifactLocation: { uri: f.file ?? "unknown" },
+                artifactLocation: { uri: f.source ? f.source.container : f.file ?? "unknown" },
                 region: { startLine: Math.max(1, f.line) },
               },
+              ...(f.source
+                ? {
+                    logicalLocations: [
+                      { fullyQualifiedName: f.file ?? "", name: f.source.member, kind: "member" },
+                    ],
+                  }
+                : {}),
             },
           ],
         })),
@@ -546,7 +562,8 @@ function sarifLevel(f: Finding): "error" | "warning" | "note" {
 }
 
 function sarifMessage(f: Finding, options: ReportOptions): string {
-  const value = `Value: ${displayValue(f, options.redact)}`;
+  const where = f.source ? ` In archive member ${f.source.member} (line ${f.line} of the member).` : "";
+  const value = `Value: ${displayValue(f, options.redact)}${where}`;
   switch (f.verifyStatus) {
     case "live":
       return `${f.description} — CONFIRMED LIVE. ${value}`;

@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { Finding } from "./scanner";
 import { createFingerprint } from "./config";
+import { ArchiveSource } from "./archive";
 
 /**
  * PKCS#12 keystore detector — file-level, binary, non-recursive.
@@ -222,13 +223,17 @@ function containsDirectPlaintextKeyBag(b: Buffer): boolean {
  * digest through the existing `context` strategy (§D.4); that digest is never
  * rendered.
  */
-export function detectPkcs12Bytes(bytes: Buffer, relPath: string): Finding | null {
+export function detectPkcs12Bytes(bytes: Buffer, relPath: string, source?: ArchiveSource): Finding | null {
   if (!pkcs12HeaderAccepts(bytes.subarray(0, PKCS12_HEADER_BYTES), bytes.length)) return null;
   if (!containsDirectPlaintextKeyBag(bytes)) return null;
 
   const value = `PKCS#12 keystore, ${bytes.length} bytes, private-key material present`;
   const context = createHash("sha256").update(bytes).digest("hex");
   return {
+    // The same detector, unchanged, run over an archive member: `relPath` is
+    // then the member's display path and `source` its identity. A standalone
+    // container passes neither, and its finding is byte-identical to before.
+    ...(source ? { source } : {}),
     ruleId: PKCS12_RULE_ID,
     description: PKCS12_DESCRIPTION,
     value,
@@ -245,6 +250,7 @@ export function detectPkcs12Bytes(bytes: Buffer, relPath: string): Finding | nul
       strategy: "context",
       value: "",
       context,
+      source,
     }),
   };
 }
