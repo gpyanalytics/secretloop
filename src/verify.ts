@@ -196,6 +196,28 @@ export async function verifyFinding(
   const verifier = verifiers[finding.ruleId];
   if (!verifier) return null; // no verifier for this rule; caller decides what that means
 
+  // Refused before dispatch. An encoded-derived finding's `value` is the
+  // encoded source text, not the credential: handing it to a verifier would
+  // send base64 to GitHub under a header claiming it is a token, and the
+  // decoded form is deliberately never retained to send instead. Same shape as
+  // the ambiguous-issuer refusal below, and for the same reason -- the answer
+  // is attached to the finding rather than the finding silently skipped.
+  //
+  // Not `no-verifier`: this rule HAS one. That reason means nothing can check
+  // the credential type at all, and it is the bucket an unknown with no
+  // recorded reason falls into. This is the opposite -- a verifier exists and
+  // was deliberately not given the finding.
+  if (finding.encoding) {
+    return unknown(
+      "unsupported-transform",
+      `This finding was recovered by decoding a ${finding.encoding}-encoded value in the ` +
+        `source. Verification of encoded findings is not supported: the encoded text is not ` +
+        `the credential, and SecretLoop does not keep the decoded form, so nothing was sent to ` +
+        `${providers[finding.ruleId] ?? "the provider"}. Liveness could not be determined — ` +
+        `confirm it in the provider's own dashboard.`
+    );
+  }
+
   // Refused before dispatch, so the credential never reaches a verifier that
   // would send it. Returning early rather than filtering upstream keeps the
   // reason attached to the finding: the user is told the check did not happen
@@ -342,7 +364,7 @@ export async function verifyFindings(
   // outbound record's whole value is that it cannot overstate what left the
   // machine -- the same reason a cache hit does not fire it.
   const record = onOutbound && ((f: Finding) => {
-    if (!isAmbiguousIssuer(f.ruleId)) onOutbound(f);
+    if (!isAmbiguousIssuer(f.ruleId) && !f.encoding) onOutbound(f);
   });
   const check = cache
     ? (f: Finding) => cache.verify(f, contextFor(f), record)

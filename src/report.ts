@@ -174,6 +174,11 @@ export const UNKNOWN_REASONS: Record<UnknownReason, { label: string; remedy: str
     remedy:
       "checking it would mean sending it to a provider that may not have issued it, so it was not sent — judge it on format, or check it in the issuer's own dashboard",
   },
+  "unsupported-transform": {
+    label: "the credential was found in encoded form",
+    remedy:
+      "the encoded text is not the credential and the decoded form is never kept, so nothing was sent — judge it on format, or check it in the provider's own dashboard",
+  },
 };
 
 /**

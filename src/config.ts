@@ -335,6 +335,14 @@ export interface FingerprintInput {
   value: string;
   /** Secret-free context. Required by `context`, and never contains a secret. */
   context?: string;
+  /**
+   * The encoding a finding was decoded from, when it was. Prefixed to the hashed
+   * material so two encodings of one credential have two identities, and so an
+   * encoded finding can never collide with the plaintext one. Absent for every
+   * finding that existed before 0.4.0's decoder, whose fingerprints are
+   * therefore unchanged.
+   */
+  transform?: string;
 }
 
 /** Baseline schema version. Bumped to 2 because fingerprint semantics changed. */
@@ -375,12 +383,15 @@ export function createContextFingerprint(
 
 /** The single entry point; strategy is a property of the finding. */
 export function createFingerprint(input: FingerprintInput): string {
+  // NUL-separated for the same reason consent record ids are: it cannot occur
+  // in a transform name, so no encoded material can be mistaken for one.
+  const material = input.transform ? `${input.transform}\0` : "";
   switch (input.strategy) {
     case "context":
-      return createContextFingerprint(input.filePath, input.ruleId, input.context ?? "");
+      return createContextFingerprint(input.filePath, input.ruleId, material + (input.context ?? ""));
     case "value":
     default:
-      return fingerprint(input.filePath, input.ruleId, input.value);
+      return fingerprint(input.filePath, input.ruleId, material + input.value);
   }
 }
 

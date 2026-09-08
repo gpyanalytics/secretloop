@@ -7,6 +7,7 @@ import {
   Severity,
 } from "./rules";
 import { findHighEntropyStrings, shannonEntropy } from "./entropy";
+import { findEncodedCandidates, EncodedTransform } from "./encoded";
 import {
   SecretLoopConfig,
   defaultConfig,
@@ -81,6 +82,10 @@ export type LivenessStatus = "live" | "dead" | "unknown";
  * - `missing-pair`          — the check needs a second credential that is not
  *                             nearby (an AWS access key with no secret key).
  * - `no-verifier`           — nothing supports checking this rule at all.
+ * - `unsupported-transform` — the rule has a verifier, but this finding came
+ *                             from decoding an encoded source span, and v1
+ *                             never sends either the encoded text or the
+ *                             decoded form. Refused before any transmission.
  */
 export type UnknownReason =
   | "network"
@@ -88,7 +93,8 @@ export type UnknownReason =
   | "provider-unavailable"
   | "missing-pair"
   | "no-verifier"
-  | "ambiguous-issuer";
+  | "ambiguous-issuer"
+  | "unsupported-transform";
 
 export interface Finding {
   ruleId: string;
@@ -129,6 +135,19 @@ export interface Finding {
    */
   matchStart?: number;
   matchEnd?: number;
+  /**
+   * Set when the rule matched the DECODED form of this span rather than the
+   * text itself. `value`, `startIndex` and `endIndex` still describe the
+   * encoded source text, so every consumer that slices, masks or replaces the
+   * span keeps working; the decoded text is not kept anywhere.
+   *
+   * Transform identity only, never bytes. It exists because two things
+   * downstream of the scan need to know: assignFingerprints, which runs as a
+   * second pass and must fold the transform into identity, and verification,
+   * which must refuse to send an encoded span to a provider as if it were the
+   * credential. Deliberately absent from every report projection.
+   */
+  encoding?: EncodedTransform;
 }
 
 export interface ScanOptions {
@@ -188,7 +207,6 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       : optionsOrThreshold ?? {};
   const config = options.config ?? defaultConfig;
 
-  const lowerText = text.toLowerCase();
   const lineStarts = computeLineStarts(text);
   // Collected, or deliberately empty. One site rather than a check at each of
   // the two places `ignoredLines` is read: a guard that has to be repeated is a
@@ -202,45 +220,74 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   const excluded = new Set(config.excludeRules);
   const allowValueRegexes = config.allowValues.map((s) => new RegExp(s));
 
-  for (const rule of rules) {
-    if (excluded.has(rule.id)) continue;
-    // Literal prescreen: skipping the regex entirely when no keyword is present
-    // is what keeps a 90-rule set as fast on large files as a 12-rule one.
-    if (rule.keywords && !rule.keywords.some((k) => lowerText.includes(k.toLowerCase()))) continue;
+  for (const hit of matchRules(text, excluded, allowValueRegexes)) {
+    const line = lineOf(hit.startIndex, lineStarts);
+    if (ignoredLines.has(line)) {
+      suppressedSpans.add(hit.startIndex);
+      continue;
+    }
 
-    const regex = indexedRegex(rule);
-    regex.lastIndex = 0;
-    let m: IndexedMatch | null;
-    while ((m = regex.exec(text) as IndexedMatch | null) !== null) {
-      // Guard against zero-length matches causing infinite loops.
-      if (m[0].length === 0) {
-        regex.lastIndex++;
-        continue;
-      }
-      const value = rule.fullMatch ? m[0] : m[1];
-      if (!value) continue;
-      if (!passesFilters(value, m[0], rule, allowValueRegexes)) continue;
+    findings.push(
+      buildFinding({
+        ruleId: hit.rule.id,
+        description: hit.rule.description,
+        value: hit.value,
+        startIndex: hit.startIndex,
+        line,
+        confidence: "format-match",
+        severity: hit.rule.severity,
+        options,
+        matchStart: hit.matchStart,
+        matchEnd: hit.matchEnd,
+        fingerprintStrategy: strategyFor(hit.rule, hit.match, hit.startIndex),
+      })
+    );
+  }
 
-      const startIndex = rule.fullMatch ? m.index : captureStart(m, value);
-      const line = lineOf(startIndex, lineStarts);
+  // The encoded pass: one decode, then the same named rules over the result.
+  //
+  // Runs before the generic merge and before the entropy pass on purpose. A
+  // shape rule that matched the raw encoded text yields to the named finding
+  // the decode produced, exactly as it yields to a named plaintext finding;
+  // and the entropy pass, which skips spans already covered, then reports the
+  // provider rule rather than "high-entropy string" for a span the decoder
+  // has explained. Decoded text is handed to matchRules and to nothing else --
+  // never to findEncodedCandidates, which is the one-layer bound.
+  //
+  // One finding per (span, rule). A plaintext match on the identical span wins
+  // outright, and among transforms the first in TRANSFORM_ORDER wins, which is
+  // the order findEncodedCandidates already yields them in.
+  const claimed = new Set(findings.map((f) => `${f.startIndex}:${f.endIndex}:${f.ruleId}`));
+  for (const candidate of findEncodedCandidates(text)) {
+    for (const hit of matchRules(candidate.decoded, excluded, allowValueRegexes)) {
+      const key = `${candidate.start}:${candidate.end}:${hit.rule.id}`;
+      if (claimed.has(key)) continue;
+      claimed.add(key);
+
+      const line = lineOf(candidate.start, lineStarts);
       if (ignoredLines.has(line)) {
-        suppressedSpans.add(startIndex);
+        suppressedSpans.add(candidate.start);
         continue;
       }
 
       findings.push(
         buildFinding({
-          ruleId: rule.id,
-          description: rule.description,
-          value,
-          startIndex,
+          ruleId: hit.rule.id,
+          description: hit.rule.description,
+          // The encoded source span, so value === text.slice(start, end) holds
+          // and the decoded credential is not retained.
+          value: candidate.source,
+          startIndex: candidate.start,
           line,
           confidence: "format-match",
-          severity: rule.severity,
+          severity: hit.rule.severity,
           options,
-          matchStart: m.index,
-          matchEnd: m.index + m[0].length,
-          fingerprintStrategy: strategyFor(rule, m, startIndex),
+          matchStart: candidate.start,
+          matchEnd: candidate.end,
+          // Decided on the decoded match, which is the only place the keyword
+          // is visible; the context it then hashes is source text.
+          fingerprintStrategy: strategyFor(hit.rule, hit.match, hit.startIndex),
+          encoding: candidate.transform,
         })
       );
     }
@@ -319,6 +366,61 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   return sorted;
 }
 
+/** One named-rule match, in the coordinates of whatever text was matched. */
+interface RuleMatch {
+  rule: SecretRule;
+  value: string;
+  startIndex: number;
+  matchStart: number;
+  matchEnd: number;
+  match: IndexedMatch;
+}
+
+/**
+ * The named-rule loop, over any text.
+ *
+ * Extracted so the encoded pass can run the identical rules, prescreen,
+ * filters and capture-offset logic over decoded text without a second copy of
+ * the loop that would drift from this one. The caller decides what a match
+ * means: for the file text it is a finding at these offsets; for a decoded
+ * candidate the offsets are discarded and the candidate's own span is used.
+ * Rule-major, match-minor order, as before.
+ */
+function matchRules(text: string, excluded: Set<string>, allowValueRegexes: RegExp[]): RuleMatch[] {
+  const lowerText = text.toLowerCase();
+  const hits: RuleMatch[] = [];
+  for (const rule of rules) {
+    if (excluded.has(rule.id)) continue;
+    // Literal prescreen: skipping the regex entirely when no keyword is present
+    // is what keeps a 90-rule set as fast on large files as a 12-rule one.
+    if (rule.keywords && !rule.keywords.some((k) => lowerText.includes(k.toLowerCase()))) continue;
+
+    const regex = indexedRegex(rule);
+    regex.lastIndex = 0;
+    let m: IndexedMatch | null;
+    while ((m = regex.exec(text) as IndexedMatch | null) !== null) {
+      // Guard against zero-length matches causing infinite loops.
+      if (m[0].length === 0) {
+        regex.lastIndex++;
+        continue;
+      }
+      const value = rule.fullMatch ? m[0] : m[1];
+      if (!value) continue;
+      if (!passesFilters(value, m[0], rule, allowValueRegexes)) continue;
+
+      hits.push({
+        rule,
+        value,
+        startIndex: rule.fullMatch ? m.index : captureStart(m, value),
+        matchStart: m.index,
+        matchEnd: m.index + m[0].length,
+        match: m,
+      });
+    }
+  }
+  return hits;
+}
+
 /**
  * Which fingerprint strategy a match should use.
  *
@@ -390,6 +492,7 @@ function assignFingerprints(findings: Finding[], text: string, filePath: string)
       strategy: f.fingerprintStrategy ?? "value",
       value: f.value,
       context,
+      transform: f.encoding,
     });
   };
 
@@ -449,6 +552,7 @@ function escalateCollisions(
         strategy: "context",
         value: f.value,
         context: contextOf(f, ordinal),
+        transform: f.encoding,
       });
     });
   }
@@ -542,6 +646,7 @@ function buildFinding(input: {
   matchStart?: number;
   matchEnd?: number;
   fingerprintStrategy?: FingerprintStrategy;
+  encoding?: EncodedTransform;
 }): Finding {
   const { options } = input;
   return {
@@ -561,6 +666,9 @@ function buildFinding(input: {
     // Assigned in a second pass: a context fingerprint must redact every
     // finding in its region, which is not known until the scan is complete.
     fingerprint: undefined,
+    // Omitted rather than set to undefined so a plaintext finding's object
+    // shape -- and every deep-equality test over it -- is unchanged.
+    ...(input.encoding ? { encoding: input.encoding } : {}),
   };
 }
 

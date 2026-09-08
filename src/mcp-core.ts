@@ -1326,6 +1326,18 @@ export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
         `or dead. Judge it on format alone.`
     );
   }
+  // No record for an encoded finding either. A pending record is a promise
+  // that approval will send the credential, and verifyFinding refuses encoded
+  // findings before any transmission -- so minting one would ask a human to
+  // approve a send that cannot happen.
+  if (known.encoding) {
+    return fail(
+      `This finding was recovered by decoding a ${known.encoding}-encoded value. Encoded ` +
+        `findings are not verified: the encoded text is not the credential, and SecretLoop ` +
+        `does not keep the decoded form. No consent is requested and nothing will be ` +
+        `transmitted. Judge it on format alone.`
+    );
+  }
   const provider = verificationProvider(known.ruleId);
   if (!provider) {
     return fail(`No provider is named for ${known.ruleId}; SecretLoop will not contact an unnamed party.`);
