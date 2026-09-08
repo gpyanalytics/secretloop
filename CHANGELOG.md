@@ -30,6 +30,31 @@ effect on scanning — anyone who set it to `false` was already getting the
 entropy pass regardless. It is now a real opt-in, and its default is `false` to
 match.
 
+**Measured on the frozen six-repository benchmark** at
+`fd013706d31a3b21a9c80d8a991ea14ff54b66e7`, using the same protocol, the same
+frozen labels and the same 145-site validated universe as the 0.3.0 release
+benchmark:
+
+- default: **167 TP / 20 FP / 0 unknown**, 89.3% precision,
+  SITE_FILE 137/145 = 94.5%
+- entropy-enabled (`--include-entropy`): **181 TP / 299 FP / 0 unknown**,
+  37.7% precision, SITE_FILE 142/145 = 97.9%
+
+The default removes 293 findings: **279 false positives and 14 validated true
+positives**, costing 5 additional validated sites. The 14 are all
+`generic-high-entropy` in Kubernetes AES encryption-config test data — base64
+key material matching no provider format, so no named rule reaches it. This
+change is **not recall-neutral**, and the higher precision figure does not stand
+on its own.
+
+`--include-entropy` reproduced the prior frozen reports **byte-for-byte**: all
+six report JSON files are identical hash-for-hash to the authoritative 0.3.0
+artifacts, so the previous behaviour is available exactly, not approximately.
+Nothing else moved — all 293 removals are from that one tier, with zero
+non-generic removals, zero additions, zero changes to surviving findings, and
+all 8 PKCS#12 true positives retained. Evidence — benchmark-workspace freeze
+record: `entropy-default-freeze-fd01370.md`.
+
 `secretloop mask` is unchanged: it reports named rules only unless you pass
 `--entropy`.
 

@@ -186,7 +186,7 @@ the work still falls on a human.
 Six pinned open-source repositories, working tree only, verification off for
 every tool, one human triage policy applied to all of them.
 
-| Metric | Gitleaks | TruffleHog | SecretLoop |
+| Metric | Gitleaks | TruffleHog | SecretLoop (entropy enabled) |
 | --- | --- | --- | --- |
 | Static precision | 41.5% | 57.25–64.86%\* | 37.7% |
 | TP-file coverage | 100.0% (145/145) | 82.1% (119/145) | 97.9% (142/145) |
@@ -198,15 +198,27 @@ the pessimistic bound (every unresolved finding counted as a false positive)
 through the optimistic bound (every one counted as a true positive). Quoting a
 single number would hide that uncertainty.
 
+SecretLoop's column was measured with the generic high-entropy tier **enabled**,
+which was the shipped default when the comparison was run. Beginning with 0.4.0
+that tier is off by default; `--include-entropy` turns it on and reproduces
+these numbers byte-for-byte. On the same frozen corpus the **0.4.0 default**
+produces **167 TP / 20 FP / 0 unknown (89.3% precision)** and observes **137/145
+validated TP sites (94.5%)** — higher precision, lower coverage. Neither mode
+is better in general, and the competitor columns are unaffected either way.
+
 **TP-file coverage is not exhaustive recall.** It measures the share of
 validated secret-bearing *files* in this frozen benchmark population that a tool
 reported at least one true positive in. Nothing was planted in these
 repositories, so a credential that every tool missed leaves no trace here and is
 counted by none of them.
 
-SecretLoop's precision is the lowest of the three on this corpus, and that is
-the honest read: its generic high-entropy tier accounts for 279 of its 299 false
-positives. Full evidence, methodology and limitations are in
+With the entropy tier enabled, SecretLoop's precision is the lowest of the three
+on this corpus, and that is the honest read: in that frozen entropy-enabled
+benchmark, 279 of its 299 false positives came from `generic-high-entropy`.
+That same tier also contributed **14 validated true positives across 5
+validated sites** in the same frozen population — which is why 0.4.0 makes it
+opt-in rather than removing it, and why turning it off costs coverage as well
+as noise. Full evidence, methodology and limitations are in
 [RESULTS.md](RESULTS.md).
 
 ### Local scanners

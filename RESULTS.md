@@ -6,6 +6,15 @@ the measurement record, not a summary of it.
 Measured at SecretLoop `2cd94c3111ae14346d731fc5146c135e2101f3b0`, the merge that
 added file-level PKCS#12 detection.
 
+> **Mode.** Unless explicitly identified in the 0.4.0 default-mode section
+> below, the historical SecretLoop numbers on this page were measured with the
+> generic high-entropy tier **enabled**. That was the shipped default for those
+> measurements. Beginning with 0.4.0, the tier is off by default and enabled
+> with `--include-entropy`. The historical rows remain unchanged and exactly
+> reproducible — see
+> [0.4.0 default mode](#040-default-mode-entropy-tier-off) for the new default
+> on the same frozen corpus.
+
 > This is one frozen benchmark on six repositories. It is not a general
 > statement about any tool, and it does not measure recall.
 
@@ -42,7 +51,7 @@ a fixture; `UNKNOWN` is preserved rather than forced to a verdict.
 
 | Tool | TP / FP / UNKNOWN | Precision |
 | --- | --- | --- |
-| SecretLoop | 181 / 299 / 0 | 37.7% |
+| SecretLoop (entropy enabled) | 181 / 299 / 0 | 37.7% |
 | Gitleaks | 181 / 255 / 0 | 41.5% |
 | TruffleHog | 158 / 97 / 21 | 57.25–64.86% |
 
@@ -61,7 +70,7 @@ estimates.
 | Tool | TP-file coverage | TP files missed |
 | --- | --- | --- |
 | Gitleaks | 100.0% (145/145) | 0 |
-| SecretLoop | 97.9% (142/145) | 3 |
+| SecretLoop (entropy enabled) | 97.9% (142/145) | 3 |
 | TruffleHog | 82.1% (119/145) | 26 |
 
 **This is not exhaustive recall.** The denominator is the union of files in
@@ -104,6 +113,52 @@ work.
 
 Removing every false positive outside `generic-high-entropy` — all 20, perfectly
 — would reach 39.4%. Any material improvement has to come from that tier.
+
+## 0.4.0 default mode (entropy tier off)
+
+Measured 2026-09-08 at SecretLoop `fd013706d31a3b21a9c80d8a991ea14ff54b66e7`,
+the merge that made the generic high-entropy tier opt-in. Same six pinned
+repositories, same protocol, same frozen labels, same 145-site validated
+universe. Benchmark-workspace freeze record:
+`entropy-default-freeze-fd01370.md`.
+
+| Mode | TP / FP / UNKNOWN | Precision | TP-file coverage |
+| --- | --- | --- | --- |
+| Entropy enabled (`--include-entropy`) | 181 / 299 / 0 | 37.7% | 97.9% (142/145) |
+| **0.4.0 default** | **167 / 20 / 0** | **89.3%** | **94.5% (137/145)** |
+
+**`--include-entropy` reproduces the historical result byte-for-byte.** All six
+report JSON files are identical, hash for hash, to the frozen
+`2cd94c3` / `d7320cb` reports — not equivalent, the same bytes. Every row
+elsewhere on this page therefore remains exactly reproducible on demand.
+
+**The measured cost of the default.** It removes 293 findings from this corpus:
+279 false positives **and 14 validated true positives**, in 5 additional
+validated sites. Those 14 are all `generic-high-entropy` in Kubernetes AES
+encryption-config test data — base64 key material that matches no provider
+format, so no named rule reaches it:
+
+| file | lines |
+| --- | --- |
+| `staging/src/k8s.io/apiserver/pkg/apis/apiserver/validation/validation_encryption_test.go` | 61, 89, 95, 108, 114, 129 |
+| `.../encryptionconfig/testdata/valid-configs/aes/aes-cbc-multiple-keys.json` | 15, 19 |
+| `.../encryptionconfig/testdata/valid-configs/aes/aes-cbc-multiple-keys-reversed.json` | 15, 19 |
+| `.../encryptionconfig/testdata/valid-configs/aes/aes-cbc-multiple-providers.json` | 15, 25 |
+| `.../encryptionconfig/testdata/valid-configs/aes/aes-cbc-multiple-providers-reversed.json` | 15, 25 |
+
+The three pre-existing SecretLoop misses (`join_test.go`, `staticpods_test.go`,
+`transformation_test.go`) are unchanged by this and are not part of the five.
+Total missed under the new default: 8 = 3 prior + 5 new.
+
+Nothing else moved. All 293 removals are `generic-high-entropy`; non-generic
+removals, additions and surviving-finding changes are all zero, the non-entropy
+population is identical across both modes at 187 findings, and all 8 PKCS#12
+true positives are retained.
+
+Neither mode is better in general. Higher precision here is bought with lower
+coverage on the same population, and the number that would settle the trade —
+how much recall the entropy tier uniquely contributes over rule-based
+scanning — is still not measured by this study or by N9.
 
 ## Scope and limitations
 
