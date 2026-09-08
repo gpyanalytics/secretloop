@@ -78,6 +78,22 @@ export interface SecretLoopConfig {
    * the expensive direction.
    */
   keyContextRequired: boolean;
+  /**
+   * Also run the generic entropy tier inside recognized API description
+   * documents (OpenAPI / Swagger / AsyncAPI, see api-document.ts).
+   *
+   * OFF by default: with the tier enabled, such a document is scanned by every
+   * named rule but not by generic-high-entropy, and is counted in the scope
+   * disclosure. The measured reason is in the entropy-scope freeze: 101 of the
+   * 279 benchmark entropy false positives were operationIds and descriptions in
+   * OpenAPI documents, and no validated true positive sat in one. The accepted
+   * cost is that an unnamed generic secret written into such a document -- an
+   * `example` value, say -- is not reported unless this is set. Consulted only
+   * when `entropyPassEnabled` is true; it never turns the tier on by itself,
+   * and named rules never consult it. Mirrors `includeFixtures`: raise-only
+   * from the CLI (`--include-api-document-entropy`), no editor setting.
+   */
+  includeApiDocumentEntropy: boolean;
 }
 
 export const defaultConfig: SecretLoopConfig = {
@@ -91,6 +107,7 @@ export const defaultConfig: SecretLoopConfig = {
   entropyPassEnabled: false,
   includeFixtures: false,
   keyContextRequired: false,
+  includeApiDocumentEntropy: false,
 };
 
 /**
@@ -221,6 +238,8 @@ export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
     entropyPassEnabled: raw.entropyPassEnabled ?? defaultConfig.entropyPassEnabled,
     includeFixtures: raw.includeFixtures ?? defaultConfig.includeFixtures,
     keyContextRequired: raw.keyContextRequired ?? defaultConfig.keyContextRequired,
+    includeApiDocumentEntropy:
+      raw.includeApiDocumentEntropy ?? defaultConfig.includeApiDocumentEntropy,
   };
 }
 

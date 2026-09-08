@@ -341,7 +341,12 @@ export class LogPatchParser {
     this.buffer = null;
     if (!buf || !this.commit || !this.currentFile) return;
     const local = scanText(buf.text, {
-      config: this.config,
+      // A hunk is not a document: the top level a JSON parse or a YAML head
+      // needs is usually not in it, so API-description scoping cannot be
+      // decided here and is not attempted. History keeps the tier's pre-scope
+      // behaviour -- the same value may be scoped out of a working-tree scan
+      // and still reported here, which is a stated surface difference.
+      config: { ...this.config, includeApiDocumentEntropy: true },
       filePath: this.currentFile,
       commit: this.commit.sha,
       onSuppressed: (n: number) => (this.suppressed += n),
