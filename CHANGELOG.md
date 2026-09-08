@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-09-08
 
 **Generic high-entropy scanning is now opt-in.** `entropyPassEnabled` defaults
 to `false`, so a default scan reports named-format rules and file-level PKCS#12
