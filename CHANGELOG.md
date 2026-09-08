@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-08
 
 Two rule defects, both found by the six-repository precision benchmark
 (`bench/precision/`) and both fixed at the mechanism rather than by
