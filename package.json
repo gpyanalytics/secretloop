@@ -3,7 +3,7 @@
   "displayName": "SecretLoop",
   "description": "SecretLoop finds exposed secrets locally, verifies supported credentials with explicit consent, and helps developers remediate them. A GPY Analytics product.",
   "icon": "docs/icon.png",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "publisher": "gpyanalytics",
   "engines": {
     "vscode": "^1.85.0",
