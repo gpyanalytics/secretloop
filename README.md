@@ -19,6 +19,9 @@ your AI coding agent over MCP.
 
 ![SecretLoop scanning a working tree: three findings, each with its severity, rule, masked value, remediation line and fingerprint](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-scan-hero.gif)
 
+**Upgrading from 0.3.x?** In 0.4.0, the generic high-entropy tier is opt-in —
+see the [CHANGELOG](CHANGELOG.md).
+
 ## Quickstart
 
 Needs Node 18 or newer — the liveness checks use the runtime's built-in `fetch`.
@@ -231,6 +234,11 @@ as noise. Full evidence, methodology and limitations are in
 | SARIF output | ✅ | ✅ | ✅ |
 | Baseline for existing findings | ✅ | not documented | ✅ |
 | Fix applied in the editor | ❌ | ❌ | ✅ |
+
+**Opt-in generic entropy detection.** SecretLoop includes a generic
+high-entropy tier for random-looking values outside provider-specific
+formats. It is off by default. Enable it per scan with `--include-entropy`,
+or persistently with `"entropyPassEnabled": true` in `.secretloop.json`.
 
 ### Platform and workflow
 
