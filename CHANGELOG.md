@@ -111,6 +111,20 @@ claim is made about what is there, or about how common these shapes are:
 3. material reachable only through an outer `pkcs7-signedData` `authSafe`,
    whose payload is not parsed and whose signature is not verified.
 
+- **`secretloop --version`.** Prints the package version and exits 0 without
+  scanning. The value is read from `package.json` at run time rather than kept
+  as a constant in `src/`, so it follows the release version and cannot drift
+  from it. `--version` only: no `-V` alias, and `secretloop version` remains an
+  unknown command.
+
+- **Public evidence and docs.** `RESULTS.md` is new: the measured six-repository
+  benchmark, its methodology, and its limitations, kept separate from the older
+  `docs/BENCHMARK.md` study, which measured something else and is unchanged. The
+  README's comparison tables now cite current official vendor documentation for
+  every competitor claim and carry no measurement for tools that were not
+  benchmarked. `RELEASING.md` gains a rule requiring every strong public verb to
+  map to an implementation or test at the strength claimed.
+
 ## 0.2.1 — 2026-09-05
 
 Documentation accuracy only — no code, detection, or behaviour change from
