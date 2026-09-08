@@ -87,8 +87,8 @@ handoff between them:
   + entropy   read-only API    · revoke at the provider
 ```
 
-1. **Detect** — 100+ provider rules plus an entropy pass, across your working
-   tree, staged changes, and full git history.
+1. **Detect** — 100+ provider rules across your working tree, staged changes,
+   and full git history, plus an optional generic high-entropy pass.
 2. **Verify** — a read-only call to the provider proves whether the credential
    still works. A dead test token never interrupts you; a live production key
    is escalated.
@@ -252,9 +252,12 @@ itself.
 ## What it does
 
 - **Detect** — 109 detection rules with a keyword prescreen (so a large rule set
-  stays fast), plus file-level PKCS#12 private-key keystore detection and an
-  entropy pass for credentials with no recognizable format. The PKCS#12 detector
-  reads container structure rather than text, so it is not one of the 109 rules.
+  stays fast), plus file-level PKCS#12 private-key keystore detection, plus an
+  optional generic high-entropy pass for credentials with no recognizable
+  format. The PKCS#12 detector reads container structure rather than text, so it
+  is not one of the 109 rules. The entropy pass is off by default and is not one
+  of the 109 rules either — turn it on with `--include-entropy` or
+  `"entropyPassEnabled": true`.
 - **Verify, when you ask for it** — 18 of those rules can be checked against
   their provider, covering 15 providers. 17 of the 18 can actually transmit,
   covering 14: the Stripe secret-key format is issued by more than one provider,
@@ -690,9 +693,9 @@ Because a scanner cannot tell that they are fake. A credential-shaped string in
 a fixture file and a credential-shaped string in production code are the same
 bytes; the only thing separating them is intent, which is not in the file.
 
-The entropy pass already stands down there — a generic high-entropy string in a
-test, fixture or example path is not reported unless you pass
-`--include-fixtures`. What still fires everywhere is a **named provider rule**,
+The entropy pass already stands down there — when it is on at all, a generic
+high-entropy string in a test, fixture or example path is not reported unless
+you pass `--include-fixtures`. What still fires everywhere is a **named provider rule**,
 and that is deliberate. A real token committed to a test file is a real leaked
 token: it works, it is public, and the attacker reading your repository does not
 care which directory it sits in. Fixture directories are one of the most common
@@ -860,7 +863,7 @@ hover for the quick-fix lightbulb to redact or extract it.
 | `secretloop.blockCommitOnSecret` | `true` | Warn if staged files contain secrets |
 | `secretloop.envFilePath` | `.env` | Where extracted secrets are written |
 | `secretloop.excludePaths` | `[]` | Extra globs never scanned (added to built-in excludes) |
-| `secretloop.entropyPassEnabled` | `true` | Report generic high-entropy strings with no known format |
+| `secretloop.entropyPassEnabled` | `false` | Opt in to the generic high-entropy pass — reports random-looking strings with no known format. A `.secretloop.json` setting `entropyPassEnabled` overrides this |
 | `secretloop.enableLiveVerification` | `false` | Make read-only calls to providers to confirm a credential is active. SecretLoop offers to turn this on the first time it finds a credential it could check |
 
 ## Security notes

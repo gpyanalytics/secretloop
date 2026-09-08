@@ -59,10 +59,19 @@ function checksumManifest(lines = 8): string {
   return out;
 }
 
+/**
+ * Always with --include-entropy. A checksum manifest is reported by the generic
+ * entropy tier and by nothing else, and that tier is off by default -- so
+ * without the flag every "is excluded" assertion in this file would hold
+ * because nothing was ever reportable, which is the exact failure the control
+ * test below exists to prevent.
+ */
 function scanJson(dir: string, extra: string[] = []): { file: string; ruleId: string }[] {
-  const res = spawnSync("node", [CLI, "scan", "--format", "json", ...extra, "--path", dir], {
-    encoding: "utf8",
-  });
+  const res = spawnSync(
+    "node",
+    [CLI, "scan", "--include-entropy", "--format", "json", ...extra, "--path", dir],
+    { encoding: "utf8" }
+  );
   return JSON.parse(res.stdout).findings ?? [];
 }
 

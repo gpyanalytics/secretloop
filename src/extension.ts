@@ -2,6 +2,7 @@ import * as vscode from "vscode";
 import { scanText, maskFindings, Finding } from "./scanner";
 import {
   loadConfig,
+  loadConfigWithSource,
   mergeConfig,
   defaultConfig,
   BASELINE_VERSION,
@@ -237,7 +238,11 @@ async function scanDocument(document: vscode.TextDocument) {
   const verification = resolveSetting<boolean>("enableLiveVerification", false);
   const verificationEnabled = verification.value;
 
-  const config = workspaceConfig(document, threshold);
+  const config = workspaceConfig(
+    document,
+    threshold,
+    setting<boolean>("entropyPassEnabled", false)
+  );
   const relPath = vscode.workspace.asRelativePath(document.uri, false);
   const findings = scanText(document.getText(), { config, filePath: relPath });
   findingsByDocument.set(document.uri.toString(), findings);
@@ -568,7 +573,11 @@ async function scanWorkspace() {
   const root = requireWorkspaceRoot();
   if (!root) return;
 
-  const config = configForFolder(root, setting<number>("entropyThreshold", 4.3));
+  const config = configForFolder(
+    root,
+    setting<number>("entropyThreshold", 4.3),
+    setting<boolean>("entropyPassEnabled", false)
+  );
   const buffers = openBuffers(root);
   const { scanned, generatedExcluded, outsideExcluded } = scanWorkspaceScan(root, config, {
     textFor: (p) => buffers.get(p),
@@ -644,7 +653,11 @@ async function warnOnStagedSecrets() {
     }
   }
 
-  const config = configForFolder(root, setting<number>("entropyThreshold", 4.3));
+  const config = configForFolder(
+    root,
+    setting<number>("entropyThreshold", 4.3),
+    setting<boolean>("entropyPassEnabled", false)
+  );
   const buffers = openBuffers(root);
   const scanned = scanFiles(root, staged, config, { textFor: (p) => buffers.get(p) });
   log(`SecretLoop: staged scan covered ${scanned.length} of ${staged.length} staged file(s).`);
@@ -705,10 +718,39 @@ export function deactivate() {
  * "it passed locally but CI flagged it" — the fastest way to lose trust in a
  * scanner.
  */
-function workspaceConfig(document: vscode.TextDocument, threshold: number): SecretLoopConfig {
+function workspaceConfig(
+  document: vscode.TextDocument,
+  threshold: number,
+  entropyPass: boolean
+): SecretLoopConfig {
   const folder = vscode.workspace.getWorkspaceFolder(document.uri);
-  if (!folder) return mergeConfig({ entropyThreshold: threshold });
-  return configForFolder(folder.uri.fsPath, threshold);
+  return effectiveConfig(folder?.uri.fsPath, threshold, entropyPass);
+}
+
+/**
+ * The config a scan should run under, given the folder it is in (if any) and
+ * the two editor settings that can influence it.
+ *
+ * Split out from `workspaceConfig` so the precedence can be tested without a
+ * TextDocument: the rules are the whole point of this function and they were
+ * previously unreachable by a test.
+ *
+ * `entropyPassEnabled` resolves project file > editor setting > shipped
+ * default. The project file is consulted through `raw`, never through the
+ * merged boolean: since the default became false, a merged `false` means
+ * either "the project asked for false" or "the project said nothing", and
+ * treating the second as the first would let a project with no opinion
+ * silently veto the user's own editor setting.
+ */
+export function effectiveConfig(
+  folderPath: string | undefined,
+  threshold: number,
+  entropyPass: boolean
+): SecretLoopConfig {
+  if (folderPath === undefined) {
+    return mergeConfig({ entropyThreshold: threshold, entropyPassEnabled: entropyPass });
+  }
+  return configForFolder(folderPath, threshold, entropyPass);
 }
 
 /** The same resolution, for the commands that work on a folder rather than a document. */
@@ -762,17 +804,28 @@ export function maskClipboardText(text: string): ClipboardMaskOutcome {
   };
 }
 
-function configForFolder(folderPath: string, threshold: number): SecretLoopConfig {
+function configForFolder(
+  folderPath: string,
+  threshold: number,
+  entropyPass: boolean
+): SecretLoopConfig {
   try {
-    const loaded = loadConfig(folderPath);
+    const { config, raw } = loadConfigWithSource(folderPath);
     // A project that hasn't set a threshold defers to the user's editor setting.
-    if (loaded.entropyThreshold === defaultConfig.entropyThreshold) {
-      loaded.entropyThreshold = threshold;
+    if (config.entropyThreshold === defaultConfig.entropyThreshold) {
+      config.entropyThreshold = threshold;
     }
-    return loaded;
+    // Only when the file supplies no boolean for the field. `== null` on
+    // purpose: mergeConfig folds the default in with `??`, so a JSON `null` is
+    // "not set" there too, and `=== undefined` here would have diverged from it
+    // -- the editor treating an explicit null as an opt-out the merge does not.
+    if (raw?.entropyPassEnabled == null) {
+      config.entropyPassEnabled = entropyPass;
+    }
+    return config;
   } catch (err) {
     vscode.window.showWarningMessage(`SecretLoop: ${(err as Error).message}`);
-    return mergeConfig({ entropyThreshold: threshold });
+    return mergeConfig({ entropyThreshold: threshold, entropyPassEnabled: entropyPass });
   }
 }
 

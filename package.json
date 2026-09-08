@@ -101,8 +101,8 @@
         },
         "secretloop.entropyPassEnabled": {
           "type": "boolean",
-          "default": true,
-          "description": "Report generic high-entropy strings that match no known credential format. Turn off if the heuristic tier is too noisy for your codebase; named-format rules keep working."
+          "default": false,
+          "description": "Turn on the generic high-entropy heuristic, which reports random-looking strings that match no known credential format. Off by default: it catches credentials with no recognizable shape, and also flags hashes, identifiers and sample data. Named-format rules always run regardless. A .secretloop.json that sets entropyPassEnabled overrides this setting."
         }
       }
     }

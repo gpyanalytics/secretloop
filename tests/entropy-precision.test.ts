@@ -99,15 +99,21 @@ const PROVIDER_TOKEN = "ghp_" + gen(36);
  */
 const ENTROPY_ONLY: SecretLoopConfig = {
   ...defaultConfig,
+  // The tier under test is off by default now, so every config in this file
+  // opts in. Without this the whole suite would pass by never running.
+  entropyPassEnabled: true,
   excludeRules: ["generic-api-key-assignment"],
 };
+
+/** defaultConfig with the entropy tier opted in, and nothing else changed. */
+const WITH_ENTROPY: SecretLoopConfig = { ...defaultConfig, entropyPassEnabled: true };
 
 function entropyHits(snippet: string, config: SecretLoopConfig = ENTROPY_ONLY): Finding[] {
   return scanText(snippet, { config }).filter((f) => f.ruleId === ENTROPY_RULE_ID);
 }
 
 function allHits(snippet: string): Finding[] {
-  return scanText(snippet, { config: defaultConfig });
+  return scanText(snippet, { config: WITH_ENTROPY });
 }
 
 /** `const <name> = "<value>";` — the identifier is resolvable on the line. */

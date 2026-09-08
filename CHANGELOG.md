@@ -1,5 +1,38 @@
 # Changelog
 
+## Unreleased
+
+**Generic high-entropy scanning is now opt-in.** `entropyPassEnabled` defaults
+to `false`, so a default scan reports named-format rules and file-level PKCS#12
+detection only.
+
+This **intentionally reduces default recall**. The entropy pass is the tier that
+catches credentials with no recognisable shape, and turning it off by default
+means a scan that says nothing has looked at less than it used to.
+
+The evidence is uneven and worth stating precisely. The N9 study in
+`bench/N9-ALPHA-FRAC.md` observed both true and false generic-entropy findings,
+but did not compare those true positives against rule-only detection, so the
+incremental recall uniquely contributed by the entropy pass was not measured.
+What is measured is the cost: in that same N9 six-repository study the tier
+produced 279 of the 307 false positives. A default is being set on the measured
+half of that trade, and the unmeasured half is the reason the tier ships intact
+rather than removed.
+
+Restore it with `"entropyPassEnabled": true` in `.secretloop.json`, or per run
+with `secretloop scan --include-entropy` (also `staged` and `history`). In VS
+Code, explicit project configuration wins over the editor setting. On the CLI,
+`--include-entropy` wins over project configuration.
+
+The VS Code `secretloop.entropyPassEnabled` setting is now honored. It was
+declared in `package.json` but never read, so changing it previously had no
+effect on scanning — anyone who set it to `false` was already getting the
+entropy pass regardless. It is now a real opt-in, and its default is `false` to
+match.
+
+`secretloop mask` is unchanged: it reports named rules only unless you pass
+`--entropy`.
+
 ## 0.3.0 — 2026-09-08
 
 Two rule defects, both found by the six-repository precision benchmark
