@@ -672,4 +672,51 @@ test("--write-baseline alone still writes, without contacting anyone", () => {
   });
 });
 
+suite("\ncli.ts — --version");
+
+// The version the CLI prints has to be the one npm published, so the expected
+// value is read from package.json rather than written out here. A literal would
+// pass for the wrong reason the moment the package version moves.
+const PKG_VERSION: string = JSON.parse(
+  readFileSync(path.join(__dirname, "..", "package.json"), "utf8")
+).version;
+
+test("--version prints the canonical package version and exits 0", () => {
+  const res = spawnSync("node", [CLI_PATH, "--version"], { encoding: "utf8" });
+  assert.strictEqual(res.status, 0, `expected exit 0, got ${res.status}: ${res.stderr}`);
+  // Exact equality, not a match: it proves the byte after the version is the
+  // newline and nothing else -- no banner, no scan summary, no trailing space.
+  assert.strictEqual(
+    res.stdout,
+    `${PKG_VERSION}\n`,
+    `stdout was ${JSON.stringify(res.stdout)}`
+  );
+  assert.strictEqual(res.stderr, "", `stderr was ${JSON.stringify(res.stderr)}`);
+});
+
+test("--version does not start a scan", () => {
+  // Run it inside a directory that holds a credential. A scan would report the
+  // finding and exit 1; printing the version must do neither.
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-ver-"));
+  try {
+    writeFileSync(path.join(dir, "app.js"), `const t = "${VERIFIABLE}";\n`, "utf8");
+    const res = spawnSync("node", [CLI_PATH, "--version"], { encoding: "utf8", cwd: dir });
+    assert.strictEqual(res.status, 0, `expected exit 0, got ${res.status}: ${res.stderr}`);
+    assert.strictEqual(res.stdout, `${PKG_VERSION}\n`, "a scan report reached stdout");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("--version adds no alias and no positional command", () => {
+  // The request was for --version specifically. -V and a bare `version` word
+  // stay unknown, so this flag does not quietly widen the CLI surface.
+  assert.strictEqual(parseArgs(["--version"]).command, "version");
+  assert.ok(parseArgs(["-V"]).errors?.some((e) => /unknown option -V/.test(e)), "-V became an alias");
+  assert.ok(
+    parseArgs(["version"]).errors?.some((e) => /unknown command version/.test(e)),
+    "`version` became a positional command"
+  );
+});
+
 finish();

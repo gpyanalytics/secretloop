@@ -2,7 +2,7 @@
 // First, and deliberately: this refuses an unsupported Node before any other
 // module initializes. See src/node-guard.ts — the import order is the mechanism.
 import "./node-guard";
-import { writeFileSync, statSync } from "fs";
+import { writeFileSync, statSync, readFileSync } from "fs";
 import * as path from "path";
 import { Finding, UnknownReason, scanText } from "./scanner";
 import {
@@ -25,7 +25,7 @@ import { verifyFindings } from "./verify";
  */
 
 export interface Args {
-  command: "scan" | "staged" | "history" | "mask" | "approve" | "help";
+  command: "scan" | "staged" | "history" | "mask" | "approve" | "help" | "version";
   /** approve: the fingerprint to authorize. */
   approveFingerprint?: string;
   format: OutputFormat;
@@ -93,6 +93,9 @@ export function parseArgs(argv: string[]): Args {
   // Help wins over everything below, including the complaints. Someone reaching
   // for --help is not asking to be told their other arguments are wrong.
   const wantsHelp = argv.includes("--help") || argv.includes("-h");
+  // --version only. No -V: the short form is not an established convention in
+  // this CLI, and adding one would widen the surface beyond what was asked.
+  const wantsVersion = argv.includes("--version");
 
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -151,6 +154,7 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--help":
       case "-h":
+      case "--version":
         // Answered above. Listed so it is not reported as an unknown option.
         break;
       case "--no-redact":
@@ -238,6 +242,10 @@ export function parseArgs(argv: string[]): Args {
   // `approve` takes one positional, which is the only command that does.
   if (args.command === "approve") args.approveFingerprint = loose[1];
   if (wantsHelp) args.command = "help";
+  // After help, so `--help --version` answers the narrower question. `version`
+  // is deliberately absent from COMMANDS: the flag is the whole feature, and a
+  // bare `secretloop version` stays an unknown command.
+  if (wantsVersion) args.command = "version";
 
   if (errors.length > 0 && !wantsHelp) args.errors = errors;
   return args;
@@ -557,6 +565,25 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
 
 
 /**
+ * The version npm published, read from the package manifest rather than kept
+ * as a constant here.
+ *
+ * A second copy in source is a second thing to bump, and the one that gets
+ * forgotten is this one -- a CLI confidently reporting a version it is not.
+ * package.json is already the release authority, so it stays the only one.
+ *
+ * `../package.json` holds in every layout this file runs from, because the
+ * entry point always sits one directory below the manifest: `src/cli.ts` under
+ * ts-node, `out/cli.js` from the repository build, and
+ * `<pkg>/out/cli.js` once npm has installed the tarball. npm always packs
+ * package.json, so the read cannot miss.
+ */
+function packageVersion(): string {
+  const manifest = path.join(__dirname, "..", "package.json");
+  return JSON.parse(readFileSync(manifest, "utf8")).version as string;
+}
+
+/**
  * Sets process.exitCode and returns rather than calling process.exit().
  *
  * On a pipe, Node's stdout is asynchronous: process.exit() ends the process
@@ -566,6 +593,12 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
  */
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
+  // Before the argument-error check, like help: someone asking which version
+  // they have is not asking to be told their other arguments are wrong.
+  if (args.command === "version") {
+    process.stdout.write(`${packageVersion()}\n`);
+    return;
+  }
   if (args.command === "help") {
     process.stdout.write(HELP);
     return;
