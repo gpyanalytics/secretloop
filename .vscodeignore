@@ -89,6 +89,14 @@ RELEASING.md
 # would have caught it; this line is what stops it needing to.
 PRIVATE-FINDINGS.md
 
+# Benchmark evidence for the release. Measurement prose with no runtime role,
+# the same class as RELEASING.md above, and the same default-include failure:
+# it shipped as extension/RESULTS.md on the commit that added it. The manifest
+# diff caught it, which is the third time that check has earned its place.
+# Kept in the repository and linked from README.md by its public GitHub URL --
+# excluded from the VSIX, not from the project.
+RESULTS.md
+
 # Build configuration and repository tooling. scripts/ holds the release gate
 # that packs and runs the npm tarball; it is never loaded by the extension.
 scripts/**
