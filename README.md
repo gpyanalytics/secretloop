@@ -49,7 +49,7 @@ For the editor, install **SecretLoop** from the VS Code Marketplace, or from a
 `.vsix`:
 
 ```bash
-code --install-extension secretloop-0.2.1.vsix
+code --install-extension secretloop-0.3.0.vsix
 ```
 
 The extension scans as you type and puts *redact*, *extract to `.env`* and
