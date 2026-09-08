@@ -85,12 +85,18 @@ const EQ_TOKEN_WORDED = "secret=" + gen(40);
 
 // ------------------------------------------------------------------ helpers
 
+// Both gates opt the entropy tier in: this file measures what the key-context
+// gate does to generic-high-entropy findings, and the tier is off by default.
 const GATE_ON: SecretLoopConfig = {
   ...defaultConfig,
+  entropyPassEnabled: true,
   keyContextRequired: true,
 } as SecretLoopConfig;
 
-const GATE_OFF: SecretLoopConfig = { ...defaultConfig } as SecretLoopConfig;
+const GATE_OFF: SecretLoopConfig = {
+  ...defaultConfig,
+  entropyPassEnabled: true,
+} as SecretLoopConfig;
 
 function scan(text: string, config: SecretLoopConfig): Finding[] {
   return scanText(text, { config });
@@ -258,9 +264,9 @@ test("the gate is off in the default config", () => {
 
 test("the default config reports a non-secret identifier, as before", () => {
   assert.strictEqual(
-    entropyFindings(`const author = "${SECRET}";\n`, defaultConfig).length,
+    entropyFindings(`const author = "${SECRET}";\n`, GATE_OFF).length,
     1,
-    "default behaviour must be unchanged"
+    "with the tier on and the gate off, a non-secret identifier still reports"
   );
 });
 
@@ -284,6 +290,12 @@ test("N7a and N7b stay active with the gate on", () => {
 
 const CLI = path.join(__dirname, "..", "out", "cli.js");
 
+/**
+ * Every call opts the entropy tier in with --include-entropy. This suite is
+ * about what --key-context does to generic-high-entropy findings, and with the
+ * tier off by default all three counts below would be 0 -- including the two
+ * that assert 0, which would then pass for the wrong reason.
+ */
 function scanTreeWithCli(body: string, extraArgs: string[] = []): Finding[] {
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-n8-0.1.5-"));
   try {
@@ -291,7 +303,18 @@ function scanTreeWithCli(body: string, extraArgs: string[] = []): Finding[] {
     writeFileSync(path.join(dir, "src", "config.js"), body, "utf8");
     const res = spawnSync(
       "node",
-      [CLI, "scan", "--format", "json", "--fail-on", "never", ...extraArgs, "--path", dir],
+      [
+        CLI,
+        "scan",
+        "--include-entropy",
+        "--format",
+        "json",
+        "--fail-on",
+        "never",
+        ...extraArgs,
+        "--path",
+        dir,
+      ],
       { encoding: "utf8" }
     );
     assert.strictEqual(res.status, 0, `CLI exited ${res.status}: ${res.stderr}`);
@@ -301,7 +324,7 @@ function scanTreeWithCli(body: string, extraArgs: string[] = []): Finding[] {
   }
 }
 
-test("the CLI reports a non-secret identifier by default", () => {
+test("the CLI reports a non-secret identifier when the gate is not asked for", () => {
   const found = scanTreeWithCli(`const author = "${SECRET}";\n`);
   assert.strictEqual(
     found.filter((f) => f.ruleId === ENTROPY_RULE_ID).length,

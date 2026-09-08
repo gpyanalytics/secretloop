@@ -42,8 +42,13 @@ function withRepo(files: Record<string, string>, fn: (dir: string) => void): voi
     rmSync(dir, { recursive: true, force: true });
   }
 }
+/**
+ * --include-entropy on every invocation: this suite is about the entropy tier
+ * being suppressed inside fixture paths, and the tier is off by default. Left
+ * off, "the entropy finding disappeared" would be true because it never ran.
+ */
 const cli = (args: string[], dir: string) =>
-  spawnSync("node", [CLI, ...args, "--path", dir], { encoding: "utf8" });
+  spawnSync("node", [CLI, ...args, "--include-entropy", "--path", dir], { encoding: "utf8" });
 
 // ---------------------------------------------------------------------------
 suite("fixture scope — the path set");
@@ -159,7 +164,7 @@ test("scanText suppresses the entropy tier alone, and says how many", () => {
     `${GENERIC_VALUE}\n${ENTROPY_VALUE}\nconst t = "${token(4)}";\n`,
     {
       filePath: "test/both.js",
-      config: mergeConfig({}),
+      config: mergeConfig({ entropyPassEnabled: true }),
       onFixtureSuppressed: (c) => (n += c),
     }
   );

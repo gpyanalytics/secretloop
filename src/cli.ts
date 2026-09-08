@@ -52,6 +52,15 @@ export interface Args {
   /** mask: also mask generic high-entropy strings. Off by default -- see HELP. */
   entropy: boolean;
   /**
+   * scan/staged/history: run the generic entropy pass, which is off by default.
+   *
+   * Distinct from `entropy`, which is mask's own switch over a stream rather
+   * than a repository. One-way on purpose: this raises the effective config to
+   * true and nothing lowers it, so `--include-entropy` beats a project file
+   * that says false, while a project file saying true needs no flag at all.
+   */
+  includeEntropy: boolean;
+  /**
    * Everything wrong with the argv this was parsed from, in the order it was
    * found. validateArgs reports the first, so a malformed invocation exits 2
    * through the same path as every other usage error.
@@ -80,6 +89,7 @@ export function parseArgs(argv: string[]): Args {
     includeFixtures: false,
     keyContext: false,
     entropy: false,
+    includeEntropy: false,
   };
   const errors: string[] = [];
 
@@ -151,6 +161,9 @@ export function parseArgs(argv: string[]): Args {
         break;
       case "--entropy":
         args.entropy = true;
+        break;
+      case "--include-entropy":
+        args.includeEntropy = true;
         break;
       case "--help":
       case "-h":
@@ -271,11 +284,18 @@ OPTIONS
                            wrappers, Xcode project files, SARIF reports). Does
                            not re-enable node_modules, package-lock.json or
                            minified bundles, which are never scanned.
-  --entropy                mask: also mask generic high-entropy strings.
-                           OFF by default, which is the opposite of a scan.
-                           Masking every digest, UUID and hash in a log
-                           destroys the log's usefulness while protecting
-                           nothing -- those are not credentials.
+  --include-entropy        Also report generic high-entropy findings. OFF by
+                           default -- this heuristic can surface random-looking
+                           values outside provider-specific rules, but can also
+                           flag hashes, IDs and sample data. It is the dominant
+                           source of false positives in our published benchmark
+                           corpus.
+  --entropy                mask ONLY: also mask generic high-entropy strings in
+                           the piped stream. OFF by default, which is the
+                           opposite of a scan. Masking every digest, UUID and
+                           hash in a log destroys the log's usefulness while
+                           protecting nothing -- those are not credentials.
+                           Use --include-entropy for scan, staged and history.
   --include-fixtures       Also report generic-tier findings in test, fixture
                            and example paths. Named provider rules already fire
                            there; this is only about the generic tiers.
@@ -654,6 +674,10 @@ async function main(): Promise<void> {
   if (args.includeGenerated) config.generatedExcludePaths = [];
   if (args.includeFixtures) config.includeFixtures = true;
   if (args.keyContext) config.keyContextRequired = true;
+  // Raise-only, like every flag above it: the project file decides the baseline
+  // and the flag can turn the tier on for one run, never off. scanner.ts reads
+  // config.entropyPassEnabled and has no idea a flag exists.
+  if (args.includeEntropy) config.entropyPassEnabled = true;
 
   let findings: Finding[];
   let texts = new Map<string, string>();

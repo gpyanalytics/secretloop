@@ -1,5 +1,5 @@
 import { scanText, redactValue } from "../src/scanner";
-import { mergeConfig } from "../src/config";
+import { mergeConfig, defaultConfig } from "../src/config";
 import { test, suite, finish, assert } from "./harness";
 
 suite("scanner.ts");
@@ -100,7 +100,7 @@ test("does not double-count overlapping rule + entropy matches", () => {
   // The entropy pass must not re-report a span a named rule already covered.
   // (Two *rules* may still both match one span — e.g. stripe-secret-key and the
   // generic assignment rule here — which is separate, intended behavior.)
-  const findings = scanText(`stripe.apiKey = "${stripeLive(UNKNOWN_KEY_BODY)}"`, 3.0);
+  const findings = scanText(`stripe.apiKey = "${stripeLive(UNKNOWN_KEY_BODY)}"`, { config: mergeConfig({ entropyPassEnabled: true, entropyThreshold: 3.0 }) });
   assert.ok(findings.find((f) => f.ruleId === "stripe-secret-key"), "the format rule must fire");
   assert.strictEqual(
     findings.filter((f) => f.ruleId === "generic-high-entropy").length,
@@ -110,7 +110,7 @@ test("does not double-count overlapping rule + entropy matches", () => {
 });
 
 test("flags a high-entropy string with no known format as entropy-heuristic", () => {
-  const findings = scanText('value = "Zk9pQ2xR8mLtW3vXyB7nD1sF4jH6uK0eA5"', 4.3);
+  const findings = scanText('value = "Zk9pQ2xR8mLtW3vXyB7nD1sF4jH6uK0eA5"', { config: mergeConfig({ entropyPassEnabled: true, entropyThreshold: 4.3 }) });
   const hit = findings.find((f) => f.ruleId === "generic-high-entropy");
   assert.ok(hit, "expected a generic-high-entropy finding");
   assert.strictEqual(hit!.confidence, "entropy-heuristic");
@@ -318,6 +318,22 @@ test("redactValue never leaks the middle of a secret", () => {
 
 test("redactValue fully masks short values", () => {
   assert.strictEqual(redactValue("abc123"), "******");
+});
+
+test("the entropy tier is OFF by default and ON when opted in", () => {
+  // The regression that distinguishes the old default-ON behavior from the new
+  // default-OFF one. Same bytes, same threshold, three config shapes.
+  // Appended at the end of the file on purpose: inserting it higher would move
+  // the line numbers of the credential fixtures above, and this repository
+  // scans itself.
+  const text = 'value = "Zk9pQ2xR8mLtW3vXyB7nD1sF4jH6uK0eA5"';
+  const ghe = (config: ReturnType<typeof mergeConfig>) =>
+    scanText(text, { config }).filter((f) => f.ruleId === "generic-high-entropy").length;
+
+  assert.strictEqual(ghe(mergeConfig({})), 0, "absent from config means OFF");
+  assert.strictEqual(ghe(mergeConfig({ entropyPassEnabled: false })), 0, "explicit false is OFF");
+  assert.strictEqual(ghe(mergeConfig({ entropyPassEnabled: true })), 1, "explicit true is ON");
+  assert.strictEqual(defaultConfig.entropyPassEnabled, false, "the shipped default is opt-in");
 });
 
 finish();

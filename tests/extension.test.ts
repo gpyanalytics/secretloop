@@ -12,12 +12,17 @@ import {
   workspaceScanSummary,
   maskClipboardText,
   stagedScanNotice,
+  effectiveConfig,
   PromptState,
 } from "../src/extension";
 import { Finding, UnknownReason } from "../src/scanner";
+import { mergeConfig } from "../src/config";
 import { UNKNOWN_REASONS } from "../src/report";
 import { MigrationOutcome } from "../src/rotate";
-import { DiagnosticSeverity } from "./stubs/vscode";
+import { DiagnosticSeverity, setConfiguration, resetConfiguration } from "./stubs/vscode";
+import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import * as path from "path";
 import { test, suite, finish, assert } from "./harness";
 import { positiveSamples } from "./fixtures";
 
@@ -477,6 +482,139 @@ test("an ordinary credential still masks, and clean text still reports nothing",
   const clean = maskClipboardText("const a = 1;\nconst b = 2;");
   assert.strictEqual(clean.kind, "nothing-found");
   assert.match(clean.message, /no secrets found/);
+});
+
+suite("\nextension.ts — entropyPassEnabled precedence");
+
+/**
+ * Project file > editor setting > shipped default (false).
+ *
+ * effectiveConfig is the whole rule set, split out of workspaceConfig so it can
+ * be reached without a TextDocument. `folderPath === undefined` is the
+ * no-workspace case, which before this change had no opt-in at all: the setting
+ * was declared in package.json and never read.
+ */
+function withProject(config: object | null, run: (dir: string) => void): void {
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-ext-cfg-"));
+  try {
+    if (config !== null) {
+      writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify(config), "utf8");
+    }
+    run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The setting as VS Code would report it, package default included. */
+function setEntropySetting(entry: { defaultValue?: unknown; globalValue?: unknown }): void {
+  resetConfiguration();
+  setConfiguration("secretloop", "entropyPassEnabled", entry);
+}
+
+test("no workspace + setting absent -> OFF", () => {
+  setEntropySetting({ defaultValue: false });
+  assert.strictEqual(effectiveConfig(undefined, 4.3, false).entropyPassEnabled, false);
+});
+
+test("no workspace + setting false -> OFF", () => {
+  setEntropySetting({ defaultValue: false, globalValue: false });
+  assert.strictEqual(effectiveConfig(undefined, 4.3, false).entropyPassEnabled, false);
+});
+
+test("no workspace + setting true -> ON", () => {
+  // The case that had no opt-in before the setting was wired.
+  setEntropySetting({ defaultValue: false, globalValue: true });
+  assert.strictEqual(effectiveConfig(undefined, 4.3, true).entropyPassEnabled, true);
+});
+
+test("workspace + config absent + setting absent -> OFF", () => {
+  setEntropySetting({ defaultValue: false });
+  withProject(null, (dir) => {
+    assert.strictEqual(effectiveConfig(dir, 4.3, false).entropyPassEnabled, false);
+  });
+});
+
+test("workspace + config absent + setting true -> ON", () => {
+  setEntropySetting({ defaultValue: false, globalValue: true });
+  withProject(null, (dir) => {
+    assert.strictEqual(effectiveConfig(dir, 4.3, true).entropyPassEnabled, true);
+  });
+  // Also when a config file exists but is silent on this field: "absent" is
+  // about the field, not about the file.
+  withProject({ excludeRules: [] }, (dir) => {
+    assert.strictEqual(effectiveConfig(dir, 4.3, true).entropyPassEnabled, true);
+  });
+});
+
+test("workspace + config true + setting false -> ON", () => {
+  // Explicit project config beats the editor setting.
+  setEntropySetting({ defaultValue: false, globalValue: false });
+  withProject({ entropyPassEnabled: true }, (dir) => {
+    assert.strictEqual(effectiveConfig(dir, 4.3, false).entropyPassEnabled, true);
+  });
+});
+
+test("workspace + config false + setting true -> OFF", () => {
+  // The direction that only works because `raw` is consulted rather than the
+  // merged boolean: merged false is ambiguous, raw false is not.
+  setEntropySetting({ defaultValue: false, globalValue: true });
+  withProject({ entropyPassEnabled: false }, (dir) => {
+    assert.strictEqual(effectiveConfig(dir, 4.3, true).entropyPassEnabled, false);
+  });
+});
+
+test("a JSON null in the project file is not an opt-out, matching mergeConfig", () => {
+  // mergeConfig folds the default in with `??`, so `null` there means "not set"
+  // exactly as `undefined` does. The editor's precedence test has to agree: an
+  // `=== undefined` check would treat a null as an explicit project opt-out the
+  // merge never performed, and the user's own setting would be silently vetoed
+  // by a field the project did not actually decide.
+  setEntropySetting({ defaultValue: false, globalValue: true });
+  withProject({ entropyPassEnabled: null }, (dir) => {
+    assert.strictEqual(
+      effectiveConfig(dir, 4.3, true).entropyPassEnabled,
+      true,
+      "a null project field must defer to the editor setting"
+    );
+  });
+  // And the two neighbouring cases still hold, so the null case is not a hole
+  // punched through the precedence rules.
+  withProject({ entropyPassEnabled: false }, (dir) => {
+    assert.strictEqual(
+      effectiveConfig(dir, 4.3, true).entropyPassEnabled,
+      false,
+      "explicit false + setting true must stay false"
+    );
+  });
+  setEntropySetting({ defaultValue: false, globalValue: false });
+  withProject({ entropyPassEnabled: true }, (dir) => {
+    assert.strictEqual(
+      effectiveConfig(dir, 4.3, false).entropyPassEnabled,
+      true,
+      "explicit true + setting false must stay true"
+    );
+  });
+});
+
+test("mergeConfig itself treats null as absent, which is what the editor mirrors", () => {
+  // Pins the semantic the test above depends on. If mergeConfig ever stopped
+  // using `??` here, this fails first and names the reason.
+  assert.strictEqual(
+    mergeConfig({ entropyPassEnabled: null as unknown as boolean }).entropyPassEnabled,
+    false,
+    "null must fall through to the default, not be coerced to an opt-out"
+  );
+});
+
+test("the editor setting cannot widen an unrelated project policy", () => {
+  // entropyThreshold's existing deferral still works alongside the new field.
+  setEntropySetting({ defaultValue: false, globalValue: true });
+  withProject({ entropyThreshold: 5.5, entropyPassEnabled: false }, (dir) => {
+    const config = effectiveConfig(dir, 4.3, true);
+    assert.strictEqual(config.entropyThreshold, 5.5, "project threshold must win");
+    assert.strictEqual(config.entropyPassEnabled, false, "project opt-out must win");
+  });
 });
 
 finish();

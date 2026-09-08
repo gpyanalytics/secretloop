@@ -719,4 +719,79 @@ test("--version adds no alias and no positional command", () => {
   );
 });
 
+suite("cli.ts — --include-entropy precedence");
+
+/**
+ * The six precedence cases, run end to end against the built CLI rather than
+ * against parseArgs, because the property under test is the effective config a
+ * scan runs under -- which is assembled in main(), not in the parser.
+ *
+ * The fixture is a high-entropy string matching no provider format, so the ONLY
+ * thing that can report it is the generic tier.
+ */
+const ENTROPY_ONLY = 'value = "Zk9pQ2xR8mLtW3vXyB7nD1sF4jH6uK0eA5"\n';
+
+function entropyFindings(projectConfig: object | null, args: string[]): number {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-ent-"));
+  try {
+    writeFileSync(path.join(dir, "app.js"), ENTROPY_ONLY, "utf8");
+    if (projectConfig !== null) {
+      writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify(projectConfig), "utf8");
+    }
+    const res = spawnSync(
+      "node",
+      [CLI_PATH, "scan", ".", "--format", "json", "--fail-on", "never", ...args],
+      { encoding: "utf8", cwd: dir }
+    );
+    assert.strictEqual(res.status, 0, `exit ${res.status}: ${res.stderr}`);
+    const report = JSON.parse(res.stdout) as { findings: Array<{ ruleId: string }> };
+    return report.findings.filter((f) => f.ruleId === "generic-high-entropy").length;
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("no config + no flag -> OFF", () => {
+  assert.strictEqual(entropyFindings(null, []), 0);
+});
+
+test("config true + no flag -> ON", () => {
+  assert.strictEqual(entropyFindings({ entropyPassEnabled: true }, []), 1);
+});
+
+test("config false + no flag -> OFF", () => {
+  assert.strictEqual(entropyFindings({ entropyPassEnabled: false }, []), 0);
+});
+
+test("no config + --include-entropy -> ON", () => {
+  assert.strictEqual(entropyFindings(null, ["--include-entropy"]), 1);
+});
+
+test("config false + --include-entropy -> ON", () => {
+  // The flag beats an explicit project `false`. Raise-only is the whole rule.
+  assert.strictEqual(entropyFindings({ entropyPassEnabled: false }, ["--include-entropy"]), 1);
+});
+
+test("config true + --include-entropy -> ON", () => {
+  assert.strictEqual(entropyFindings({ entropyPassEnabled: true }, ["--include-entropy"]), 1);
+});
+
+test("--include-entropy is accepted by scan, staged and history", () => {
+  // Behavioral check, not parser reuse: these are the commands that reach the
+  // loadConfig path in main(). `mask` and `approve` return before it.
+  for (const command of ["scan", "staged", "history"]) {
+    const args = parseArgs([command, "--include-entropy"]);
+    assert.strictEqual(args.includeEntropy, true, `${command} did not accept the flag`);
+    assert.strictEqual(args.errors, undefined, `${command} reported ${JSON.stringify(args.errors)}`);
+  }
+});
+
+test("--include-entropy is distinct from mask's --entropy", () => {
+  // Two switches, two scopes. Neither implies the other.
+  assert.strictEqual(parseArgs(["scan", "--include-entropy"]).entropy, false);
+  assert.strictEqual(parseArgs(["mask", "--entropy"]).includeEntropy, false);
+  assert.ok(HELP.includes("--include-entropy"), "the scan flag is undocumented");
+  assert.ok(HELP.includes("mask ONLY:"), "mask's --entropy no longer names its scope");
+});
+
 finish();

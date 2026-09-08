@@ -385,6 +385,34 @@ test("a path that does not exist is refused, not answered with zero findings", (
   assert.match((result as { ok: false; error: string }).error, /does not exist/);
 });
 
+test("the entropy tier is off by default over MCP and opts in from project config", () => {
+  // MCP stays config-driven: no request parameter mirrors the CLI flag, so the
+  // project file is the whole opt-in surface. The fixture matches no provider
+  // format, so only the generic tier can report it.
+  const ENTROPY_ONLY = 'value = "Zk9pQ2xR8mLtW3vXyB7nD1sF4jH6uK0eA5"\n';
+  resetSessions();
+
+  const off = repo("entropy-off", { "app.js": ENTROPY_ONLY });
+  const offPayload = payload(record(toolScan({ path: off })));
+  assert.strictEqual(offPayload.config.entropyPassEnabled, false, "default must be off");
+  assert.ok(
+    !offPayload.findings.some((f: any) => f.ruleId === "generic-high-entropy"),
+    "the tier reported without being asked"
+  );
+
+  resetSessions();
+  const on = repo("entropy-on", {
+    "app.js": ENTROPY_ONLY,
+    ".secretloop.json": JSON.stringify({ entropyPassEnabled: true }),
+  });
+  const onPayload = payload(record(toolScan({ path: on })));
+  assert.strictEqual(onPayload.config.entropyPassEnabled, true, "project config must opt in");
+  assert.ok(
+    onPayload.findings.some((f: any) => f.ruleId === "generic-high-entropy"),
+    "opting in produced no generic finding"
+  );
+});
+
 test("an applied project config is disclosed, so absence of a rule is not read as absence of a secret", () => {
   resetSessions();
   const configured = repo("configured", {

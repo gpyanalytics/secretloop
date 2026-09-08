@@ -450,10 +450,15 @@ test("the count is what met the threshold, not what was found", () => {
       "src/app.js",
       `const t = "${token()}";\nconst list = [\n  "qIk1MOfm2ziDcVTafyeu5ivE6uu7Gy82zuB0KaQf",\n];\n`
     );
-    const all = JSON.parse(runCli(dir, ["scan", "--format", "json", "--fail-on", "never"]).stdout);
+    // The medium here is a generic high-entropy hit, so the tier has to be
+    // opted in for the fixture to plant two findings at all. The assertion
+    // itself is unchanged -- still exactly two, still one critical.
+    const all = JSON.parse(
+      runCli(dir, ["scan", "--include-entropy", "--format", "json", "--fail-on", "never"]).stdout
+    );
     assert.strictEqual(all.findings.length, 2, "the fixture no longer plants two findings");
 
-    const res = runCli(dir, ["scan", "--fail-on", "critical"]);
+    const res = runCli(dir, ["scan", "--include-entropy", "--fail-on", "critical"]);
     assert.strictEqual(res.status, 1);
     assert.match(res.stderr, /exit 1 — 1 finding\(s\) at or above --fail-on critical/);
   });
@@ -526,7 +531,13 @@ test("a real .xcscheme is skipped by default and its target names never report",
     // The first draft of this test asserted 0 here. It failed, correctly -- it
     // was asserting a matcher the release deliberately does not ship, because
     // every predicate that catches these names skips 100% of AWS access key ids.
-    const on = JSON.parse(runCli(dir, ["scan", "--format", "json", "--include-generated"]).stdout);
+    // --include-entropy too: the target names are reported by the generic tier
+    // and by nothing else, so with the tier off this file is silent for a
+    // second, unrelated reason. Opting in keeps the test measuring the path
+    // exclude rather than the new default.
+    const on = JSON.parse(
+      runCli(dir, ["scan", "--format", "json", "--include-generated", "--include-entropy"]).stdout
+    );
     assert.ok(
       on.summary.total > 0,
       "--include-generated did not scan the scheme file at all"

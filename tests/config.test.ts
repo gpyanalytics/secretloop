@@ -6,6 +6,7 @@ import {
   defaultConfig,
   resolveConfigFile,
   loadConfig,
+  loadConfigWithSource,
   CONFIG_FILENAME,
 } from "../src/config";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
@@ -119,6 +120,43 @@ test("loadConfig names the file a bad pattern came from", () => {
 test("valid patterns still load", () => {
   const config = mergeConfig({ allowValues: ["^EXAMPLE_", "test-[0-9]+$"] });
   assert.deepStrictEqual(config.allowValues, ["^EXAMPLE_", "test-[0-9]+$"]);
+});
+
+test("loadConfigWithSource keeps absent distinguishable from explicit false", () => {
+  // The merged boolean cannot carry this once the default is false: absent and
+  // explicit-false both merge to false. The VS Code precedence rules depend on
+  // telling them apart, so `raw` is what they consult.
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-src-"));
+  try {
+    assert.strictEqual(loadConfigWithSource(dir).raw, null, "no config file at all");
+
+    writeFileSync(path.join(dir, CONFIG_FILENAME), JSON.stringify({ excludeRules: [] }));
+    const silent = loadConfigWithSource(dir);
+    assert.strictEqual(silent.config.entropyPassEnabled, false, "merged: default false");
+    assert.strictEqual(silent.raw?.entropyPassEnabled, undefined, "raw: field absent");
+
+    writeFileSync(path.join(dir, CONFIG_FILENAME), JSON.stringify({ entropyPassEnabled: false }));
+    const explicit = loadConfigWithSource(dir);
+    assert.strictEqual(explicit.config.entropyPassEnabled, false, "merged: identical false");
+    assert.strictEqual(explicit.raw?.entropyPassEnabled, false, "raw: explicitly false");
+
+    writeFileSync(path.join(dir, CONFIG_FILENAME), JSON.stringify({ entropyPassEnabled: true }));
+    const on = loadConfigWithSource(dir);
+    assert.strictEqual(on.config.entropyPassEnabled, true, "merged: true");
+    assert.strictEqual(on.raw?.entropyPassEnabled, true, "raw: explicitly true");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadConfig still returns just the merged config", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-compat-"));
+  try {
+    writeFileSync(path.join(dir, CONFIG_FILENAME), JSON.stringify({ entropyPassEnabled: true }));
+    assert.deepStrictEqual(loadConfig(dir), loadConfigWithSource(dir).config);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 finish();

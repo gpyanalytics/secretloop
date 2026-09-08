@@ -35,7 +35,17 @@ export interface SecretLoopConfig {
   allowValues: string[];
   /** Files larger than this are skipped (generated blobs, fixtures, bundles). */
   maxFileSizeBytes: number;
-  /** Disable the generic entropy pass entirely (rule matches only). */
+  /**
+   * Run the generic entropy pass in addition to the named rules.
+   *
+   * Off by default: the heuristic reports random-looking values that match no
+   * provider format, which catches credentials with no recognisable shape and
+   * also catches hashes, identifiers and sample data. In the N9 six-repository
+   * study it produced 279 of the 307 false positives.
+   *
+   * Opt in with `"entropyPassEnabled": true`, the CLI's `--include-entropy`,
+   * or the `secretloop.entropyPassEnabled` editor setting.
+   */
   entropyPassEnabled: boolean;
   /**
    * Report generic-tier findings in test, fixture and example paths.
@@ -78,7 +88,7 @@ export const defaultConfig: SecretLoopConfig = {
   excludeRules: [],
   allowValues: [],
   maxFileSizeBytes: 1_000_000,
-  entropyPassEnabled: true,
+  entropyPassEnabled: false,
   includeFixtures: false,
   keyContextRequired: false,
 };
@@ -146,9 +156,29 @@ export function resolveConfigFile(repoRoot: string): ResolvedConfigFile | null {
   return existsSync(current) ? { path: current } : null;
 }
 
-export function loadConfig(repoRoot: string): SecretLoopConfig {
+/**
+ * A loaded project configuration together with the fields the file actually set.
+ *
+ * `raw` is null when the project has no `.secretloop.json` at all, and otherwise
+ * holds the parsed object before defaults were folded in. Callers need it to
+ * tell "the project asked for false" from "the project said nothing and the
+ * default is false" — a distinction the merged config cannot carry for any
+ * field whose default is falsy. `entropyPassEnabled` became such a field when
+ * the entropy pass moved to opt-in, and the editor has to know which of the two
+ * it is looking at before deciding whether its own setting may apply.
+ */
+export interface LoadedConfig {
+  config: SecretLoopConfig;
+  raw: Partial<SecretLoopConfig> | null;
+}
+
+/**
+ * The same load `loadConfig` performs, keeping the parsed file alongside the
+ * merged result. One parse, one set of error messages, one config system.
+ */
+export function loadConfigWithSource(repoRoot: string): LoadedConfig {
   const found = resolveConfigFile(repoRoot);
-  if (!found) return { ...defaultConfig };
+  if (!found) return { config: { ...defaultConfig }, raw: null };
   const name = path.basename(found.path);
 
   let raw: Partial<SecretLoopConfig>;
@@ -163,10 +193,15 @@ export function loadConfig(repoRoot: string): SecretLoopConfig {
   // saying "could not parse" sends someone hunting for a syntax error that is
   // not there.
   try {
-    return mergeConfig(raw);
+    return { config: mergeConfig(raw), raw };
   } catch (err) {
     throw new Error(`${name}: ${(err as Error).message}`);
   }
+}
+
+/** The merged configuration alone, which is all most callers need. */
+export function loadConfig(repoRoot: string): SecretLoopConfig {
+  return loadConfigWithSource(repoRoot).config;
 }
 
 

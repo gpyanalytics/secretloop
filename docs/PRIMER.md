@@ -24,7 +24,8 @@ plan or code yet.
 A developer-focused secret detection, verification and remediation tool —
 VS Code extension plus standalone CLI, one engine.
 
-- **Detect** — 109 provider rules with a keyword prescreen, plus an entropy pass.
+- **Detect** — 109 provider rules with a keyword prescreen, plus an optional
+  generic high-entropy pass (off by default; `--include-entropy` turns it on).
   Working tree, staged changes, and full git history.
 - **Verify** — read-only API calls to 15 providers confirm whether a credential
   is currently active. **Off by default**, with a prompt that names the provider
