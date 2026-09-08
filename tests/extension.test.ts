@@ -187,6 +187,11 @@ const UNKNOWN_DETAILS: Record<UnknownReason, string> = {
   // verify.ts never emits this reason: it is the bucket report.ts and cli.ts put
   // an unknown with no reason into, so the finding carries verifyReason undefined.
   "no-verifier": "",
+  "unsupported-transform":
+    "This finding was recovered by decoding a base64-encoded value in the source. " +
+    "Verification of encoded findings is not supported: the encoded text is not the " +
+    "credential, and SecretLoop does not keep the decoded form, so nothing was sent to " +
+    "GitHub. Liveness could not be determined — confirm it in the provider's own dashboard.",
   "ambiguous-issuer":
     "This credential format is issued by Stripe, Clerk and WorkOS, and nothing in the value " +
     "says which one issued this key. It was NOT sent to any of them, because checking it " +
