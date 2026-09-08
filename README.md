@@ -1,13 +1,21 @@
 # SecretLoop
 
-**From leaked to fixed.**
+**Find the secret. Verify it. Fix it.**
 
 A GPY Analytics product.
 
-SecretLoop is a developer-focused secret detection, verification and remediation
-tool. It finds exposed credentials, checks whether they are actually live, and
-helps you rotate and remediate them — in your editor, your pre-commit hook, and
-your CI.
+SecretLoop finds exposed credentials locally, verifies *supported* credentials
+against their provider only after a human explicitly approves it, and puts the
+fix where you already work — your editor, your pre-commit hook, your CI, and
+your AI coding agent over MCP.
+
+1. **Find locally.** Deterministic rules and an entropy tier, on your machine.
+2. **Verify with consent.** For the credential types SecretLoop supports, a
+   human approves each check in a terminal before anything leaves the machine.
+3. **Remediate in place.** Redact or extract to `.env` from the same finding
+   that failed CI.
+4. **Expose it safely to agents.** MCP tools that keep the credential masked and
+   put verification behind human approval.
 
 ![SecretLoop scanning a working tree: three findings, each with its severity, rule, masked value, remediation line and fingerprint](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-scan-hero.gif)
 
@@ -168,36 +176,91 @@ the shipped UI.
 ## Where this sits against the existing tools
 
 The pragmatic 2026 stack is gitleaks (fast pre-commit blocking) + TruffleHog
-(verified history scans) + GitHub Secret Scanning, with GitGuardian on top for
-regulated orgs. That's three or four tools for one job, and the seam between
-them — *"which of these findings is actually live, and how do I fix it?"* — is
-where the work still falls on a human.
+(verified scans) + GitHub Secret Scanning, with GitGuardian on top for regulated
+orgs. That is three or four tools for one job, and the seam between them —
+*"which of these findings is actually live, and how do I fix it?"* — is where
+the work still falls on a human.
 
-| | gitleaks | TruffleHog | GitGuardian | SecretLoop |
-|---|---|---|---|---|
-| Working-tree + pre-commit scan | ✅ | ✅ | ✅ | ✅ |
-| Full git history scan | ✅ | ✅ | ✅ | ✅ |
-| Live credential verification | ❌ | ✅ | ✅ | ✅ (17 rules) |
-| SARIF / CI output | ✅ | ✅ | ✅ | ✅ |
-| Baseline for existing findings | ✅ | ❌ | ✅ | ✅ |
-| Fix applied in the editor | ❌ | ❌ | ❌ | ✅ |
-| One-click rotate at the provider | ❌ | ❌ | partial | ✅ where the API allows |
-| Detector count | ~160 | ~800 | ~450 | 100+ |
-| Price for a small team | free | free tier | enterprise | free |
+### Measured on one frozen benchmark
 
-**Read that table honestly.** On raw detector count SecretLoop is behind, and
-that gap matters more than any UX advantage if a rule you need is missing. What
-it does that none of the others do is close the loop: the same finding that
-appears in CI appears as a lightbulb in your editor with *redact*, *extract to
-`.env`*, and *rotate* attached to it.
+Six pinned open-source repositories, working tree only, verification off for
+every tool, one human triage policy applied to all of them.
+
+| Metric | Gitleaks | TruffleHog | SecretLoop |
+| --- | --- | --- | --- |
+| Static precision | 41.5% | 57.25–64.86%\* | 37.7% |
+| TP-file coverage | 100.0% (145/145) | 82.1% (119/145) | 97.9% (142/145) |
+| TP files missed | 0 | 26 | 3 |
+
+\* TruffleHog's figure is a range, not a point. 21 of its findings could not be
+resolved to a verdict from the evidence available, so precision is reported as
+the pessimistic bound (every unresolved finding counted as a false positive)
+through the optimistic bound (every one counted as a true positive). Quoting a
+single number would hide that uncertainty.
+
+**TP-file coverage is not exhaustive recall.** It measures the share of
+validated secret-bearing *files* in this frozen benchmark population that a tool
+reported at least one true positive in. Nothing was planted in these
+repositories, so a credential that every tool missed leaves no trace here and is
+counted by none of them.
+
+SecretLoop's precision is the lowest of the three on this corpus, and that is
+the honest read: its generic high-entropy tier accounts for 279 of its 299 false
+positives. Full evidence, methodology and limitations are in
+[RESULTS.md](RESULTS.md).
+
+### Local scanners
+
+| Capability | Gitleaks | TruffleHog | SecretLoop |
+| --- | --- | --- | --- |
+| Working-tree + pre-commit scan | ✅ | ✅ | ✅ |
+| Full git history scan | ✅ | ✅ | ✅ |
+| Live verification against the provider | ❌ | ✅ | ✅, consent-gated |
+| SARIF output | ✅ | ✅ | ✅ |
+| Baseline for existing findings | ✅ | not documented | ✅ |
+| Fix applied in the editor | ❌ | ❌ | ✅ |
+
+### Platform and workflow
+
+| Capability | GitHub | GitGuardian | SecretLoop |
+| --- | --- | --- | --- |
+| Runs without a hosted account | ❌ | ❌ | ✅ |
+| Blocks the push itself | ✅ | ❌ | ❌ |
+| Validity check against the provider | ✅ | ✅ | ✅, consent-gated |
+| MCP server for AI agents | ✅ | ✅ | ✅ |
+
+Competitor rows are taken from current official documentation, not from
+measurement — only the three-tool table above was benchmarked. GitHub Secret
+Scanning and GitGuardian were **not** benchmarked, and no precision or coverage
+figure is attributed to them.
+
+| Claim source | Accessed |
+| --- | --- |
+| [Gitleaks README](https://github.com/gitleaks/gitleaks) — `git`/`dir`/`stdin` modes, pre-commit hook, `--baseline-path`, json/csv/junit/sarif reports | 2026-09-08 |
+| [TruffleHog README](https://github.com/trufflesecurity/trufflehog) — programmatic verification against the API (`--no-verification` disables), git/filesystem sources, pre-commit hook, `--sarif` | 2026-09-08 |
+| [GitHub — About secret scanning](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning) — hosted, scans full history, validity checks contact the issuing service | 2026-09-08 |
+| [GitHub — About push protection](https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection) — blocks pushes containing supported secrets | 2026-09-08 |
+| [GitGuardian — Validity checks](https://docs.gitguardian.com/secrets-detection/customize-detection/validity-checks) — non-intrusive API calls; valid / invalid / failed to check / cannot check / unknown | 2026-09-08 |
+| [GitGuardian — MCP server](https://docs.gitguardian.com/ggmcp-docs/overview) and [VS Code extension](https://docs.gitguardian.com/ggshield-docs/integrations/ide-integrations/vscode) | 2026-09-08 |
+
+What SecretLoop does that none of the others do is close the loop locally: the
+same finding that failed CI appears as a lightbulb in your editor with *redact*
+and *extract to `.env`* attached, and the same finding is what an AI agent sees
+over MCP — masked, with verification behind a human approval it cannot grant
+itself.
 
 ## What it does
 
-- **Detect** — 100+ provider rules with a keyword prescreen (so a large rule set
-  stays fast), plus an entropy pass for credentials with no recognizable format.
-- **Verify, when you ask for it** — read-only API calls to 15 providers confirm
-  whether a credential is *currently active*. A dead test token never interrupts
-  you.
+- **Detect** — 109 detection rules with a keyword prescreen (so a large rule set
+  stays fast), plus file-level PKCS#12 private-key keystore detection and an
+  entropy pass for credentials with no recognizable format. The PKCS#12 detector
+  reads container structure rather than text, so it is not one of the 109 rules.
+- **Verify, when you ask for it** — 18 of those rules can be checked against
+  their provider, covering 15 providers. 17 of the 18 can actually transmit,
+  covering 14: the Stripe secret-key format is issued by more than one provider,
+  so SecretLoop refuses to guess which one to ask and withholds it. Read-only
+  API calls confirm whether a *supported* credential is currently active, so you
+  can gate CI on confirmed-live findings instead of on every match.
 
   **This is off by default, and deliberately so.** Verifying a credential means
   sending it to a third party, and a repository you have just cloned may hold
@@ -246,8 +309,10 @@ appears in CI appears as a lightbulb in your editor with *redact*, *extract to
 - **Scan history** — a secret deleted in a later commit is still in the object
   store and still fetchable by anyone who has ever cloned the repo. A clean
   working tree says nothing about whether the repo has leaked.
-- **Fix** — redact, extract to `.env`, or rotate at the provider, as a quick-fix
-  in the editor.
+- **Fix** — redact or extract to `.env` as a quick-fix in the editor. For some
+  providers the same lightbulb opens the console where you revoke the
+  credential; SecretLoop does not rotate it for you, and that guidance is a
+  VS Code action, not a CLI or MCP capability.
 
 ## CLI
 
@@ -345,6 +410,22 @@ scanner and reason about the results. **There is no AI inside SecretLoop** — n
 model, no API key, no LLM dependency. The assistant does the explaining; the
 deterministic scanner does the finding, and only the scanner decides what a
 finding is.
+
+The gate an assistant cannot talk its way past — the agent asks, SecretLoop
+returns `CONSENT_REQUIRED` with `network: null`, and the approval happens in a
+terminal the chat cannot type into:
+
+![An AI agent scans over MCP, asks to verify a GitHub token, and receives CONSENT_REQUIRED with network null; the human approves in a separate terminal; a replay of the same approval returns UNKNOWN](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mcp-terminal.gif)
+
+The same flow inside Claude and GitHub Copilot Chat:
+
+![Claude running the SecretLoop MCP tools: masked finding, consent-required verify, human terminal approval, then a single-use verification](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mcp-claude.gif)
+
+![GitHub Copilot Chat running the SecretLoop MCP tools: masked finding, consent-required verify, human terminal approval, then a single-use verification](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mcp-copilot.gif)
+
+Every product string in those demos is cited to source in
+[`docs/demos/FACTS-mcp-demo.md`](docs/demos/FACTS-mcp-demo.md). The credential
+is synthetic and the provider response is simulated — no request is made.
 
 Add it to `claude_desktop_config.json` (Claude Desktop) or `.cursor/mcp.json`
 (Cursor):
@@ -480,7 +561,7 @@ the server invocation above is the only part that is ours.
 | `secretloop_list_findings` | Filters the last scan's findings by severity, rule or liveness. |
 | `secretloop_get_finding` | One finding in full, with masked source context. |
 | `secretloop_history_scan` | Scans git history, bounded by a commit and time limit. |
-| `secretloop_verify` | Asks a provider whether one credential is still live — only after a human approves it. |
+| `secretloop_verify` | Asks a provider whether one *supported* credential is still live — only after a human approves it in a terminal. |
 
 The first four are **read-only**: no writes, no rotation, no config or baseline
 changes, and nothing destructive.
@@ -694,7 +775,7 @@ secretloop/
 │   ├── history.ts       # git history scanning (git log -p parser)
 │   ├── walk.ts          # file enumeration honoring .gitignore via git ls-files
 │   ├── report.ts        # text / JSON / SARIF output
-│   ├── verify.ts        # live verification calls for 15 providers
+│   ├── verify.ts        # verification support for 15 providers
 │   ├── rotate.ts        # self-revoke or dashboard-deeplink rotation per provider
 │   ├── remediate.ts     # redact / extract-to-.env logic
 │   ├── hooks.ts         # install/uninstall the git pre-commit hook
