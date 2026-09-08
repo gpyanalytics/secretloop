@@ -775,7 +775,7 @@ secretloop/
 │   ├── history.ts       # git history scanning (git log -p parser)
 │   ├── walk.ts          # file enumeration honoring .gitignore via git ls-files
 │   ├── report.ts        # text / JSON / SARIF output
-│   ├── verify.ts        # live verification calls for 15 providers
+│   ├── verify.ts        # verification support for 15 providers
 │   ├── rotate.ts        # self-revoke or dashboard-deeplink rotation per provider
 │   ├── remediate.ts     # redact / extract-to-.env logic
 │   ├── hooks.ts         # install/uninstall the git pre-commit hook
