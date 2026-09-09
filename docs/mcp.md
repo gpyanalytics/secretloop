@@ -35,9 +35,13 @@ The first four never write, rotate, change configuration or contact anyone.
 `secretloop_verify` is the only tool that can send anything, and only after the
 consent gate below is satisfied.
 
-The tool description the server embeds still says "103 provider rules"; the
-rule count is 110 on `main` and 109 in published 0.4.0. That string is a
-follow-up in the code, not a documented capability.
+The `secretloop_scan` description the server embeds names no rule count
+(**main**, unreleased; the published 0.4.0 server still says "103 provider
+rules", which was stale when it shipped). It describes the scanner as named
+credential-format rules with a keyword prescreen plus a generic high-entropy
+tier that runs only when the project's `.secretloop.json` enables it — the tool
+has no input of its own for the tier. The current count is in
+[coverage](coverage.md).
 
 ## What crosses the boundary, and what does not
 

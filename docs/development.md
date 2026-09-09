@@ -140,7 +140,9 @@ Accurate as of `main` at the merge of PR #49:
 - **Live-host validation.** The VS Code extension host and live MCP clients were
   not exercised for the `main` changes; wiring was compiled and inspected and
   the shared engine is unit-tested.
-- **Stale strings in code.** The MCP `secretloop_scan` tool description still
-  says "103 provider rules"; SECURITY.md's supported-version line was corrected
-  in this documentation pass.
+- **Stale strings in code.** Closed: the MCP `secretloop_scan` description no
+  longer states a rule count, and SECURITY.md's supported-version line was
+  corrected in the documentation consolidation. The RELEASING.md §6 count check
+  now lists every page that states the current count and says which counts are
+  deliberately historical.
 - The [backlog](project/backlog.md) lists the parked engineering follow-ups.

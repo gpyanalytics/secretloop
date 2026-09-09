@@ -142,7 +142,9 @@ const TOOLS = [
     name: "secretloop_scan",
     description:
       "Scan a repository's working tree for exposed credentials using SecretLoop's " +
-      "deterministic scanner (103 provider rules plus an entropy pass). Read-only: no " +
+      "deterministic scanner: named credential-format rules with a keyword prescreen, " +
+      "plus a generic high-entropy tier that runs only when the project's " +
+      ".secretloop.json enables it. Read-only: no " +
       "network calls, no writes, no credential is transmitted anywhere. " +
       `Returns redacted values only. ${UNVERIFIED_NOTE} ${AUTHORITY}`,
     inputSchema: {

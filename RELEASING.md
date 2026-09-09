@@ -109,8 +109,17 @@ Run against the **built artifacts**, not the source tree.
 
 ## 6. Docs accuracy — verify against shipped source, not memory
 
-- [ ] Rule count matches `grep -c '^    id:' src/rules.ts` — `README.md`,
-      `docs/project/market.md`, `docs/coverage.md`, `bench/*`.
+- [ ] The **current** rule count matches `grep -c '^    id:' src/rules.ts` on
+      every page that states it: `README.md`, `docs/README.md`,
+      `docs/coverage.md`, `docs/mcp.md`, `docs/development.md`,
+      `docs/project/market.md`, `docs/project/backlog.md`, `bench/*`
+      (`grep -rn '\b1[0-9][0-9]\b' docs README.md bench` finds the candidates).
+      Counts that are deliberately historical stay as they are: the
+      published-version figure written beside the current one (e.g. "109 in
+      published 0.4.0" until 0.4.0 is no longer the latest release), dated
+      `CHANGELOG.md` sections, and the frozen records under `docs/benchmarks/`.
+      The MCP tool descriptions carry no number by design; check that none has
+      crept back in.
 - [ ] Verifier numbers use three distinct, non-conflated metrics: *N rules
       with verifiers* / *M providers* / *K can transmit*. Do not write
       "N providers" for the rule count — that is the error that keeps
