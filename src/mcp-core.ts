@@ -21,6 +21,7 @@
  *  4. Repository content is data. It is never returned unwrapped.
  */
 import { realpathSync, statSync } from "fs";
+import { ArchiveAccounting, countOf, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import * as nodePath from "path";
 import { Finding, ConfidenceTier, redactValue } from "./scanner";
 import { Severity, rulesById } from "./rules";
@@ -112,6 +113,8 @@ export interface ScopeNotes {
   unreadableExcluded?: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped?: number;
+  /** What the scan met in the way of archives, counts only; omitted when none. */
+  archives?: ArchiveAccounting;
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
@@ -123,6 +126,7 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     oversizedExcluded = 0,
     unreadableExcluded = 0,
     apiDocumentsScoped = 0,
+    archives,
   } = notes;
   let out =
     count === 0
@@ -156,6 +160,28 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   }
   if (unreadableExcluded > 0) {
     out += `; ${unreadableExcluded} file(s) not scanned — binary or unreadable`;
+  }
+  // Archives, after every file clause and never folded into one: a member is
+  // not a file, a stopped walk is not a refused member, and a container that
+  // would not open is not an ordinary binary. Reasons live in the structured
+  // object beside this sentence; the sentence carries counts only.
+  if (archives) {
+    const a = archives;
+    const notScanned = countOf(a.members.refused);
+    const notOpened = countOf(a.containersNotOpened);
+    if (a.containersOpened > 0) {
+      out += `; ${a.containersOpened} archive(s) opened — ${a.members.scanned + a.members.empty} member(s) scanned`;
+    }
+    if (notScanned > 0) out += `; ${notScanned} archive member(s) not scanned`;
+    if (a.members.excluded > 0) out += `; ${a.members.excluded} archive member(s) excluded by configuration`;
+    if (a.metadataEntries > 0) out += `; ${a.metadataEntries} archive metadata entry(s) skipped`;
+    if (a.enumeration.incompleteContainers > 0) {
+      out +=
+        `; ${a.enumeration.incompleteContainers} archive(s) not fully enumerated — ` +
+        `${a.enumeration.declaredNotInspected} declared entry(s) not inspected, ` +
+        `${a.enumeration.unknownRemainderContainers} with unknown remainder`;
+    }
+    if (notOpened > 0) out += `; ${notOpened} recognized archive container(s) not opened`;
   }
   return out;
 }
@@ -660,9 +686,15 @@ export function toolScan(input: ScanInput): ToolResult {
     else if (reason === "outside") readOutside++;
     else readUnreadable++;
   };
+  // Archive facts, summed the way the CLI sums them (scanFileList), so the two
+  // surfaces describe the same tree with the same numbers.
+  const archives = emptyArchiveAccounting();
+  const onContainerNotOpened = (reason: "unsupported-feature" | "malformed"): void => {
+    archives.containersNotOpened[reason] = (archives.containersNotOpened[reason] ?? 0) + 1;
+  };
   try {
     if (include.length === 0) {
-      const result = scanWorkspaceScan(root, config, { onSkipped: countSkip });
+      const result = scanWorkspaceScan(root, config, { onSkipped: countSkip, onContainerNotOpened });
       scanned = result.scanned;
       generatedExcluded = result.generatedExcluded;
       walkerOutsideExcluded = result.outsideExcluded;
@@ -682,7 +714,7 @@ export function toolScan(input: ScanInput): ToolResult {
       }).files.filter((rel) => matchers.some((m) => m.test(rel)));
       const files = candidates.filter((rel) => classifyPath(rel, config) === "none");
       generatedExcluded = candidates.length - files.length;
-      scanned = scanFiles(root, files, config, { onSkipped: countSkip });
+      scanned = scanFiles(root, files, config, { onSkipped: countSkip, onContainerNotOpened });
     }
   } catch (err) {
     return fail(`scan failed: ${quoteUntrusted((err as Error).message)}`);
@@ -699,7 +731,9 @@ export function toolScan(input: ScanInput): ToolResult {
   const textByFile = new Map<string, string>();
   for (const s of scanned) {
     if (s.findings.length > 0) textByFile.set(s.path, s.text);
+    if (s.archive) mergeArchiveAccounting(archives, s.archive);
   }
+  const archiveNotes = hasArchiveActivity(archives) ? archives : undefined;
 
   sessions.set(root, {
     root,
@@ -720,6 +754,9 @@ export function toolScan(input: ScanInput): ToolResult {
         // Documents the entropy tier was not run over, as a number beside the
         // sentence that also says it -- the count is metadata, never a path.
         apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
+        // Present only when a container was met, so a scan of a tree without
+        // archives serializes exactly as it did before. Counts only, no paths.
+        ...(archiveNotes ? { archives: archiveNotes } : {}),
         // The one sentence that keeps an empty enumeration from reading as a
         // pass. Word-for-word the CLI's, and pinned to it by test rather than
         // by import — see the note on describeScope above.
@@ -739,6 +776,7 @@ export function toolScan(input: ScanInput): ToolResult {
           apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
           oversizedExcluded: readOversized,
           unreadableExcluded: readUnreadable,
+          archives: archiveNotes,
         })}.`,
       },
       config: describeConfig(root, config),

@@ -106,7 +106,7 @@ test("a normal file finding has no source key at all, and its complete object is
   assert.strictEqual(f.fingerprint, legacyFingerprint("app.ts", "github-token", GH));
 }));
 
-test("the archive counts as ONE scanned file; skipped members are disclosed through the existing reasons", () => withDir((dir) => {
+test("the archive counts as ONE scanned file; member outcomes are counted on it by reason, never as file skips", () => withDir((dir) => {
   const big = Buffer.alloc(1_000_001, 0x61);
   put(dir, "x.zip", buildZip([{ name: "ok.txt", data: ENV }, { name: "big.txt", data: big }, { name: "enc.txt", data: ENV, flags: 1, method: 0 }, { name: "bin.dat", data: Buffer.concat([Buffer.from([0, 1, 2, 3]), ENV]) }]));
   const skips: string[] = [];
@@ -114,7 +114,8 @@ test("the archive counts as ONE scanned file; skipped members are disclosed thro
   assert.strictEqual(scanned.length, 1);
   assert.strictEqual(scanned[0].path, "x.zip");
   assert.strictEqual(scanned[0].findings.length, 1);
-  assert.deepStrictEqual(skips.sort(), ["oversized", "unreadable", "unreadable"]); // big, encrypted, binary
+  assert.deepStrictEqual(skips, [], "big, encrypted and binary are member facts, not file skips");
+  assert.deepStrictEqual(scanned[0].archive!.members, { scanned: 1, empty: 0, excluded: 0, refused: { oversized: 1, encrypted: 1, binary: 1 } });
 }));
 
 // ---------------------------------------------------------------------------
@@ -175,7 +176,9 @@ test("archive inside a member is opaque: depth 1, no findings from the inner arc
   put(dir, "outer.gz.gz", buildGzip(buildGzip(ENV)));
   const skips: string[] = [];
   assert.deepStrictEqual([...scanOne(dir, "outer.zip", cfg, (r) => skips.push(r)), ...scanOne(dir, "outer.tar", cfg, (r) => skips.push(r)), ...scanOne(dir, "outer.gz.gz", cfg, (r) => skips.push(r))], []);
-  assert.deepStrictEqual(skips, ["unreadable", "unreadable", "unreadable"]);
+  assert.deepStrictEqual(skips, [], "an opaque inner archive is a binary member, not a file skip");
+  const binaryMembers = ["outer.zip", "outer.tar", "outer.gz.gz"].map((p) => scanFiles(dir, [p], cfg)[0].archive!.members.refused.binary);
+  assert.deepStrictEqual(binaryMembers, [1, 1, 1]);
 }));
 
 test("generic entropy follows the configured mode inside members", () => withDir((dir) => {

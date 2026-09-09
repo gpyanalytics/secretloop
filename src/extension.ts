@@ -1,4 +1,5 @@
 import * as vscode from "vscode";
+import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import { scanText, maskFindings, Finding } from "./scanner";
 import {
   loadConfig,
@@ -594,9 +595,15 @@ async function scanWorkspace() {
     setting<boolean>("entropyPassEnabled", false)
   );
   const buffers = openBuffers(root);
+  const archiveTotals = emptyArchiveAccounting();
   const { scanned, generatedExcluded, outsideExcluded } = scanWorkspaceScan(root, config, {
     textFor: (p) => buffers.get(p),
+    onContainerNotOpened: (reason) => {
+      archiveTotals.containersNotOpened[reason] = (archiveTotals.containersNotOpened[reason] ?? 0) + 1;
+    },
   });
+  for (const s of scanned) if (s.archive) mergeArchiveAccounting(archiveTotals, s.archive);
+  const archives = hasArchiveActivity(archiveTotals) ? archiveTotals : undefined;
   const apiDocumentsScoped = scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0);
   log(
     `SecretLoop: workspace scan covered ${scanned.length} file(s) under ${root}` +
@@ -605,6 +612,7 @@ async function scanWorkspace() {
       (apiDocumentsScoped > 0
         ? `; ${apiDocumentsScoped} API description document(s) scanned without generic entropy`
         : "") +
+      (archives ? `; ${archives.containersOpened} archive(s) opened` : "") +
       "."
   );
 
@@ -613,7 +621,7 @@ async function scanWorkspace() {
 
   const findings = scanned.flatMap((s) => s.findings);
   vscode.window.showInformationMessage(
-    workspaceScanSummary(findings, scanned.length, generatedExcluded, outsideExcluded, apiDocumentsScoped)
+    workspaceScanSummary(findings, scanned.length, generatedExcluded, outsideExcluded, apiDocumentsScoped, archives)
   );
 }
 
@@ -641,11 +649,12 @@ export function workspaceScanSummary(
   fileCount: number,
   generatedExcluded = 0,
   outsideExcluded = 0,
-  apiDocumentsScoped = 0
+  apiDocumentsScoped = 0,
+  archives?: ArchiveAccounting
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
   // scan differently — the same reason workspace.ts exists at all.
-  const scope = describeScope(fileCount, "file", { generatedExcluded, outsideExcluded, apiDocumentsScoped });
+  const scope = describeScope(fileCount, "file", { generatedExcluded, outsideExcluded, apiDocumentsScoped, archives });
   return findings.length > 0
     ? `SecretLoop: scanned ${scope}. ${livenessCounts(findings)}.`
     : `SecretLoop: no secrets found across ${scope}.`;

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // First, and deliberately: this refuses an unsupported Node before any other
 // module initializes. See src/node-guard.ts — the import order is the mechanism.
+import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import "./node-guard";
 import { writeFileSync, statSync, readFileSync } from "fs";
 import * as path from "path";
@@ -574,12 +575,15 @@ interface ScannedList {
   outside: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped: number;
+  /** Containers met, opened or not, and what happened to their members. Counts only. */
+  archives: ArchiveAccounting;
 }
 
 function scanFileList(root: string, files: string[], config: SecretLoopConfig): ScannedList {
   let oversized = 0;
   let unreadable = 0;
   let outside = 0;
+  const archives = emptyArchiveAccounting();
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
   const scanned = scanFiles(root, files, config, {
@@ -588,13 +592,18 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
       else if (reason === "outside") outside++;
       else unreadable++;
     },
+    onContainerNotOpened: (reason) => {
+      archives.containersNotOpened[reason] = (archives.containersNotOpened[reason] ?? 0) + 1;
+    },
   });
+  for (const s of scanned) if (s.archive) mergeArchiveAccounting(archives, s.archive);
   return {
     findings: scanned.flatMap((s) => s.findings),
     texts: new Map(scanned.map((s) => [s.path, s.text])),
     suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
     fixtureSuppressed: scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0),
     apiDocumentsScoped: scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0),
+    archives,
     oversized,
     unreadable,
     outside,
@@ -707,6 +716,8 @@ async function main(): Promise<void> {
   // The same facts as numbers, for the machine-readable formats.
   let scannedCount: number | undefined;
   let scopeNoun: string | undefined;
+  // Archive accounting for the machine-readable report; only a file scan can have any.
+  let archives: ArchiveAccounting | undefined;
 
   if (args.command === "history") {
     if (!isGitRepo(root)) {
@@ -765,6 +776,7 @@ async function main(): Promise<void> {
     texts = result.texts;
     scopeNoun = args.command === "staged" ? "staged file" : "file";
     scannedCount = result.texts.size;
+    archives = hasArchiveActivity(result.archives) ? result.archives : undefined;
     scope = describeScope(result.texts.size, scopeNoun, {
       generatedExcluded: listed.generatedExcluded,
       suppressed: result.suppressed,
@@ -777,6 +789,7 @@ async function main(): Promise<void> {
       apiDocumentsScoped: result.apiDocumentsScoped,
       oversizedExcluded: result.oversized,
       unreadableExcluded: result.unreadable,
+      archives,
     });
   }
 
@@ -820,6 +833,7 @@ async function main(): Promise<void> {
     scope,
     scannedCount,
     scopeNoun,
+    archives,
   });
   if (args.output) writeFileSync(args.output, report + "\n", "utf8");
   else process.stdout.write(report + "\n");

@@ -15,7 +15,11 @@ import {
   openArchive,
   archiveHeaderAccepts,
   displayPath,
+  emptyArchiveAccounting,
+  ArchiveAccounting,
   ArchiveSource,
+  ContainerKind,
+  ContainerNotOpenedReason,
   ARCHIVE_HEADER_BYTES,
 } from "./archive";
 import { classifyPath } from "./config";
@@ -51,6 +55,11 @@ export interface ScannedFile {
    * file; a per-member sum for an archive. Absent means none were counted.
    */
   apiDocumentsScoped?: number;
+  /**
+   * Set when this file is an opened archive: what happened to its members,
+   * counts only (archive-coverage-disclosure A.1 §5). `containersOpened` is 1.
+   */
+  archive?: ArchiveAccounting & { kind: ContainerKind };
 }
 
 export interface ScanFilesOptions {
@@ -73,6 +82,14 @@ export interface ScanFilesOptions {
    * 500 files reads exactly like one that had 20 files.
    */
   onSkipped?: (reason: SkipReason) => void;
+  /**
+   * Called once per file whose header the archive prefilter accepted but which
+   * the parser declined (ZIP64, corrupt directory, undecodable stream). Such a
+   * file then takes the ordinary text path exactly as before -- scanned as raw
+   * text if it reads as text -- but it is disclosed as a container that was not
+   * opened, never as an ordinary binary skip for the same failure.
+   */
+  onContainerNotOpened?: (reason: ContainerNotOpenedReason) => void;
 }
 
 /** Scans a caller-supplied list — the staged set, say — through the same guards. */
@@ -95,7 +112,11 @@ export function scanFiles(
     // the same non-dereferencing, size-gated read. An archive is scanned as
     // ONE file whose findings come from its members; nothing is extracted.
     const archive = binary ? null : scanArchive(root, relPath, config, options);
-    if (archive) {
+    let unopenedContainer = false;
+    if (archive && "notOpened" in archive) {
+      options.onContainerNotOpened?.(archive.notOpened);
+      unopenedContainer = true;
+    } else if (archive) {
       scanned.push(archive);
       continue;
     }
@@ -121,7 +142,10 @@ export function scanFiles(
           });
           continue;
         }
-        options.onSkipped?.(read.skipped);
+        // A recognised container that would not open has already been disclosed
+        // as such; counting it as an ordinary binary too would report one failure
+        // twice under two names.
+        if (!(unopenedContainer && read.skipped === "unreadable")) options.onSkipped?.(read.skipped);
         continue;
       }
       text = read.text;
@@ -168,8 +192,9 @@ function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
 }
 
 /**
- * One outer archive as a ScannedFile, or null when the path is not a supported
- * archive (the caller then treats it exactly as before).
+ * One outer archive as a ScannedFile; `{ notOpened }` when the file carried
+ * archive magic but the parser declined it; null when the path is not an
+ * archive at all (the caller then treats it exactly as before).
  *
  * Every member goes through the decision a file goes through, in the same
  * order: the PKCS#12 structural detector on its bytes, then the NUL heuristic,
@@ -177,19 +202,35 @@ function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
  * suppression, encoded-v1 decoding and the configured entropy mode with it.
  * The member's display path is what scanText sees as `filePath`, so the
  * project's excludePaths and fixture segments apply to members through the
- * one glob engine that exists. Skipped members are disclosed through the
- * existing skip reasons.
+ * one glob engine that exists. What happened to every member is counted on
+ * the returned file (`archive`), by reason -- never through the ordinary file
+ * skip counter, which describes files.
  */
 function scanArchive(
   root: string,
   relPath: string,
   config: SecretLoopConfig,
   options: ScanFilesOptions
-): ScannedFile | null {
+): ScannedFile | { notOpened: ContainerNotOpenedReason } | null {
   const candidate = readBinaryCandidate(root, relPath, config, archiveHeaderAccepts, ARCHIVE_HEADER_BYTES);
   if (!("bytes" in candidate)) return null;
   const listing = openArchive(candidate.bytes, relPath, config.maxFileSizeBytes);
   if (!listing) return null;
+  if ("notOpened" in listing) return listing;
+
+  const account: ArchiveAccounting & { kind: ContainerKind } = { ...emptyArchiveAccounting(), kind: listing.containerKind };
+  account.containersOpened = 1;
+  account.members.empty = listing.empty;
+  account.members.refused = { ...listing.refused };
+  account.metadataEntries = listing.metadataEntries;
+  if (!listing.enumeration.complete) {
+    account.enumeration.incompleteContainers = 1;
+    account.enumeration.declaredNotInspected = listing.enumeration.declaredNotInspected;
+    // Only a ZIP declares its entry count; a stopped tar walk cannot say how
+    // much it left behind, and the report must not pretend otherwise.
+    account.enumeration.unknownRemainderContainers = listing.containerKind === "zip" ? 0 : 1;
+    if (listing.enumeration.reason) account.enumeration.byReason[listing.enumeration.reason] = 1;
+  }
 
   const findings: Finding[] = [];
   let suppressed = 0;
@@ -203,14 +244,19 @@ function scanArchive(
       member: entry.member,
     };
     const filePath = displayPath(source);
-    if (classifyPath(filePath, config) !== "none") continue;
+    if (classifyPath(filePath, config) !== "none") {
+      account.members.excluded++;
+      continue;
+    }
 
     const container = detectPkcs12Bytes(entry.bytes, filePath, source);
     if (container) findings.push(container);
     if (entry.bytes.subarray(0, 8000).includes(0)) {
-      if (!container) options.onSkipped?.("unreadable");
+      if (container) account.members.scanned++;
+      else account.members.refused.binary = (account.members.refused.binary ?? 0) + 1;
       continue;
     }
+    account.members.scanned++;
     findings.push(
       ...scanText(entry.bytes.toString("utf8"), {
         config,
@@ -224,9 +270,7 @@ function scanArchive(
       })
     );
   }
-  for (let i = 0; i < listing.skipped.oversized; i++) options.onSkipped?.("oversized");
-  for (let i = 0; i < listing.skipped.unreadable; i++) options.onSkipped?.("unreadable");
-  return { path: relPath, text: "", findings, suppressed, fixtureSuppressed, apiDocumentsScoped };
+  return { path: relPath, text: "", findings, suppressed, fixtureSuppressed, apiDocumentsScoped, archive: account };
 }
 
 /** Scans everything in scope for the project, per its own configuration. */
