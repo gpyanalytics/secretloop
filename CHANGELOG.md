@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+### Rules
+
+One new rule — 109 rules to 110. No existing rule ID, threshold, fingerprint
+or output format changed.
+
+- **`encryption-key-assignment`** — a quoted 32-byte symmetric key in
+  canonical base64 (exactly 43 symbols and one `=`) assigned to an identifier
+  ending in `aes…key` (optionally `aes128`/`aes192`/`aes256`, `cbc`/`gcm`),
+  `secretbox…key` or `encryption…key`; high, format-match, no verifier. It
+  takes `generic-api-key-assignment`'s separator and quote grammar whole, adds
+  the same 3.5-bit entropy floor (base64 of thirty-two zero bytes is
+  forty-three `A` and a pad, which the repeated-character placeholder rule
+  cannot see past the pad), and is a named rule: it reports in test and
+  fixture paths at default settings, where the one validated benchmark site it
+  recovers lives. Provider-neutral by design — the identifiers name the same
+  material in Rails, libsodium, Terraform and Helm. With the entropy pass on,
+  a value this rule claims is no longer offered to the entropy tier, so the
+  same line stops being counted as a suppressed generic finding in a fixture
+  path, and with `--include-fixtures` it reports under this rule's identity
+  rather than `generic-high-entropy` (a new fingerprint for that one line).
+  Outside the rule on purpose: bare (unquoted) values, the Kubernetes
+  `EncryptionConfiguration` `secret:` field, hex keys, 16- and 24-byte keys,
+  the URL-safe alphabet and Go raw strings.
+
 ## 0.4.0 — 2026-09-08
 
 **Generic high-entropy scanning is now opt-in.** `entropyPassEnabled` defaults

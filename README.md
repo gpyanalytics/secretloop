@@ -271,12 +271,12 @@ itself.
 
 ## What it does
 
-- **Detect** — 109 detection rules with a keyword prescreen (so a large rule set
+- **Detect** — 110 detection rules with a keyword prescreen (so a large rule set
   stays fast), plus file-level PKCS#12 private-key keystore detection, plus an
   optional generic high-entropy pass for credentials with no recognizable
   format. The PKCS#12 detector reads container structure rather than text, so it
-  is not one of the 109 rules. The entropy pass is off by default and is not one
-  of the 109 rules either — turn it on with `--include-entropy` or
+  is not one of the 110 rules. The entropy pass is off by default and is not one
+  of the 110 rules either — turn it on with `--include-entropy` or
   `"entropyPassEnabled": true`.
 - **Verify, when you ask for it** — 18 of those rules can be checked against
   their provider, covering 15 providers. 17 of the 18 can actually transmit,

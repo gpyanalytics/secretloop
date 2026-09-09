@@ -57,7 +57,7 @@ evidence rather than evidence of absence.
 
 ## Rules and detection (evidence-gated)
 
-Today: **109 rules**; **18** of them have verifiers, covering **15 providers**,
+Today: **110 rules**; **18** of them have verifiers, covering **15 providers**,
 **17** of which can actually transmit. Coverage of the common stack is broad,
 and the gap against gitleaks, GitGuardian and TruffleHog is real but narrower
 than the raw numbers imply — detector *count* is not a quality measure, and

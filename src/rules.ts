@@ -1345,6 +1345,45 @@ export const rules: SecretRule[] = [
     ],
     severity: "high",
   },
+  {
+    id: "encryption-key-assignment",
+    generic: true,
+    description: "Symmetric encryption key assignment (32-byte base64)",
+    // A 32-byte symmetric key in canonical base64 -- exactly 43 symbols and
+    // one `=` -- assigned to an identifier whose tail names it an AES,
+    // secretbox or encryption key. The one validated site the six-repository
+    // benchmark had that no rule reached: a Kubernetes integration fixture's
+    // `oldAESCBCKey = "…"`, hidden from the entropy tier by fixture-path
+    // suppression and from every named rule by its keyword. Provider-neutral
+    // on purpose: `aes_key`, `encryption_key` and `secretbox_key` name the
+    // same material in Rails settings, libsodium bindings, Terraform and Helm,
+    // and nothing here is issued, verified or rotated by Kubernetes.
+    //
+    // generic-api-key-assignment's grammar, taken whole: any identifier
+    // prefix, no suffix (the separator must follow the keyword tail), `:=`
+    // `=` or `:`, the value bracketed by `"` or `'`. Backticks, bare YAML
+    // scalars, the EncryptionConfiguration file's own `secret:` field, hex
+    // keys, 16- and 24-byte keys and the URL-safe alphabet are all outside it
+    // and recorded as such in the contract rather than widened into.
+    //
+    // The optional `128|192|256` token is the most common decoration of an AES
+    // key name and stays inside the `aes…key` family. The 3.5 floor is GAK's
+    // own: the trailing `=` defeats isPlaceholder's repeated-character rule,
+    // so base64 of thirty-two zero bytes -- forty-three `A` and a pad --
+    // would otherwise report as a key. No canonical trailing-bit check: a
+    // lenient decoder accepts a non-canonical value as a working key, so
+    // rejecting it would trade real recall for a precision gain nothing
+    // measured. Contract: secretloop-benchmark/c2-encryption-key-recall-a1.
+    regex:
+      /(?:aes[_.-]?(?:128|192|256)?[_.-]?(?:cbc|gcm)?[_.-]?key|secretbox[_.-]?key|encryption[_.-]?key)["']?\s*(?::=|[:=])\s*["']([A-Za-z0-9+/]{43}=)["']/gi,
+    fullMatch: false,
+    keywords: ["aes", "secretbox", "encryption"],
+    entropy: 3.5,
+    // /EXAMPLE/i is the only DOC_SAMPLE pattern the base64 alphabet can carry;
+    // the rest cannot match a quoted 44-symbol run and cost nothing.
+    allowlist: [...DOC_SAMPLE],
+    severity: "high",
+  },
 ];
 
 /** Case-insensitive placeholder values that should never be flagged, whatever the rule. */

@@ -159,6 +159,8 @@ export const positiveSamples: Record<string, string> = {
   "jwt": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0." + gen(30),
   "bcrypt-hash": "$2b$12$" + gen(53, ALNUM + "./"),
   "generic-api-key-assignment": `api_key = "${gen(28)}"`,
+  // 43 base64 symbols and one pad: the canonical encoding of 32 bytes.
+  "encryption-key-assignment": `aesCBCKey = "${gen(43)}="`,
 };
 
 /** Snippets that must produce zero findings. Each is a real-world FP class. */
