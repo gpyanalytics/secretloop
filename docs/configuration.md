@@ -5,7 +5,7 @@ CLI, the VS Code extension and the MCP server. Only that filename is read; there
 is no fallback to any other name. A documented template ships in the repository
 as `.secretloop.example.json`.
 
-Applies to **published 0.4.0**; keys that exist only on `main` are marked.
+Applies to **published 0.5.0**.
 
 ## Keys
 
@@ -21,7 +21,7 @@ Applies to **published 0.4.0**; keys that exist only on `main` are marked.
 | `entropyPassEnabled` | `false` | Turn on the generic high-entropy tier. Off by default since 0.4.0. |
 | `includeFixtures` | `false` | Report generic-tier findings in test, fixture and example paths. Named rules already report there. |
 | `keyContextRequired` | `false` | Gate quoted generic-entropy findings on a secret-like identifier. Same as `--key-context`. |
-| `includeApiDocumentEntropy` **(main, unreleased)** | `false` | With the entropy tier on, also run it inside recognized OpenAPI, Swagger and AsyncAPI documents. Same as `--include-api-document-entropy`. |
+| `includeApiDocumentEntropy` | `false` | With the entropy tier on, also run it inside recognized OpenAPI, Swagger and AsyncAPI documents. Same as `--include-api-document-entropy`. |
 
 Globs use `*` (never crossing `/`) and `**`. Paths are repo-relative with
 forward slashes.
@@ -29,8 +29,7 @@ forward slashes.
 ## Precedence
 
 For every raise-only switch (`entropyPassEnabled`, `includeFixtures`,
-`keyContextRequired`, `includeGenerated`, and on `main`
-`includeApiDocumentEntropy`):
+`keyContextRequired`, `includeGenerated` and `includeApiDocumentEntropy`):
 
 1. A CLI flag turns the switch **on** for that run.
 2. Otherwise the project file decides.

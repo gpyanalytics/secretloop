@@ -1,6 +1,6 @@
 # 0006 — Archive containers, members, metadata and enumeration are accounted separately from files
 
-**Status:** in 0.5.0, prepared and pending publication (PR #47). **Surfaces:** CLI text, JSON, SARIF,
+**Status:** shipped in 0.5.0 (2026-09-09) (PR #47). **Surfaces:** CLI text, JSON, SARIF,
 MCP, VS Code workspace summary.
 
 ## Decision

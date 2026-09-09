@@ -1,8 +1,7 @@
 # Coverage
 
 What a scan reads, what it deliberately does not, and how it says so. Applies to
-**published 0.4.0**; encoded decoding, archives, API-document scoping and the
-`encryption-key-assignment` rule are **`main`, unreleased**.
+**published 0.5.0**.
 
 ## What is scanned
 
@@ -22,7 +21,7 @@ What a scan reads, what it deliberately does not, and how it says so. Applies to
 
 ## Detection tiers
 
-- **Named rules** — 110 on `main`, 109 in published 0.4.0 — each a
+- **Named rules** — 110, each a
   keyword-prescreened pattern for one credential format, with rule-scoped
   allowlists, optional entropy floors, and the shared placeholder and
   documentation-sample filters. A named finding is a **format match** and
@@ -37,12 +36,12 @@ What a scan reads, what it deliberately does not, and how it says so. Applies to
   counted in fixture paths unless `includeFixtures` is set. It cannot report an
   all-hex or all-digit value at any length, because two-charset strings need
   4.5 bits and hex tops out at 4.0; named rules cover the known hex providers.
-- **`encryption-key-assignment` (main)** — a quoted 32-byte symmetric key in
+- **`encryption-key-assignment`** — a quoted 32-byte symmetric key in
   canonical base64 assigned to an `aes…key`, `secretbox…key` or `encryption…key`
   identifier. High severity, format match, no verifier, entropy floor 3.5.
   Provider-neutral by design. Rule 110.
 
-## Encoded spans (main, unreleased)
+## Encoded spans
 
 Standard base64, hexadecimal and URL percent-encoded runs in a text are decoded
 **once**, strictly, and the named rules run over the decoded text. A run longer
@@ -54,7 +53,7 @@ like any other. Such findings carry a distinct fingerprint, are never
 transmitted for verification, and record which transform produced them. The
 entropy tier is not run over decoded text.
 
-## Archives (main, unreleased)
+## Archives
 
 ZIP, tar, gzip and gzip-wrapped tar containers are opened **in memory, one
 layer deep**, and each member is scanned exactly as a file of the same bytes
@@ -77,7 +76,7 @@ is disclosed as a *recognized archive container not opened* and then takes the
 ordinary text path, so a named-rule value inside it is still reported at the
 file path, without archive provenance.
 
-## API description documents (main, unreleased)
+## API description documents
 
 With the entropy tier on, an OpenAPI, Swagger or AsyncAPI document — identified
 by a `.json`, `.yaml` or `.yml` extension on its own path plus a top-level
@@ -100,15 +99,15 @@ sentence and the JSON `summary` carry:
 | `N finding(s) suppressed by inline directives` | spans a directive removed |
 | `N file(s) resolved outside the scan root` | symlinks whose target is outside |
 | `N generic finding(s) suppressed in test/fixture paths` | entropy-tier findings held back |
-| `N API description document(s) scanned without generic entropy` **(main)** | documents the entropy tier skipped |
+| `N API description document(s) scanned without generic entropy` | documents the entropy tier skipped |
 | `N file(s) not scanned — larger than maxFileSizeBytes` | oversized files |
 | `N file(s) not scanned — binary or unreadable` | binary, unreadable, or a container that also failed the text path |
-| `N archive(s) opened — M member(s) scanned` **(main)** | containers opened, members offered to the scanner |
-| `N archive member(s) not scanned` **(main)** | members refused; reasons in `summary.archives.members.refused` |
-| `N archive member(s) excluded by configuration` **(main)** | members matching `excludePaths` |
-| `N archive metadata entry(s) skipped` **(main)** | tar pax and GNU long-name records, which are not members |
-| `N archive(s) not fully enumerated — D declared entry(s) not inspected, U with unknown remainder` **(main)** | a walk that stopped at a cap, budget, truncation or bad header; ZIP declares its count, tar cannot |
-| `N recognized archive container(s) not opened` **(main)** | containers with archive magic the parser declined |
+| `N archive(s) opened — M member(s) scanned` | containers opened, members offered to the scanner |
+| `N archive member(s) not scanned` | members refused; reasons in `summary.archives.members.refused` |
+| `N archive member(s) excluded by configuration` | members matching `excludePaths` |
+| `N archive metadata entry(s) skipped` | tar pax and GNU long-name records, which are not members |
+| `N archive(s) not fully enumerated — D declared entry(s) not inspected, U with unknown remainder` | a walk that stopped at a cap, budget, truncation or bad header; ZIP declares its count, tar cannot |
+| `N recognized archive container(s) not opened` | containers with archive magic the parser declined |
 
 The structured object behind the archive clauses (`summary.archives` in JSON,
 `invocations[0].properties.archives` in SARIF, `scope.archives` over MCP)

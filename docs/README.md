@@ -1,10 +1,8 @@
 # SecretLoop documentation
 
-One authoritative page per topic. Each page states which version a fact applies
-to: **published 0.4.0** (npm and the extension channels) or **`main`, unreleased**
-(merged after the 0.4.0 tag and not yet in any package — this is the 0.5.0
-candidate). The table at the end of this page is the authoritative summary;
-each page repeats the distinction where it matters.
+One authoritative page per topic. Every page describes **published 0.5.0**, the
+current release on npm and the extension channels. The table at the end of this
+page summarises what changed from 0.4.0.
 
 ## Getting started
 
@@ -56,19 +54,19 @@ each page repeats the distinction where it matters.
 
 ## What's in main and what's published
 
-Release-progress information, current as of **2026-09-09**. This page is
-repository-only: it is not shipped in the npm package or the VS Code extension,
-so it can carry status that would go stale inside a published artifact.
+Release status, current as of **2026-09-09**. This page is repository-only: it
+is not shipped in the npm package or the VS Code extension, so it can carry
+status that would go stale inside a published artifact.
 
-npm and the VS Code Marketplace serve **0.4.0** (2026-09-08). Everything in the
-0.5.0 column is merged, tested and benchmarked and is **not in any published
-package**: 0.5.0 is prepared and pending publication. Rows marked *refused for
+npm, Open VSX and the VS Code Marketplace all serve **0.5.0** (2026-09-09),
+which is also what `main` carries. The previous release was 0.4.0 (2026-09-08).
+Rows marked *refused for
 verification* mean a finding of that kind is never sent to a provider on any
 surface; a finding matched by a supported plaintext rule can still be
 transmitted after the switch or consent workflow described in
 [verification](verification.md).
 
-| capability | 0.4.0 (published) | 0.5.0 (prepared, unpublished) |
+| capability | 0.4.0 (previous) | 0.5.0 (published) |
 |---|---|---|
 | Named rules | 109 | 110 (`encryption-key-assignment`) |
 | Generic entropy tier | opt-in (`--include-entropy`) | opt-in; not run over OpenAPI / Swagger / AsyncAPI documents unless `--include-api-document-entropy` |

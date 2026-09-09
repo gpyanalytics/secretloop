@@ -2,7 +2,7 @@
 
 Every integration runs the same engine with the same `.secretloop.json`. This
 page collects the wiring; the semantics are in the [CLI reference](cli.md) and
-the [MCP server](mcp.md) page. Applies to **published 0.4.0**.
+the [MCP server](mcp.md) page. Applies to **published 0.5.0**.
 
 ## CI
 

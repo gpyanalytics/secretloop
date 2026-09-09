@@ -1,6 +1,6 @@
 # 0003 — Archives are opened in memory, one layer deep, under frozen limits
 
-**Status:** in 0.5.0, prepared and pending publication (PR #44). **Surfaces:** every scan surface.
+**Status:** shipped in 0.5.0 (2026-09-09) (PR #44). **Surfaces:** every scan surface.
 
 ## Decision
 

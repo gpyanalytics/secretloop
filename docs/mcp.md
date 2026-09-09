@@ -6,8 +6,7 @@ SecretLoop**: no model, no API key, no LLM dependency. The assistant does the
 explaining; the deterministic scanner does the finding, and only the scanner
 decides what a finding is.
 
-Applies to **published 0.4.0**; the archive-member and encoded-finding
-behaviour is **`main`, unreleased**. Client configurations are in
+Applies to **published 0.5.0**. Client configurations are in
 [Integrations](integrations.md#mcp-clients).
 
 ## Starting it
@@ -35,9 +34,9 @@ The first four never write, rotate, change configuration or contact anyone.
 `secretloop_verify` is the only tool that can send anything, and only after the
 consent gate below is satisfied.
 
-The `secretloop_scan` description the server embeds names no rule count
-(**main**, unreleased; the published 0.4.0 server still says "103 provider
-rules", which was stale when it shipped). It describes the scanner as named
+The `secretloop_scan` description the server embeds names no rule count (the
+0.4.0 server said "103 provider rules", which was stale when it shipped). It
+describes the scanner as named
 credential-format rules with a keyword prescreen plus a generic high-entropy
 tier that runs only when the project's `.secretloop.json` enables it — the tool
 has no input of its own for the tier. The current count is in
@@ -69,7 +68,7 @@ has no input of its own for the tier. The current count is in
   a rev-range is made of, never a leading `-`, so no git option can be smuggled
   through `revRange`.
 
-## Archive members and encoded findings (main, unreleased)
+## Archive members and encoded findings
 
 On `main` the scanner opens archives one layer deep and decodes base64, hex and
 percent-encoded spans once. Over MCP those findings behave as follows:

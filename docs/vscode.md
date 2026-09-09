@@ -1,8 +1,7 @@
 # VS Code extension
 
 The extension runs the same engine as the CLI on the file you are editing, on
-save, and on demand across the workspace. Applies to **published 0.4.0**;
-behaviour that exists only on `main` is marked **(main, unreleased)**.
+save, and on demand across the workspace. Applies to **published 0.5.0**.
 
 ## Findings as diagnostics
 
@@ -12,7 +11,7 @@ behaviour that exists only on `main` is marked **(main, unreleased)**.
   error. A **confirmed dead** credential is reported quietly and last.
 - The hover states which of those happened and what to do next.
 - Scans run on save (`secretloop.autoScanOnSave`) and from the Command Palette.
-- **(main, unreleased)** A finding inside an archive member is anchored to the
+- A finding inside an archive member is anchored to the
   archive file itself, at its start, and the message names the member and the
   member-relative line, because no open document holds the member's text.
 
@@ -39,7 +38,7 @@ the IAM console unless admin credentials for rotation are stored, in which case
 the leaked key is deactivated with an IAM call. This is a VS Code action, not a
 CLI or MCP capability.
 
-**(main, unreleased)** No rotation and no `.env` extraction is offered for an
+No rotation and no `.env` extraction is offered for an
 archive-member finding: there is no document to rewrite and archives are never
 rewritten.
 
