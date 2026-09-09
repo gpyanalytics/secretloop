@@ -297,28 +297,236 @@ test("an already-aborted scan consumes nothing", async () => {
   });
 });
 
-test("cancelling mid-scan stops it well short of the end", async () => {
-  // Merely stopping consumption leaves git log -p reading pack files on a
-  // monorepo long after the user believes they stopped it, so cancel kills the
-  // process — which shows up as the scan never reaching the last commit.
+/**
+ * A history large enough that `git log -p` cannot be delivered in one chunk:
+ * ~126 kB over 40 commits, against a 64 kB pipe. The newest commit carries the
+ * credential, so it is the first one parsed and lands before the abort.
+ */
+function buildCancelFixture(git: (...a: string[]) => void, dir: string): void {
+  for (let i = 0; i < 40; i++) {
+    writeFileSync(path.join(dir, `f${i}.js`), `const v = ${i};\n`.repeat(200));
+    git("add", "-A");
+    git("commit", "-qm", `commit ${i}`);
+  }
+  writeFileSync(path.join(dir, "leak.js"), `const t = "${TOKEN}";\n`);
+  git("add", "-A");
+  git("commit", "-qm", "the newest commit, parsed first");
+}
+
+test("cancelling stops progress at the abort point, exactly", async () => {
+  // The old assertion was `reached < 40`, which is a proxy for "SIGTERM
+  // truncated git's output" and holds only when the kill wins a race against
+  // git writing the rest. Whenever git finished first the parser reached all
+  // 40 and the test failed, which is what CI saw once. Cancellation's promise
+  // is that the scan stops, so that is what is asserted here — exactly.
   await withRepo(async (dir, git) => {
-    for (let i = 0; i < 40; i++) {
-      writeFileSync(path.join(dir, `f${i}.js`), `const v = ${i};\n`.repeat(200));
-      git("add", "-A");
-      git("commit", "-qm", `commit ${i}`);
-    }
+    buildCancelFixture(git, dir);
     const controller = new AbortController();
+    let calls = 0;
     let reached = 0;
+    let afterAbort = 0;
     await scanHistory({
       config: mergeConfig({}),
       repoRoot: dir,
       signal: controller.signal,
       onProgress: (commits) => {
+        calls++;
         reached = commits;
-        if (commits >= 2) controller.abort();
+        if (controller.signal.aborted) afterAbort++;
+        if (commits >= 2 && !controller.signal.aborted) controller.abort();
       },
     });
-    assert.ok(reached < 40, `expected to stop early, reached ${reached} of 40`);
+    assert.ok(controller.signal.aborted, "the fixture never triggered the abort it is testing");
+    assert.strictEqual(reached, 2, `expected to stop at the abort point, reached ${reached}`);
+    assert.strictEqual(calls, 2, `expected exactly two progress callbacks, saw ${calls}`);
+    assert.strictEqual(afterAbort, 0, `${afterAbort} progress callback(s) fired after abort`);
+  });
+});
+
+test("neither the rest of the delivered chunk nor later chunks resume parsing", async () => {
+  // The abort fires inside the per-line loop of one chunk, and more chunks
+  // follow it. Both paths must stop: the control below proves the scan really
+  // does have 41 commits to deliver when it is not cancelled.
+  await withRepo(async (dir, git) => {
+    buildCancelFixture(git, dir);
+    const full = await scanHistory({ config: mergeConfig({}), repoRoot: dir });
+    let fullCommits = 0;
+    await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      onProgress: (commits) => (fullCommits = commits),
+    });
+    assert.strictEqual(fullCommits, 41, `control: the uncancelled scan should see 41 commits, saw ${fullCommits}`);
+
+    const controller = new AbortController();
+    let reached = 0;
+    const partial = await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      signal: controller.signal,
+      onProgress: (commits) => {
+        reached = commits;
+        if (commits >= 2 && !controller.signal.aborted) controller.abort();
+      },
+    });
+    assert.strictEqual(reached, 2, `parsing continued past the abort: reached ${reached} of 41`);
+    // The partial result is a sub-multiset of the full one, compared as whole
+    // objects rather than by count or by fingerprint alone.
+    const remaining = new Map<string, number>();
+    for (const f of full) {
+      const k = JSON.stringify(f);
+      remaining.set(k, (remaining.get(k) ?? 0) + 1);
+    }
+    for (const f of partial) {
+      const k = JSON.stringify(f);
+      const n = remaining.get(k) ?? 0;
+      assert.ok(n > 0, `a cancelled scan invented a finding absent from the full scan: ${f.ruleId}`);
+      remaining.set(k, n - 1);
+    }
+  });
+});
+
+test("a finding parsed before the abort survives in the partial result", async () => {
+  await withRepo(async (dir, git) => {
+    buildCancelFixture(git, dir);
+    const controller = new AbortController();
+    const partial = await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      signal: controller.signal,
+      onProgress: (commits) => {
+        if (commits >= 2 && !controller.signal.aborted) controller.abort();
+      },
+    });
+    assert.ok(
+      partial.some((f) => f.value === TOKEN),
+      "cancelling discarded a finding the scan had already parsed"
+    );
+  });
+});
+
+/**
+ * Delivery-controlled cancellation.
+ *
+ * The real-git tests above prove the observable contract but cannot control how
+ * git's output is chunked, so they cannot show *which* guard stopped the scan.
+ * This one drives the same production code with delivery pinned: one chunk that
+ * continues past the abort point, a second chunk delivered afterwards, and a
+ * trailing partial line left in the carry.
+ *
+ * `spawn` is a named import in history.ts, so the call reads the property from
+ * the module object each time; replacing it here needs no seam in the source and
+ * adds nothing to the public API. It is restored in `finally`.
+ */
+function fakeGit(killed: string[]): { child: any; deliver: (chunk: string) => void; close: () => void } {
+  const { EventEmitter } = require("events") as typeof import("events");
+  const child: any = new EventEmitter();
+  child.stdout = new EventEmitter();
+  child.stdout.setEncoding = () => undefined;
+  child.stderr = new EventEmitter();
+  child.stderr.setEncoding = () => undefined;
+  child.kill = (signal: string) => {
+    killed.push(signal);
+    return true;
+  };
+  return {
+    child,
+    deliver: (chunk: string) => child.stdout.emit("data", chunk),
+    close: () => child.emit("close", null, "SIGTERM"),
+  };
+}
+
+/** A distinct, correctly shaped token per commit; built here, never a stored literal. */
+const tokenN = (n: number) => `ghp_${"0123456789abcdefghijklmnopqrstuvwxyzA".slice(0, 35)}${n}`;
+
+test("cancelling stops the rest of the delivered chunk, later chunks and the carry", async () => {
+  const cp = require("child_process") as typeof import("child_process");
+  const realSpawn = cp.spawn;
+  const killed: string[] = [];
+  const fake = fakeGit(killed);
+  (cp as { spawn: unknown }).spawn = () => fake.child;
+  try {
+    await withRepo(async (dir) => {
+      const hunk = (file: string, value: string) =>
+        [
+          `diff --git a/${file} b/${file}`,
+          "--- /dev/null",
+          `+++ b/${file}`,
+          "@@ -0,0 +1,1 @@",
+          `+const t = "${value}";`,
+        ].join("\n");
+
+      // One chunk that keeps going after the abort: commit 2's header triggers
+      // it, and commits 3-6 follow in the same delivery.
+      const chunk1 =
+        [
+          commitHeader("c1".padEnd(12, "0"), "first"),
+          hunk("first.js", tokenN(1)),
+          commitHeader("c2".padEnd(12, "0"), "second"),
+          hunk("second.js", tokenN(2)),
+          commitHeader("c3".padEnd(12, "0"), "third"),
+          hunk("third.js", tokenN(3)),
+          commitHeader("c4".padEnd(12, "0"), "fourth"),
+          hunk("fourth.js", tokenN(4)),
+        ].join("\n") + `\n+const carried = "${tokenN(9)}";`; // no trailing newline: this stays in carry
+      const chunk2 =
+        [commitHeader("c5".padEnd(12, "0"), "fifth"), hunk("fifth.js", tokenN(5))].join("\n") + "\n";
+
+      const controller = new AbortController();
+      let calls = 0;
+      const pending = scanHistory({
+        config: mergeConfig({}),
+        repoRoot: dir,
+        signal: controller.signal,
+        onProgress: (commits) => {
+          calls++;
+          if (commits >= 2 && !controller.signal.aborted) controller.abort();
+        },
+      });
+      // Handlers are attached synchronously after spawn; deliver on the next tick.
+      await new Promise((r) => setImmediate(r));
+      fake.deliver(chunk1);
+      fake.deliver(chunk2);
+      fake.close();
+      const findings = await pending;
+      const values = findings.map((f) => f.value);
+
+      assert.ok(controller.signal.aborted, "the fixture never aborted");
+      assert.strictEqual(calls, 2, `expected exactly two progress callbacks, saw ${calls}`);
+      assert.ok(values.includes(tokenN(1)), "a finding parsed before the abort was discarded");
+      // The rest of the chunk the abort landed in.
+      for (const n of [3, 4]) {
+        assert.ok(!values.includes(tokenN(n)), `commit ${n} was parsed after the abort, from the same chunk`);
+      }
+      // A chunk delivered after cancellation.
+      assert.ok(!values.includes(tokenN(5)), "a chunk delivered after the abort was parsed");
+      // The trailing partial line: the carry must not be parsed at close either.
+      assert.ok(!values.includes(tokenN(9)), "the carried partial line was parsed after cancellation");
+      assert.deepStrictEqual(killed, ["SIGTERM"], `expected one SIGTERM, saw ${JSON.stringify(killed)}`);
+    });
+  } finally {
+    (cp as { spawn: unknown }).spawn = realSpawn;
+  }
+});
+
+test("cancelling removes the abort listener it registered", async () => {
+  const { getEventListeners } = require("events") as typeof import("events");
+  await withRepo(async (dir, git) => {
+    buildCancelFixture(git, dir);
+    const controller = new AbortController();
+    await scanHistory({
+      config: mergeConfig({}),
+      repoRoot: dir,
+      signal: controller.signal,
+      onProgress: (commits) => {
+        if (commits >= 2 && !controller.signal.aborted) controller.abort();
+      },
+    });
+    assert.strictEqual(
+      getEventListeners(controller.signal, "abort").length,
+      0,
+      "the abort listener outlived the scan"
+    );
   });
 });
 

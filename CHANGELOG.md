@@ -36,6 +36,20 @@ that heading below.
   Detection, fingerprints, verification, archive handling, the CLI and the MCP
   server are unchanged.
 
+### History scanning
+
+- **Cancelling a history scan now stops the parsing too.** Aborting already
+  killed the `git log` process and resolved with the partial result, but
+  whatever git had written before dying was still parsed, so progress kept being
+  reported for a scan the caller had stopped — up to the entire history when git
+  finished before the consumer read it. The stdout handler now ignores chunks
+  delivered after the abort and stops at the line the abort fired on, discarding
+  the partial trailing line. Findings parsed before the abort are still returned,
+  the process is still terminated, the promise still resolves rather than
+  rejecting, and an uncancelled scan is unchanged. This also removes the timing
+  dependence from the one test that had flaked in CI: it can now assert the
+  exact commit count instead of "fewer than the whole history".
+
 ## 0.5.0 — 2026-09-09
 
 Published to npm, Open VSX and the VS Code Marketplace on 2026-09-09 from

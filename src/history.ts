@@ -222,13 +222,29 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
-      if (failed) return;
+      // `cancelled` as well as `failed`: SIGTERM stops git from producing more
+      // output, but whatever it already wrote is still delivered, and parsing it
+      // would keep reporting progress for a scan the caller has stopped. That is
+      // also what made the cancellation test timing-dependent -- it could only
+      // assert "fewer commits than the whole history", which held when the kill
+      // won a race against git's remaining writes and failed when it did not.
+      if (failed || cancelled) return;
       try {
         // Split on newlines as chunks arrive, carrying the partial last line
         // forward. Nothing larger than one chunk is ever held in memory.
         const lines = (carry + chunk).split("\n");
         carry = lines.pop() ?? "";
-        for (const line of lines) parser.push(line);
+        for (const line of lines) {
+          parser.push(line);
+          // The abort listener runs synchronously from inside onProgress, which
+          // parser.push calls, so cancellation can begin part-way through this
+          // very chunk. Stop at that line rather than finishing the batch, and
+          // drop the partial line: nothing more of this stream will be read.
+          if (cancelled) {
+            carry = "";
+            break;
+          }
+        }
       } catch (err) {
         fail(err);
       }
