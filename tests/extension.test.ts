@@ -17,10 +17,12 @@ import {
 } from "../src/extension";
 import { Finding, UnknownReason } from "../src/scanner";
 import { mergeConfig } from "../src/config";
+import { scanWorkspaceScan } from "../src/workspace";
+import { emptyArchiveAccounting } from "../src/archive";
 import { UNKNOWN_REASONS } from "../src/report";
 import { MigrationOutcome } from "../src/rotate";
 import { DiagnosticSeverity, setConfiguration, resetConfiguration } from "./stubs/vscode";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
 import { test, suite, finish, assert } from "./harness";
@@ -625,6 +627,258 @@ test("the editor setting cannot widen an unrelated project policy", () => {
     assert.strictEqual(config.entropyThreshold, 5.5, "project threshold must win");
     assert.strictEqual(config.entropyPassEnabled, false, "project opt-out must win");
   });
+});
+
+
+// ---------------------------------------------------------------------------
+suite("\nextension.ts — secretloop.excludePaths reaches the walk");
+
+/**
+ * The same defect class as entropyPassEnabled above: the setting was declared
+ * in package.json and never read, so a user could exclude a path in editor
+ * settings, see no error, and have the files scanned anyway.
+ *
+ * These drive the real editor configuration builder and the real traversal, not
+ * a hand-built ScanConfig: effectiveConfig reads the setting through the same
+ * `setting<T>` helper the extension uses at run time, and scanWorkspaceScan is
+ * the walk every editor entry point runs.
+ *
+ * Fixture directories are deliberately neutral. `vendor/` and `dist/` are in
+ * baseExcludePaths, so a test using them would pass without the fix.
+ */
+function excludeFixture(project: object | null): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-ext-excl-"));
+  mkdirSync(path.join(dir, "reports"), { recursive: true });
+  mkdirSync(path.join(dir, "notes"), { recursive: true });
+  writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n", "utf8");
+  // Built at run time from the corpus rather than written as a literal.
+  writeFileSync(path.join(dir, "reports", "lib.js"), `const t = "${positiveSamples["github-token"]}";\n`, "utf8");
+  writeFileSync(path.join(dir, "notes", "memo.js"), `const t = "${positiveSamples["github-token"]}";\n`, "utf8");
+  if (project !== null) writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify(project), "utf8");
+  return dir;
+}
+
+function withExcludeFixture(project: object | null, run: (dir: string) => void): void {
+  const dir = excludeFixture(project);
+  try {
+    run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The setting as VS Code reports it, package default included. */
+function setExcludeSetting(entry: { defaultValue?: unknown; globalValue?: unknown; workspaceValue?: unknown; workspaceFolderValue?: unknown }): void {
+  resetConfiguration();
+  setConfiguration("secretloop", "excludePaths", entry);
+}
+
+/** Repo-relative paths the walk actually reads, through the editor's own config. */
+function walked(dir: string): string[] {
+  return scanWorkspaceScan(dir, effectiveConfig(dir, 4.3, false))
+    .scanned.map((f) => f.path)
+    .sort();
+}
+
+test("a VS Code setting excludes an otherwise scanned file", () => {
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+  withExcludeFixture(null, (dir) => {
+    const files = walked(dir);
+    assert.ok(!files.includes("reports/lib.js"), `the setting did not exclude it: ${files.join(", ")}`);
+    assert.ok(files.includes("app.js"), "an unrelated file stopped being scanned");
+  });
+});
+
+test("an unrelated file keeps its finding when the setting excludes another path", () => {
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+  withExcludeFixture(null, (dir) => {
+    const scanned = scanWorkspaceScan(dir, effectiveConfig(dir, 4.3, false)).scanned;
+    const notes = scanned.find((f) => f.path === "notes/memo.js");
+    assert.ok(notes, "notes/memo.js was excluded too");
+    assert.ok(
+      notes.findings.some((f) => f.ruleId === "github-token"),
+      "the planted finding outside the excluded path was lost"
+    );
+  });
+});
+
+test("a project-file exclusion is still honoured", () => {
+  setExcludeSetting({ defaultValue: [] });
+  withExcludeFixture({ excludePaths: ["reports/**"] }, (dir) => {
+    assert.ok(!walked(dir).includes("reports/lib.js"), "the project file stopped excluding");
+  });
+});
+
+test("the editor setting and the project file both apply", () => {
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["notes/**"] });
+  withExcludeFixture({ excludePaths: ["reports/**"] }, (dir) => {
+    const files = walked(dir);
+    assert.ok(!files.includes("reports/lib.js"), "the project-file exclusion was dropped");
+    assert.ok(!files.includes("notes/memo.js"), "the editor exclusion was dropped");
+    assert.ok(files.includes("app.js"), "an unrelated file stopped being scanned");
+  });
+});
+
+test("the editor setting cannot un-exclude what the project file excluded", () => {
+  // Raise-only, the same contract the CLI flags follow.
+  setExcludeSetting({ defaultValue: [], workspaceValue: [] });
+  withExcludeFixture({ excludePaths: ["reports/**"] }, (dir) => {
+    assert.ok(!walked(dir).includes("reports/lib.js"), "an empty editor list widened the scan");
+  });
+});
+
+test("no setting leaves the walk exactly as it was", () => {
+  setExcludeSetting({ defaultValue: [] });
+  withExcludeFixture(null, (dir) => {
+    const files = walked(dir);
+    assert.ok(files.includes("reports/lib.js") && files.includes("notes/memo.js") && files.includes("app.js"),
+      `default settings changed the walk: ${files.join(", ")}`);
+  });
+});
+
+test("the resolved value applies to every folder of a multi-root workspace", () => {
+  // secretloop.excludePaths is declared without a scope, so VS Code resolves it
+  // at window scope: one resolved list, applied to each folder alike. Per-folder
+  // overrides would need a scope change, which this fix deliberately does not make.
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+  withExcludeFixture(null, (a) => {
+    withExcludeFixture(null, (b) => {
+      for (const dir of [a, b]) {
+        assert.ok(!walked(dir).includes("reports/lib.js"), "a folder did not receive the resolved list");
+      }
+    });
+  });
+});
+
+test("changing the setting changes the next scan", () => {
+  withExcludeFixture(null, (dir) => {
+    setExcludeSetting({ defaultValue: [] });
+    assert.ok(walked(dir).includes("reports/lib.js"), "precondition: the file is scanned with no setting");
+    setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+    assert.ok(!walked(dir).includes("reports/lib.js"), "the next scan did not pick the new setting up");
+  });
+});
+
+test("the no-workspace branch reads the setting too", () => {
+  setExcludeSetting({ defaultValue: [], globalValue: ["reports/**"] });
+  assert.ok(
+    effectiveConfig(undefined, 4.3, false).excludePaths.includes("reports/**"),
+    "effectiveConfig(undefined) dropped the editor exclusions"
+  );
+});
+
+test("every editor entry point builds its config through the same builder", () => {
+  // Structural: the read lives in configForFolder, so scanWorkspace, the staged
+  // scan and scanDocument all inherit it. A future caller cannot forget to pass it.
+  const { readFileSync: read } = require("fs") as typeof import("fs");
+  const body = read(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  const builders = body.match(/configForFolder\(/g) ?? [];
+  assert.ok(builders.length >= 4, `expected the three callers plus the definition, saw ${builders.length}`);
+  // The read lives in the builder, not at the call sites, so scanWorkspace, the
+  // staged scan and scanDocument all inherit it and a new caller cannot omit it.
+  const start = body.indexOf("function configForFolder(");
+  const end = body.indexOf("\nfunction ", start + 1);
+  const builderBody = body.slice(start, end === -1 ? undefined : end);
+  assert.match(builderBody, /editorExcludePaths\(\)/, "configForFolder does not read the setting");
+  assert.match(body, /function editorExcludePaths\(\)[\s\S]{0,400}setting<[^>]*>\("excludePaths"/,
+    "editorExcludePaths does not go through the resolved VS Code setting");
+});
+
+
+// ---------------------------------------------------------------------------
+suite("\nextension.ts — the workspace summary discloses suppressions");
+
+/**
+ * The CLI scope sentence and the MCP `scope` object both report inline and
+ * fixture suppressions; the editor summary did not, although workspace.ts
+ * already carries both counters on every ScannedFile. A scan that silently
+ * dropped findings read exactly like one with nothing to drop.
+ *
+ * Wording and clause order are describeScope's, not this test's: the assertions
+ * below pin the exact sentences the CLI already emits.
+ */
+const INLINE_CLAUSE = (n: number) => `; ${n} finding(s) suppressed by inline directives`;
+const FIXTURE_CLAUSE = (n: number) =>
+  `; ${n} generic finding(s) suppressed in test/fixture paths (--include-fixtures to report them)`;
+
+test("inline suppressions alone are disclosed, with the exact count", () => {
+  const summary = workspaceScanSummary([], 4, 0, 0, 0, undefined, 2, 0);
+  assert.ok(summary.includes(INLINE_CLAUSE(2)), `missing the inline clause: ${summary}`);
+  assert.ok(!summary.includes("suppressed in test/fixture paths"), "a fixture clause appeared from nowhere");
+  assert.strictEqual(summary, `SecretLoop: no secrets found across 4 file(s)${INLINE_CLAUSE(2)}.`);
+});
+
+test("fixture suppressions alone are disclosed, with the exact count", () => {
+  const summary = workspaceScanSummary([], 4, 0, 0, 0, undefined, 0, 3);
+  assert.ok(summary.includes(FIXTURE_CLAUSE(3)), `missing the fixture clause: ${summary}`);
+  assert.ok(!summary.includes("inline directives"), "an inline clause appeared from nowhere");
+  assert.strictEqual(summary, `SecretLoop: no secrets found across 4 file(s)${FIXTURE_CLAUSE(3)}.`);
+});
+
+test("both suppression kinds appear together, in describeScope's order", () => {
+  const summary = workspaceScanSummary([], 4, 0, 0, 0, undefined, 2, 3);
+  const inline = summary.indexOf(INLINE_CLAUSE(2));
+  const fixture = summary.indexOf(FIXTURE_CLAUSE(3));
+  assert.ok(inline > 0 && fixture > 0, `a clause is missing: ${summary}`);
+  assert.ok(inline < fixture, "inline must precede fixture, as the CLI orders them");
+});
+
+test("zero counts add no clause and leave the sentence byte-identical", () => {
+  const before = workspaceScanSummary([], 4, 0, 0, 0, undefined);
+  const withZeros = workspaceScanSummary([], 4, 0, 0, 0, undefined, 0, 0);
+  assert.strictEqual(withZeros, before, "zero counts changed the sentence");
+  assert.strictEqual(withZeros, "SecretLoop: no secrets found across 4 file(s).");
+});
+
+test("suppression clauses coexist with the API-document and archive clauses", () => {
+  const archives = { ...emptyArchiveAccounting(), containersOpened: 1, membersScanned: 2 };
+  const summary = workspaceScanSummary([], 4, 0, 0, 5, archives, 2, 3);
+  for (const part of [INLINE_CLAUSE(2), FIXTURE_CLAUSE(3), "5 API description document(s)", "1 archive(s) opened"]) {
+    assert.ok(summary.includes(part), `missing ${part} in: ${summary}`);
+  }
+  // Ordering is describeScope's: inline, fixture, api documents, archives.
+  assert.ok(
+    summary.indexOf(INLINE_CLAUSE(2)) < summary.indexOf(FIXTURE_CLAUSE(3)) &&
+      summary.indexOf(FIXTURE_CLAUSE(3)) < summary.indexOf("5 API description document(s)") &&
+      summary.indexOf("5 API description document(s)") < summary.indexOf("1 archive(s) opened"),
+    `clause order changed: ${summary}`
+  );
+});
+
+test("the totals aggregate across scanned files, over the real scan population", () => {
+  // Two files, each with one inline-suppressed finding: the caller sums per-file
+  // counters exactly as the MCP scope object does.
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-ext-supp-"));
+  try {
+    const token = positiveSamples["github-token"];
+    writeFileSync(path.join(dir, "a.js"), `const t = "${token}"; // secretloop:allow\n`, "utf8");
+    writeFileSync(path.join(dir, "b.js"), `const t = "${token}"; // gitleaks:allow\n`, "utf8");
+    writeFileSync(path.join(dir, "c.js"), "const ok = 1;\n", "utf8");
+    const scanned = scanWorkspaceScan(dir, mergeConfig({})).scanned;
+    const suppressed = scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0);
+    const fixtureSuppressed = scanned.reduce((n, f) => n + (f.fixtureSuppressed ?? 0), 0);
+    assert.strictEqual(suppressed, 2, "the per-file inline counters did not add up");
+    assert.strictEqual(fixtureSuppressed, 0, "nothing should be fixture-suppressed here");
+    const findings = scanned.flatMap((f) => f.findings);
+    assert.strictEqual(findings.length, 0, "the suppressed findings leaked into the report");
+    const summary = workspaceScanSummary(findings, scanned.length, 0, 0, 0, undefined, suppressed, fixtureSuppressed);
+    assert.ok(summary.includes(INLINE_CLAUSE(2)), `the aggregate did not reach the sentence: ${summary}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the workspace command feeds both totals into the summary", () => {
+  // Structural, in the manner of the clipboard test above: the reduce has to
+  // exist at the call site, or the formatter is fed zeros for ever.
+  const { readFileSync: read } = require("fs") as typeof import("fs");
+  const body = read(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  const start = body.indexOf("async function scanWorkspace()");
+  const end = body.indexOf("\nasync function ", start + 1);
+  const scanBody = body.slice(start, end === -1 ? undefined : end);
+  assert.match(scanBody, /\(s\.suppressed \?\? 0\)/, "scanWorkspace does not total the inline suppressions");
+  assert.match(scanBody, /\(s\.fixtureSuppressed \?\? 0\)/, "scanWorkspace does not total the fixture suppressions");
+  assert.match(scanBody, /workspaceScanSummary\([\s\S]{0,200}suppressed/, "the totals never reach the summary");
 });
 
 finish();

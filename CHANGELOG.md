@@ -1,5 +1,55 @@
 # Changelog
 
+## Unreleased
+
+**Not in any published package.** Published 0.5.0 behaves as described under
+that heading below.
+
+### VS Code
+
+- **The workspace-scan summary discloses suppressed findings.** The CLI scope
+  sentence and the MCP `scope` object both report findings dropped by an inline
+  `secretloop:allow` or `gitleaks:allow` directive, and generic-tier findings
+  suppressed in test and fixture paths. The editor summary reported neither,
+  although the per-file counters were already carried through the shared
+  workspace scan, so a scan that silently dropped findings read exactly like one
+  with nothing to drop. **Scan Entire Workspace** now totals both counters and
+  passes them to the same formatter the CLI uses, so the clauses, their wording
+  and their order are identical across the three surfaces, and a zero count
+  still prints nothing. No finding, fingerprint or suppression decision changed.
+- **`secretloop.excludePaths` is now read.** The setting has been declared in
+  the extension manifest since it was added, and nothing consumed it: a user
+  could add a glob in editor settings, get no error, and watch the files be
+  scanned anyway. The editor's configuration builder now resolves it through
+  VS Code and concatenates it onto the exclusions already in force, so a scan
+  skips the built-in defaults, plus `excludePaths` from `.secretloop.json`,
+  plus the editor setting. The merge is additive: an editor setting can exclude
+  more than the project file does, never less, and an empty setting changes
+  nothing. Non-string entries are ignored rather than passed to the glob
+  compiler. All three editor scan paths — the workspace command, the staged
+  scan and the on-save document scan — pick it up, because the read happens in
+  the shared builder rather than at each call site. Baseline generation
+  deliberately does not consult it: a baseline is a shared project artifact and
+  must not depend on one contributor's editor settings. The setting is declared
+  without a configuration scope, so VS Code resolves one value per window;
+  per-folder overrides in a multi-root workspace are still not supported.
+  Detection, fingerprints, verification, archive handling, the CLI and the MCP
+  server are unchanged.
+
+### History scanning
+
+- **Cancelling a history scan now stops the parsing too.** Aborting already
+  killed the `git log` process and resolved with the partial result, but
+  whatever git had written before dying was still parsed, so progress kept being
+  reported for a scan the caller had stopped — up to the entire history when git
+  finished before the consumer read it. The stdout handler now ignores chunks
+  delivered after the abort and stops at the line the abort fired on, discarding
+  the partial trailing line. Findings parsed before the abort are still returned,
+  the process is still terminated, the promise still resolves rather than
+  rejecting, and an uncancelled scan is unchanged. This also removes the timing
+  dependence from the one test that had flaked in CI: it can now assert the
+  exact commit count instead of "fewer than the whole history".
+
 ## 0.5.0 — 2026-09-09
 
 Published to npm, Open VSX and the VS Code Marketplace on 2026-09-09 from

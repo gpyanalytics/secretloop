@@ -99,11 +99,10 @@ features justify paying. Not before.
 
 ## Engineering follow-ups
 
-Small, none urgent. The items with a release consequence — the outstanding
-publication steps for 0.5.0 and the timing-dependent history cancellation test
-that flaked once in CI — are tracked in
+Small, none urgent. The items with a release consequence are tracked in
 [development](../development.md#open-items), not here. The dependency advisory
-refresh is closed (PR #52).
+refresh is closed (PR #52), and the history cancellation flake is fixed,
+unreleased.
 
 - **`readRecord` id-match hardening** (`src/consent.ts`). `listRecords` refuses
   a record whose filename disagrees with its own `id`; `readRecord` does not
@@ -114,4 +113,12 @@ refresh is closed (PR #52).
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).
+- **Editor suppression disclosure** — **implemented, unreleased.** The
+  workspace-scan summary omitted the
+  inline and fixture suppression counts the CLI and MCP both report; it now
+  totals them from the same per-file counters and passes them to the shared
+  formatter. Not in published 0.5.0.
+- **VS Code `excludePaths`** — **implemented, unreleased.** The setting was
+  declared and never read; the editor configuration builder now resolves it and
+  adds it to the exclusions already in force. Not in published 0.5.0.
 - **Prune stale worktrees** left over from previous releases.

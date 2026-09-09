@@ -605,6 +605,8 @@ async function scanWorkspace() {
   for (const s of scanned) if (s.archive) mergeArchiveAccounting(archiveTotals, s.archive);
   const archives = hasArchiveActivity(archiveTotals) ? archiveTotals : undefined;
   const apiDocumentsScoped = scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0);
+  const suppressed = scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0);
+  const fixtureSuppressed = scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0);
   log(
     `SecretLoop: workspace scan covered ${scanned.length} file(s) under ${root}` +
       (generatedExcluded > 0 ? `; ${generatedExcluded} generated file(s) excluded` : "") +
@@ -621,7 +623,16 @@ async function scanWorkspace() {
 
   const findings = scanned.flatMap((s) => s.findings);
   vscode.window.showInformationMessage(
-    workspaceScanSummary(findings, scanned.length, generatedExcluded, outsideExcluded, apiDocumentsScoped, archives)
+    workspaceScanSummary(
+      findings,
+      scanned.length,
+      generatedExcluded,
+      outsideExcluded,
+      apiDocumentsScoped,
+      archives,
+      suppressed,
+      fixtureSuppressed
+    )
   );
 }
 
@@ -650,11 +661,25 @@ export function workspaceScanSummary(
   generatedExcluded = 0,
   outsideExcluded = 0,
   apiDocumentsScoped = 0,
-  archives?: ArchiveAccounting
+  archives?: ArchiveAccounting,
+  suppressed = 0,
+  fixtureSuppressed = 0
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
-  // scan differently — the same reason workspace.ts exists at all.
-  const scope = describeScope(fileCount, "file", { generatedExcluded, outsideExcluded, apiDocumentsScoped, archives });
+  // scan differently — the same reason workspace.ts exists at all. The two
+  // suppression counts were the only disclosure this summary dropped: the CLI
+  // sentence and the MCP scope object both carried them, and workspace.ts has
+  // carried them per file all along, so a scan that silently dropped findings
+  // read here exactly like one with nothing to drop. Appended so the existing
+  // shorter call shape stays byte-identical.
+  const scope = describeScope(fileCount, "file", {
+    generatedExcluded,
+    outsideExcluded,
+    apiDocumentsScoped,
+    archives,
+    suppressed,
+    fixtureSuppressed,
+  });
   return findings.length > 0
     ? `SecretLoop: scanned ${scope}. ${livenessCounts(findings)}.`
     : `SecretLoop: no secrets found across ${scope}.`;
@@ -777,7 +802,11 @@ export function effectiveConfig(
   entropyPass: boolean
 ): SecretLoopConfig {
   if (folderPath === undefined) {
-    return mergeConfig({ entropyThreshold: threshold, entropyPassEnabled: entropyPass });
+    return mergeConfig({
+      entropyThreshold: threshold,
+      entropyPassEnabled: entropyPass,
+      excludePaths: editorExcludePaths(),
+    });
   }
   return configForFolder(folderPath, threshold, entropyPass);
 }
@@ -833,11 +862,38 @@ export function maskClipboardText(text: string): ClipboardMaskOutcome {
   };
 }
 
+/**
+ * `secretloop.excludePaths`, as VS Code resolves it.
+ *
+ * Read here rather than passed in by each caller, which is the difference
+ * between this and `entropyThreshold`/`entropyPassEnabled`. Those two interact
+ * with the project file's precedence, so a caller sometimes needs to decide
+ * them; this one is a plain additive union with no caller-specific behaviour,
+ * and a caller that forgets to pass it is exactly the defect being fixed --
+ * the setting was declared in package.json and read by nothing.
+ *
+ * The value comes from `setting`, so VS Code resolves user and workspace scopes
+ * itself; nothing here unions raw scope values by hand. The setting is declared
+ * without a `scope`, so VS Code resolves it at window scope: one list for the
+ * whole window, applied to every folder alike. Per-folder overrides would need
+ * the declaration to become `resource`-scoped, which is a separate decision.
+ *
+ * Non-string entries are dropped rather than passed to the glob compiler: a
+ * settings file is hand-edited JSON, and one bad entry should not break a scan.
+ */
+function editorExcludePaths(): string[] {
+  const raw = setting<unknown[]>("excludePaths", []);
+  return Array.isArray(raw)
+    ? raw.filter((g): g is string => typeof g === "string" && g.length > 0)
+    : [];
+}
+
 function configForFolder(
   folderPath: string,
   threshold: number,
   entropyPass: boolean
 ): SecretLoopConfig {
+  const editorExcludes = editorExcludePaths();
   try {
     const { config, raw } = loadConfigWithSource(folderPath);
     // A project that hasn't set a threshold defers to the user's editor setting.
@@ -851,10 +907,20 @@ function configForFolder(
     if (raw?.entropyPassEnabled == null) {
       config.entropyPassEnabled = entropyPass;
     }
+    // Additive, never subtractive: the editor can exclude more than the project
+    // file does, never less. Same glob syntax and same repo-relative base as the
+    // project file's entries, because they end up in the same list.
+    if (editorExcludes.length > 0) {
+      config.excludePaths = [...config.excludePaths, ...editorExcludes];
+    }
     return config;
   } catch (err) {
     vscode.window.showWarningMessage(`SecretLoop: ${(err as Error).message}`);
-    return mergeConfig({ entropyThreshold: threshold, entropyPassEnabled: entropyPass });
+    return mergeConfig({
+      entropyThreshold: threshold,
+      entropyPassEnabled: entropyPass,
+      excludePaths: editorExcludes,
+    });
   }
 }
 

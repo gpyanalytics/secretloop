@@ -132,10 +132,13 @@ Accurate as of the 0.5.0 release (2026-09-09):
   `qs` advisories in the release-tool chain. Full and production audits both
   reported zero on 2026-09-09. Audit results are point-in-time and are re-run
   at each release.
-- **A timing-dependent test flaked once in CI.** `history.test.ts` "cancelling
-  mid-scan stops it well short of the end" failed on the push-to-main run for
-  PR #49's merge and passed on an identical-commit rerun and in every other
-  recorded run. The flake is not fixed.
+- **The timing-dependent cancellation test is fixed, unreleased.**
+  `history.test.ts` "cancelling mid-scan stops it well short of the end" failed
+  once on the push-to-main run for PR #49's merge. Its assertion was a proxy for
+  "SIGTERM truncated git's output", which holds only when the kill wins a race
+  against git writing the rest. Cancellation now stops parsing at the abort
+  point, so the test asserts an exact commit count and no longer depends on
+  delivery timing. Not in published 0.5.0.
 - **Live-host validation.** The VS Code extension host and live MCP clients were
   not exercised for the `main` changes; wiring was compiled and inspected and
   the shared engine is unit-tested.
