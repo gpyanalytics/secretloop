@@ -1,7 +1,7 @@
 {
   "name": "secretloop",
   "displayName": "SecretLoop",
-  "description": "SecretLoop finds exposed secrets locally, verifies supported credentials with explicit consent, and helps developers remediate them. A GPY Analytics product.",
+  "description": "Find exposed secrets, verify supported credentials with explicit consent, and act on them — in VS Code, on the command line, and over MCP. A GPY Analytics product.",
   "icon": "docs/icon.png",
   "version": "0.5.0",
   "publisher": "gpyanalytics",
@@ -150,6 +150,7 @@
     "credentials",
     "api-keys",
     "pre-commit",
+    "mcp",
     "sarif",
     "devsecops"
   ],

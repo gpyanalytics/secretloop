@@ -56,6 +56,10 @@ each page repeats the distinction where it matters.
 
 ## What's in main and what's published
 
+Release-progress information, current as of **2026-09-09**. This page is
+repository-only: it is not shipped in the npm package or the VS Code extension,
+so it can carry status that would go stale inside a published artifact.
+
 npm and the VS Code Marketplace serve **0.4.0** (2026-09-08). Everything in the
 0.5.0 column is merged, tested and benchmarked and is **not in any published
 package**: 0.5.0 is prepared and pending publication. Rows marked *refused for

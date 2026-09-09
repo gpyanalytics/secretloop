@@ -96,6 +96,31 @@ the new rule, so its yield there is in-sample; its independent validation is a
 - [`bench/precision/`](../bench/precision/README.md) — how the six-repository
   measurement is reproduced: pinned SHAs, scan scripts, the triage policy.
 
+## 5. Capability comparison, from vendor documentation
+
+Not measured — these rows are read from each tool's own current documentation,
+and only the three-tool table in §1 was benchmarked. The root README links here
+rather than repeating them.
+
+| capability | Gitleaks | TruffleHog | GitHub | GitGuardian | SecretLoop |
+|---|---|---|---|---|---|
+| Runs without a hosted account | ✅ | ✅ | ❌ | ❌ | ✅ |
+| Working-tree, pre-commit and full-history scan | ✅ | ✅ | hosted | hosted | ✅ |
+| Validity check against the provider | ❌ | ✅ | ✅ | ✅ | ✅, consent-gated |
+| SARIF output | ✅ | ✅ | — | — | ✅ |
+| Baseline for existing findings | ✅ | not documented | — | — | ✅ |
+| Fix applied in the editor | ❌ | ❌ | ❌ | ❌ | ✅ |
+| MCP server for AI agents | ❌ | ❌ | ✅ | ✅ | ✅ |
+
+| claim source | accessed |
+|---|---|
+| [Gitleaks README](https://github.com/gitleaks/gitleaks) — `git`/`dir`/`stdin` modes, pre-commit hook, `--baseline-path`, json/csv/junit/sarif reports | 2026-09-08 |
+| [TruffleHog README](https://github.com/trufflesecurity/trufflehog) — programmatic verification against the API (`--no-verification` disables), git and filesystem sources, pre-commit hook, `--sarif` | 2026-09-08 |
+| [GitHub — About secret scanning](https://docs.github.com/en/code-security/secret-scanning/introduction/about-secret-scanning) — hosted, scans full history, validity checks contact the issuing service | 2026-09-08 |
+| [GitHub — About push protection](https://docs.github.com/en/code-security/secret-scanning/introduction/about-push-protection) — blocks pushes containing supported secrets | 2026-09-08 |
+| [GitGuardian — Validity checks](https://docs.gitguardian.com/secrets-detection/customize-detection/validity-checks) — non-intrusive API calls; valid / invalid / failed to check / cannot check / unknown | 2026-09-08 |
+| [GitGuardian — MCP server](https://docs.gitguardian.com/ggmcp-docs/overview) and [VS Code extension](https://docs.gitguardian.com/ggshield-docs/integrations/ide-integrations/vscode) | 2026-09-08 |
+
 ## Limitations
 
 Six repositories, one point in time, one dominating by volume; every true
