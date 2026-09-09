@@ -1,7 +1,7 @@
 # 0004 — An MCP verification needs a human approval in a terminal, bound to one value
 
 **Status:** shipped in 0.2.0; the archive-member and encoded-finding refusals
-and the two disclosure fixes are `main`, unreleased (PRs #43, #44, #49).
+and the two disclosure fixes are in 0.5.0, pending publication (PRs #43, #44, #49).
 **Surface:** MCP.
 
 ## Decision

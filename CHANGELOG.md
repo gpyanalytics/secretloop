@@ -1,9 +1,22 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 — prepared 2026-09-09, pending publication
 
-Everything in this section is merged to `main`, tested and benchmarked, and is
-**not in any published package**. Release validation is pending.
+Prepared from `main` at `24c7dd47`. **This version is not published yet.**
+Until it appears on npm, Open VSX and the VS Code Marketplace, **0.4.0 remains
+the latest published release**. Nine merged pull requests: #43, #44, #45, #47,
+#48, #49, #50, #51, #52.
+
+**Upgrade note.** A default scan now reads inside archives and decodes encoded
+spans, so a repository whose only exposed credential sat in a `.zip` or behind
+base64 can move from exit 0 to exit 1 with no configuration change. If you run
+the generic entropy tier, findings inside OpenAPI, Swagger and AsyncAPI
+documents are no longer reported unless you pass
+`--include-api-document-entropy`. One fixture-path line changes fingerprint for
+users running `--include-entropy --include-fixtures`, because the new
+`encryption-key-assignment` rule now claims a value the entropy tier used to
+report; re-accept that one finding into your baseline. No rule id, threshold,
+severity or output format was removed or renamed.
 
 ### Detection scope
 
@@ -93,6 +106,17 @@ or output format changed.
   Outside the rule on purpose: bare (unquoted) values, the Kubernetes
   `EncryptionConfiguration` `secret:` field, hex keys, 16- and 24-byte keys,
   the URL-safe alphabet and Go raw strings.
+
+### Dependencies
+
+- Development-only lockfile refresh, resolving three advisories in release
+  tooling: **js-yaml 4.3.1 → 4.3.2** (GHSA-2883-xcg3-v3hh / CVE-2026-84375,
+  high, reached through `@vscode/vsce`'s secretlint integration) and
+  **qs 6.15.3 → 6.16.0** (GHSA-4mjr-xmp4-gh2g / CVE-2026-82417 and
+  GHSA-x5fp-wj9c-mxmx / CVE-2026-82562, moderate). Both are in-range updates
+  of transitive development dependencies; `package.json` declares no runtime
+  dependency and none was added, and all three shipped bundles are byte-
+  identical across the change. (PR #52)
 
 ## 0.4.0 — 2026-09-08
 
