@@ -97,6 +97,12 @@ PRIVATE-FINDINGS.md
 # excluded from the VSIX, not from the project.
 RESULTS.md
 
+# Contributor guide. Same class and same position as RELEASING.md above: a
+# root-level .md that would ship by default and that nobody installing from the
+# Marketplace needs. Listed on the commit that added it so the manifest diff in
+# scripts/smoke-vsix.sh has nothing to catch.
+CONTRIBUTING.md
+
 # Build configuration and repository tooling. scripts/ holds the release gate
 # that packs and runs the npm tarball; it is never loaded by the extension.
 scripts/**
