@@ -17,6 +17,10 @@ import { gunzipSync, inflateRawSync } from "zlib";
  *
  * Pure: no I/O, no clock, no randomness. Members come back in central-
  * directory / header order, so identical input yields identical output.
+ *
+ * What the parser says about itself follows the archive-coverage-disclosure
+ * contract: every entry it declines is counted under a bounded reason, records
+ * that are not members are counted as such, and a walk that stops says so.
  */
 
 export type ContainerKind = "zip" | "tar" | "gzip" | "tgz";
@@ -49,16 +53,127 @@ export interface ArchiveMember {
   bytes: Buffer;
 }
 
+/**
+ * Why a container that carried archive magic was not opened. Bounded, stable
+ * codes (archive-coverage-disclosure A.1 §4): `unsupported-feature` is ZIP64;
+ * `malformed` is everything the parser could not read as the format it claims.
+ */
+export type ContainerNotOpenedReason = "unsupported-feature" | "malformed";
+
+/**
+ * Why an enumerated entry was not offered as a member. Each code names exactly
+ * the branch that produced it and nothing finer: every integrity failure is one
+ * `malformed`. `binary` is decided by the caller (the NUL heuristic), never here.
+ */
+export type MemberRefusalReason =
+  | "unsupported-feature"
+  | "encrypted"
+  | "unsupported-compression"
+  | "unsafe-name"
+  | "duplicate-name"
+  | "non-regular-entry"
+  | "malformed"
+  | "oversized"
+  | "binary";
+
+/** Why a walk ended before the container's last entry. */
+export type EnumerationStopReason = "member-cap" | "decompression-budget" | "truncated" | "malformed-header";
+
+export interface ArchiveEnumeration {
+  complete: boolean;
+  /** Present only when `complete` is false. */
+  reason?: EnumerationStopReason;
+  /**
+   * Entries the container DECLARES (ZIP central directory) that were never
+   * inspected because the walk stopped. A tar declares nothing, so a stopped
+   * tar walk leaves this at 0 and its remainder is unknown.
+   */
+  declaredNotInspected: number;
+}
+
 export interface ArchiveListing {
   containerKind: ContainerKind;
   members: ArchiveMember[];
+  /** Entries enumerated and not offered, counted by the reason that refused them. */
+  refused: Partial<Record<MemberRefusalReason, number>>;
+  /** Zero-length regular members: enumerated, nothing to scan, fully covered. */
+  empty: number;
   /**
-   * Entries that were in the container but not offered, by the existing skip
-   * reasons: `oversized` for a member over the size cap, `unreadable` for
-   * everything else (encrypted, unsupported method, unsafe name, duplicate,
-   * truncated, CRC mismatch, non-regular entry, beyond the member cap).
+   * tar pax (`x`/`g`) and GNU long-name (`L`/`K`) records. They are not members;
+   * v1 does not apply their extensions to the entry that follows (declared limit).
    */
-  skipped: { oversized: number; unreadable: number };
+  metadataEntries: number;
+  enumeration: ArchiveEnumeration;
+}
+
+/** A container whose magic was recognised but which the parser declined. */
+export interface ArchiveNotOpened {
+  notOpened: ContainerNotOpenedReason;
+}
+
+/** `null` means "not an archive at all"; the caller then treats the file as before. */
+export type ArchiveOutcome = ArchiveListing | ArchiveNotOpened;
+
+/**
+ * The scan-level roll-up of container outcomes (A.1 §4). Counts only: no path,
+ * no member name, no value. `members.scanned` is content offered to the text
+ * scanner or reported by the PKCS#12 member detector.
+ */
+export interface ArchiveAccounting {
+  containersOpened: number;
+  containersNotOpened: Partial<Record<ContainerNotOpenedReason, number>>;
+  members: {
+    scanned: number;
+    empty: number;
+    excluded: number;
+    refused: Partial<Record<MemberRefusalReason, number>>;
+  };
+  metadataEntries: number;
+  enumeration: {
+    incompleteContainers: number;
+    declaredNotInspected: number;
+    unknownRemainderContainers: number;
+    byReason: Partial<Record<EnumerationStopReason, number>>;
+  };
+}
+
+export function emptyArchiveAccounting(): ArchiveAccounting {
+  return {
+    containersOpened: 0,
+    containersNotOpened: {},
+    members: { scanned: 0, empty: 0, excluded: 0, refused: {} },
+    metadataEntries: 0,
+    enumeration: { incompleteContainers: 0, declaredNotInspected: 0, unknownRemainderContainers: 0, byReason: {} },
+  };
+}
+
+function addCounts<K extends string>(into: Partial<Record<K, number>>, from: Partial<Record<K, number>>): void {
+  for (const k of Object.keys(from) as K[]) into[k] = (into[k] ?? 0) + (from[k] ?? 0);
+}
+
+/** Adds `from` into `into`, field by field. */
+export function mergeArchiveAccounting(into: ArchiveAccounting, from: ArchiveAccounting): void {
+  into.containersOpened += from.containersOpened;
+  addCounts(into.containersNotOpened, from.containersNotOpened);
+  into.members.scanned += from.members.scanned;
+  into.members.empty += from.members.empty;
+  into.members.excluded += from.members.excluded;
+  addCounts(into.members.refused, from.members.refused);
+  into.metadataEntries += from.metadataEntries;
+  into.enumeration.incompleteContainers += from.enumeration.incompleteContainers;
+  into.enumeration.declaredNotInspected += from.enumeration.declaredNotInspected;
+  into.enumeration.unknownRemainderContainers += from.enumeration.unknownRemainderContainers;
+  addCounts(into.enumeration.byReason, from.enumeration.byReason);
+}
+
+/** Sum of a reason-count record. */
+export function countOf(rec: Partial<Record<string, number>>): number {
+  return Object.values(rec).reduce<number>((n, v) => n + (v ?? 0), 0);
+}
+
+/** True when the scan met at least one recognised container, opened or not. */
+export function hasArchiveActivity(a: ArchiveAccounting): boolean {
+  return a.containersOpened + countOf(a.containersNotOpened) > 0;
 }
 
 export function displayPath(source: ArchiveSource): string {
@@ -122,43 +237,65 @@ export function sanitizeMemberName(raw: string): string | null {
  * times the outer size, and no allocation ever trusts a declared size beyond
  * those two bounds.
  */
-export function openArchive(bytes: Buffer, outerPath: string, maxMemberBytes: number): ArchiveListing | null {
+export function openArchive(bytes: Buffer, outerPath: string, maxMemberBytes: number): ArchiveOutcome | null {
+  const budget = bytes.length * MAX_DECOMPRESSION_RATIO;
+  // Recognition first, so a container that fails to parse is reported as one
+  // (A.1 §3) rather than vanishing into the text path unremarked. The parsing
+  // decisions below are the v1 ones; only what they report about themselves grew.
+  let kind: "zip" | "gzip" | "tar" | null = null;
+  if (bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b) kind = "zip";
+  else if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) kind = "gzip";
+  else if (bytes.length >= 512 && isUstar(bytes)) kind = "tar";
+  if (kind === null) return null;
   try {
-    const budget = bytes.length * MAX_DECOMPRESSION_RATIO;
-    if (bytes.length >= 2 && bytes[0] === 0x50 && bytes[1] === 0x4b) return parseZip(bytes, budget, maxMemberBytes);
-    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) return openGzip(bytes, outerPath, budget, maxMemberBytes);
-    if (bytes.length >= 512 && isUstar(bytes)) return parseTar(bytes, "tar", budget, maxMemberBytes);
-    return null;
+    if (kind === "zip") return parseZip(bytes, budget, maxMemberBytes);
+    if (kind === "gzip") return openGzip(bytes, outerPath, budget, maxMemberBytes);
+    return parseTar(bytes, "tar", budget, maxMemberBytes);
   } catch {
-    return null;
+    return { notOpened: "malformed" };
   }
+}
+
+const COMPLETE: ArchiveEnumeration = { complete: true, declaredNotInspected: 0 };
+
+function bump<K extends string>(rec: Partial<Record<K, number>>, k: K): void {
+  rec[k] = (rec[k] ?? 0) + 1;
+}
+
+function listing(kind: ContainerKind, members: ArchiveMember[]): ArchiveListing {
+  return { containerKind: kind, members, refused: {}, empty: 0, metadataEntries: 0, enumeration: { ...COMPLETE } };
 }
 
 // ------------------------------------------------------------------- gzip
 
-function openGzip(bytes: Buffer, outerPath: string, budget: number, maxMemberBytes: number): ArchiveListing | null {
+function openGzip(bytes: Buffer, outerPath: string, budget: number, maxMemberBytes: number): ArchiveOutcome {
   // Pure-gzip bound first: the output IS the member, so it is capped like a
   // file. Only when that overflows is the larger tgz bound tried, and only to
   // find out whether the stream is a tar whose members are bounded one by one.
   const streamCap = Math.min(maxMemberBytes, budget);
+  const oversizedStream = (): ArchiveListing => {
+    const l = listing("gzip", []);
+    l.refused.oversized = 1;
+    return l;
+  };
   let out: Buffer;
   try {
     out = gunzipSync(bytes, { maxOutputLength: Math.max(1, streamCap) });
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ERR_BUFFER_TOO_LARGE" || budget <= streamCap) {
-      return isTooLarge(err) ? { containerKind: "gzip", members: [], skipped: { oversized: 1, unreadable: 0 } } : null;
+      return isTooLarge(err) ? oversizedStream() : { notOpened: "malformed" };
     }
     let wide: Buffer;
     try {
       wide = gunzipSync(bytes, { maxOutputLength: budget });
     } catch (e) {
-      return isTooLarge(e) ? { containerKind: "gzip", members: [], skipped: { oversized: 1, unreadable: 0 } } : null;
+      return isTooLarge(e) ? oversizedStream() : { notOpened: "malformed" };
     }
-    if (!isUstar(wide)) return { containerKind: "gzip", members: [], skipped: { oversized: 1, unreadable: 0 } };
+    if (!isUstar(wide)) return oversizedStream();
     return parseTar(wide, "tgz", budget, maxMemberBytes);
   }
   if (isUstar(out)) return parseTar(out, "tgz", budget, maxMemberBytes);
-  return { containerKind: "gzip", members: [{ member: gzipStreamName(outerPath), bytes: out }], skipped: { oversized: 0, unreadable: 0 } };
+  return listing("gzip", [{ member: gzipStreamName(outerPath), bytes: out }]);
 }
 
 function isTooLarge(err: unknown): boolean {
@@ -194,27 +331,38 @@ function checksumValid(hdr: Buffer): boolean {
 }
 
 function parseTar(b: Buffer, kind: "tar" | "tgz", budget: number, maxMemberBytes: number): ArchiveListing {
-  const members: ArchiveMember[] = [];
-  const skipped = { oversized: 0, unreadable: 0 };
+  const l = listing(kind, []);
   const seen = new Set<string>();
   let offset = 0;
   let entries = 0;
   let total = 0;
+  // A tar declares no entry count, so a stop here always leaves an unknown
+  // remainder; the reason is recorded and declaredNotInspected stays 0.
+  const stop = (reason: EnumerationStopReason): void => {
+    l.enumeration = { complete: false, reason, declaredNotInspected: 0 };
+  };
   while (offset + BLOCK <= b.length) {
     const hdr = b.subarray(offset, offset + BLOCK);
     if (hdr.every((x) => x === 0)) break; // end-of-archive block
-    if (!checksumValid(hdr)) break; // the walk stops at the first bad header
+    if (!checksumValid(hdr)) {
+      stop("malformed-header"); // the walk stops at the first bad header
+      break;
+    }
     const size = parseOctal(hdr, 124, 12);
-    if (size === null) break;
+    if (size === null) {
+      stop("malformed-header");
+      break;
+    }
     const dataOffset = offset + BLOCK;
     const extent = Math.ceil(size / BLOCK) * BLOCK;
     if (dataOffset + extent > b.length) {
-      skipped.unreadable++; // truncated inside this member's data
+      bump(l.refused, "malformed"); // truncated inside this member's data
+      stop("truncated");
       break;
     }
     entries++;
     if (entries > MAX_MEMBERS_PER_ARCHIVE) {
-      skipped.unreadable++;
+      stop("member-cap");
       break;
     }
     const type = hdr[156];
@@ -225,33 +373,44 @@ function parseTar(b: Buffer, kind: "tar" | "tgz", budget: number, maxMemberBytes
     }
     const regular = type === 0x30 || type === 0x00; // '0' or NUL
     const directory = type === 0x35; // '5'
+    // pax extended/global headers and GNU long name/link records: metadata about
+    // the next entry, not members. Their extensions are not applied (v1 limit).
+    const metadata = type === 0x78 || type === 0x67 || type === 0x4c || type === 0x4b; // 'x' 'g' 'L' 'K'
     if (directory) {
       offset = dataOffset + extent;
       continue; // structure, not content
     }
+    if (metadata) {
+      l.metadataEntries++;
+      offset = dataOffset + extent;
+      continue;
+    }
     if (!regular) {
-      // symlink, hardlink, char/block device, fifo, GNU long-name, pax headers
-      skipped.unreadable++;
+      // symlink, hardlink, char/block device, fifo, vendor types
+      bump(l.refused, "non-regular-entry");
       offset = dataOffset + extent;
       continue;
     }
     const name = sanitizeMemberName(rawName);
-    if (name === null || seen.has(name)) {
-      skipped.unreadable++;
+    if (name === null) {
+      bump(l.refused, "unsafe-name");
+    } else if (seen.has(name)) {
+      bump(l.refused, "duplicate-name");
     } else if (size > maxMemberBytes) {
       seen.add(name);
-      skipped.oversized++;
+      bump(l.refused, "oversized");
     } else if (total + size > budget) {
-      skipped.unreadable++;
+      stop("decompression-budget");
       break; // decompression budget spent; nothing after this is offered
     } else {
       seen.add(name);
       total += size;
-      if (size > 0) members.push({ member: name, bytes: b.subarray(dataOffset, dataOffset + size) });
+      if (size > 0) l.members.push({ member: name, bytes: b.subarray(dataOffset, dataOffset + size) });
+      else l.empty++;
     }
     offset = dataOffset + extent;
   }
-  return { containerKind: kind, members, skipped };
+  return l;
 }
 
 // -------------------------------------------------------------------- zip
@@ -271,23 +430,28 @@ function findEocd(b: Buffer): number {
   return -1;
 }
 
-function parseZip(b: Buffer, budget: number, maxMemberBytes: number): ArchiveListing | null {
-  if (b.length < 22) return null;
+function parseZip(b: Buffer, budget: number, maxMemberBytes: number): ArchiveOutcome {
+  const malformed: ArchiveNotOpened = { notOpened: "malformed" };
+  if (b.length < 22) return malformed;
   const eocd = findEocd(b);
-  if (eocd < 0) return null;
+  if (eocd < 0) return malformed;
   const entryCount = b.readUInt16LE(eocd + 10);
   const cdSize = b.readUInt32LE(eocd + 12);
   const cdOffset = b.readUInt32LE(eocd + 16);
-  if (entryCount === ZIP64_MARK16 || cdSize === ZIP64_MARK32 || cdOffset === ZIP64_MARK32) return null; // ZIP64
-  if (cdOffset + cdSize > eocd) return null;
+  if (entryCount === ZIP64_MARK16 || cdSize === ZIP64_MARK32 || cdOffset === ZIP64_MARK32) return { notOpened: "unsupported-feature" }; // ZIP64
+  if (cdOffset + cdSize > eocd) return malformed;
 
-  const members: ArchiveMember[] = [];
-  const skipped = { oversized: 0, unreadable: 0 };
+  const l = listing("zip", []);
   const seen = new Set<string>();
   let pos = cdOffset;
   let total = 0;
+  // The central directory declares entryCount, so a stop here leaves a KNOWN
+  // number of entries that were never inspected: the current one and the rest.
+  const stop = (reason: EnumerationStopReason, i: number): void => {
+    l.enumeration = { complete: false, reason, declaredNotInspected: entryCount - i };
+  };
   for (let i = 0; i < entryCount; i++) {
-    if (pos + 46 > cdOffset + cdSize || b.readUInt32LE(pos) !== SIG_CENTRAL) return null; // corrupt directory
+    if (pos + 46 > cdOffset + cdSize || b.readUInt32LE(pos) !== SIG_CENTRAL) return malformed; // corrupt directory
     const flags = b.readUInt16LE(pos + 8);
     const method = b.readUInt16LE(pos + 10);
     const crc = b.readUInt32LE(pos + 16);
@@ -298,48 +462,49 @@ function parseZip(b: Buffer, budget: number, maxMemberBytes: number): ArchiveLis
     const commentLen = b.readUInt16LE(pos + 32);
     const externalAttr = b.readUInt32LE(pos + 38);
     const localOffset = b.readUInt32LE(pos + 42);
-    if (pos + 46 + nameLen > cdOffset + cdSize) return null;
+    if (pos + 46 + nameLen > cdOffset + cdSize) return malformed;
     const rawName = b.toString(flags & 0x0800 ? "utf8" : "latin1", pos + 46, pos + 46 + nameLen);
     pos += 46 + nameLen + extraLen + commentLen;
 
     if (i >= MAX_MEMBERS_PER_ARCHIVE) {
-      skipped.unreadable += entryCount - i;
+      stop("member-cap", i);
       break;
     }
     const isDir = rawName.endsWith("/") || (externalAttr & 0x10) !== 0 || ((externalAttr >>> 16) & 0o170000) === 0o040000;
     if (isDir) continue;
-    if (csize === ZIP64_MARK32 || usize === ZIP64_MARK32 || localOffset === ZIP64_MARK32) { skipped.unreadable++; continue; }
-    if (flags & 0x0001) { skipped.unreadable++; continue; } // encrypted: never decrypted
-    if (method !== 0 && method !== 8) { skipped.unreadable++; continue; }
+    if (csize === ZIP64_MARK32 || usize === ZIP64_MARK32 || localOffset === ZIP64_MARK32) { bump(l.refused, "unsupported-feature"); continue; }
+    if (flags & 0x0001) { bump(l.refused, "encrypted"); continue; } // encrypted: never decrypted
+    if (method !== 0 && method !== 8) { bump(l.refused, "unsupported-compression"); continue; }
     const name = sanitizeMemberName(rawName);
-    if (name === null || seen.has(name)) { skipped.unreadable++; continue; }
-    if (usize > maxMemberBytes) { seen.add(name); skipped.oversized++; continue; }
-    if (total + usize > budget) { skipped.unreadable++; break; }
+    if (name === null) { bump(l.refused, "unsafe-name"); continue; }
+    if (seen.has(name)) { bump(l.refused, "duplicate-name"); continue; }
+    if (usize > maxMemberBytes) { seen.add(name); bump(l.refused, "oversized"); continue; }
+    if (total + usize > budget) { stop("decompression-budget", i); break; }
 
-    if (localOffset + 30 > b.length || b.readUInt32LE(localOffset) !== SIG_LOCAL) { skipped.unreadable++; continue; }
+    if (localOffset + 30 > b.length || b.readUInt32LE(localOffset) !== SIG_LOCAL) { bump(l.refused, "malformed"); continue; }
     const dataStart = localOffset + 30 + b.readUInt16LE(localOffset + 26) + b.readUInt16LE(localOffset + 28);
-    if (dataStart + csize > b.length) { skipped.unreadable++; continue; }
+    if (dataStart + csize > b.length) { bump(l.refused, "malformed"); continue; }
     seen.add(name);
-    if (usize === 0) continue; // nothing to scan; counted toward the entry cap only
+    if (usize === 0) { l.empty++; continue; } // nothing to scan; counted toward the entry cap only
 
     let out: Buffer;
     if (method === 0) {
-      if (csize !== usize) { skipped.unreadable++; continue; }
+      if (csize !== usize) { bump(l.refused, "malformed"); continue; }
       out = b.subarray(dataStart, dataStart + usize);
     } else {
       try {
         out = inflateRawSync(b.subarray(dataStart, dataStart + csize), { maxOutputLength: usize });
       } catch {
-        skipped.unreadable++;
+        bump(l.refused, "malformed");
         continue;
       }
-      if (out.length !== usize) { skipped.unreadable++; continue; }
+      if (out.length !== usize) { bump(l.refused, "malformed"); continue; }
     }
-    if (crc32(out) !== crc) { skipped.unreadable++; continue; }
+    if (crc32(out) !== crc) { bump(l.refused, "malformed"); continue; }
     total += usize;
-    members.push({ member: name, bytes: out });
+    l.members.push({ member: name, bytes: out });
   }
-  return { containerKind: "zip", members, skipped };
+  return l;
 }
 
 // ------------------------------------------------------------------ crc32

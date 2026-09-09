@@ -1,4 +1,5 @@
 import { Finding, UnknownReason, redactValue } from "./scanner";
+import { ArchiveAccounting, countOf } from "./archive";
 import { isFixturePath } from "./config";
 
 export type OutputFormat = "text" | "json" | "sarif";
@@ -46,6 +47,12 @@ export interface ReportOptions {
   scannedCount?: number;
   /** What those units are: "file", "staged file", "commit". */
   scopeNoun?: string;
+  /**
+   * Archive accounting for the machine-readable formats, present only when the
+   * scan met a recognised container, so reports of trees without archives are
+   * byte-identical to before.
+   */
+  archives?: ArchiveAccounting;
 }
 
 /**
@@ -83,6 +90,8 @@ export interface ScopeNotes {
   unreadableExcluded?: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped?: number;
+  /** What the scan met in the way of archives, counts only; omitted when none. */
+  archives?: ArchiveAccounting;
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
@@ -94,6 +103,7 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     oversizedExcluded = 0,
     unreadableExcluded = 0,
     apiDocumentsScoped = 0,
+    archives,
   } = notes;
   const base =
     count === 0
@@ -147,6 +157,28 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   }
   if (unreadableExcluded > 0) {
     out += `; ${unreadableExcluded} file(s) not scanned — binary or unreadable`;
+  }
+  // Archives, after every file clause and never folded into one: a member is
+  // not a file, a stopped walk is not a refused member, and a container that
+  // would not open is not an ordinary binary. Reasons live in the structured
+  // object beside this sentence; the sentence carries counts only.
+  if (archives) {
+    const a = archives;
+    const notScanned = countOf(a.members.refused);
+    const notOpened = countOf(a.containersNotOpened);
+    if (a.containersOpened > 0) {
+      out += `; ${a.containersOpened} archive(s) opened — ${a.members.scanned + a.members.empty} member(s) scanned`;
+    }
+    if (notScanned > 0) out += `; ${notScanned} archive member(s) not scanned`;
+    if (a.members.excluded > 0) out += `; ${a.members.excluded} archive member(s) excluded by configuration`;
+    if (a.metadataEntries > 0) out += `; ${a.metadataEntries} archive metadata entry(s) skipped`;
+    if (a.enumeration.incompleteContainers > 0) {
+      out +=
+        `; ${a.enumeration.incompleteContainers} archive(s) not fully enumerated — ` +
+        `${a.enumeration.declaredNotInspected} declared entry(s) not inspected, ` +
+        `${a.enumeration.unknownRemainderContainers} with unknown remainder`;
+    }
+    if (notOpened > 0) out += `; ${notOpened} recognized archive container(s) not opened`;
   }
   return out;
 }
@@ -418,6 +450,7 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
         scope: options.scope ?? null,
         scannedCount: options.scannedCount ?? null,
         scopeNoun: options.scopeNoun ?? null,
+        ...(options.archives ? { archives: options.archives } : {}),
         confirmedLive: findings.filter((f) => f.verifyStatus === "live").length,
         bySeverity: countBy(findings, (f) => f.severity),
         byLiveness: {
@@ -487,7 +520,7 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
         invocations: [
           {
             executionSuccessful: true,
-            properties: { scope: options.scope ?? null },
+            properties: { scope: options.scope ?? null, ...(options.archives ? { archives: options.archives } : {}) },
           },
         ],
         results: findings.map((f) => ({
