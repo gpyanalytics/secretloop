@@ -35,7 +35,7 @@ The fact that constrains everything else:
 | **GitGuardian** | 450+ detectors plus generic | paid tiers only | **free ≤25 devs**; ~$8–15k/yr for 10–20 devs |
 | **GitHub Secret Scanning** | partner patterns | partner-notified | free on public repos; GHAS for private |
 | **Gitleaks** | ~150 rules | none | free, open source |
-| **SecretLoop** | 109 rules | 15 providers, **tri-state** | free |
+| **SecretLoop** | 110 rules | 15 providers, **tri-state** | free |
 
 **GitGuardian's free tier covers 25 developers.** Almost every startup you would
 naturally talk to is already covered for free by a better-funded competitor. The
@@ -54,7 +54,7 @@ That is the exact bug fixed in this codebase — a 403 reading as "revoked" when
 it can equally mean live-but-scoped. Real correctness advantage, invisible in a
 feature table.
 
-**Where it loses, plainly:** 109 rules against 800. 18 rules have verifiers
+**Where it loses, plainly:** 110 rules against 800. 18 rules have verifiers
 (covering 15 providers), 17 of which can transmit — against 800. No
 org layer at all.
 
@@ -82,10 +82,10 @@ Start competing on:
 
 > **Where can SecretLoop apply the secret intelligence it already has?**
 
-The same engine — 109 rules, 18 rules with verifiers across 15 providers,
+The same engine — 110 rules, 18 rules with verifiers across 15 providers,
 tri-state liveness, fingerprints,
 baselines — can be pointed at repo, `.env`, MCP config, agent config, agent
-rules, skills, logs, sessions. The 109 rules stop being a weakness and become
+rules, skills, logs, sessions. The 110 rules stop being a weakness and become
 sufficient infrastructure for a surface nobody has covered well.
 
 **Pragmatic exception:** add detectors for the top ~50 things that actually
