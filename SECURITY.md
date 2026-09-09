@@ -69,10 +69,22 @@ nothing of the kind is stored.
 Baselines store fingerprints — path, rule id and a hash of the value — rather
 than the values themselves.
 
+**Encoded and archived content** is handled in the same process, on `main`
+and not yet in a published release: base64, hex and percent-encoded spans are
+decoded once and scanned, and ZIP, tar and gzip archives are opened in memory
+one layer deep with nothing extracted to disk and no member name resolved
+against a filesystem. A credential found by decoding or inside an archive
+member is never transmitted: verification refuses it before any provider
+lookup, and the MCP consent flow never writes a record for it. Archive members
+are quoted in MCP error messages through the same untrusted-data wrapper as
+every other repository-authored fragment.
+
 ## Supported versions
 
-The latest published release, and only that one. SecretLoop is at 0.1.x with no
-long-term support branches — fixes ship forward.
+The latest published release, and only that one. The latest published release
+is 0.4.0, on npm and the VS Code Marketplace; there are no long-term support
+branches — fixes ship forward. Changes merged to `main` after 0.4.0 are not
+covered until they are released.
 
 ## What to expect
 

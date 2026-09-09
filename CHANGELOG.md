@@ -2,6 +2,67 @@
 
 ## Unreleased
 
+Everything in this section is merged to `main`, tested and benchmarked, and is
+**not in any published package**. Release validation is pending.
+
+### Detection scope
+
+- **Encoded credentials.** Standard base64, hexadecimal and URL percent-encoded
+  runs are decoded exactly once and the named rules run over the decoded text.
+  A run of at most 4,096 characters decoding to 12–4,096 bytes of strict UTF-8
+  without NUL qualifies; decoded output is never re-decoded and the entropy
+  tier does not run over it. The finding reports the encoded span, folds the
+  transform into its fingerprint, and is never transmitted: verification
+  returns unknown with reason `unsupported-transform` on every surface, and
+  the MCP consent flow writes no record for it. (PR #43)
+- **Archives.** ZIP, tar, gzip and gzip-wrapped tar files are opened in memory,
+  one layer deep, and each member is scanned as a file at
+  `container!/member`. Nothing is extracted; nested archives stay opaque.
+  Limits are fixed: 10,000 entries per container, member names up to 1,024
+  characters, members over `maxFileSizeBytes` refused before decompression,
+  total output at most 100 times the outer file. Encrypted, ZIP64, unsupported
+  compression, traversal, absolute, duplicate, symlink, hard-link and device
+  entries are refused and counted. Member findings are never transmitted
+  (reason `unsupported-container`). (PR #44)
+- **API description documents.** With the entropy tier enabled, a `.json`,
+  `.yaml` or `.yml` text recognised as an OpenAPI, Swagger or AsyncAPI document
+  is scanned by every named rule but not by the entropy heuristic, and the scan
+  reports how many documents that affected. `--include-api-document-entropy`
+  and `includeApiDocumentEntropy` restore the previous behaviour with identical
+  fingerprints. History scans and `mask` are unchanged. (PR #45)
+- **Archive coverage disclosure.** The scope sentence, JSON `summary.archives`,
+  SARIF invocation properties, MCP `scope.archives` and the VS Code summary
+  now count containers opened, members scanned, members refused by reason,
+  members excluded by configuration, metadata entries skipped, containers not
+  fully enumerated (with the number of declared entries not inspected where
+  known) and recognised containers that would not open — separately from file
+  counts. A recognised container that will not open takes the ordinary text
+  path and is not double-counted as a binary skip. Findings, fingerprints and
+  exit codes are unchanged. (PR #47)
+
+### MCP
+
+- The `secretloop_verify` refusal for an archive-member finding quotes the
+  container path and member name through the same untrusted-data wrapper as
+  every other repository-authored fragment; control characters become spaces
+  and long fragments are truncated with a note. The refusal still happens
+  before provider lookup, consent minting and any transmission.
+  `secretloop_get_finding` now gives an archive-member finding the accurate
+  reason for its missing context instead of the ordinary-file symlink
+  explanation. Ordinary files behave exactly as before. (PR #49)
+
+### Documentation
+
+- The documentation is consolidated: one page per topic under `docs/`, a hub at
+  `docs/README.md`, planning pages under `docs/project/`, decision records
+  under `docs/decisions/`, and the benchmark records under `docs/benchmarks/`.
+  The old paths (`RESULTS.md`, `docs/ROADMAP.md`, `docs/BACKLOG.md`,
+  `docs/MARKET.md`, `docs/BENCHMARK.md`, `docs/PRIMER.md`) remain as pointers
+  because the published 0.4.0 README links to some of them. `SECURITY.md`
+  names the current published version and the archive and decoding handling.
+  `CONTRIBUTING.md` is new and excluded from the VSIX. `RELEASING.md` §6 points
+  its rule-count check at the moved pages; no gate changed.
+
 ### Rules
 
 One new rule — 109 rules to 110. No existing rule ID, threshold, fingerprint

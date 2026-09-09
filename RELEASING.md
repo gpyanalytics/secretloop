@@ -110,7 +110,7 @@ Run against the **built artifacts**, not the source tree.
 ## 6. Docs accuracy — verify against shipped source, not memory
 
 - [ ] Rule count matches `grep -c '^    id:' src/rules.ts` — `README.md`,
-      `docs/MARKET.md`, `docs/PRIMER.md`, `bench/*`.
+      `docs/project/market.md`, `docs/coverage.md`, `bench/*`.
 - [ ] Verifier numbers use three distinct, non-conflated metrics: *N rules
       with verifiers* / *M providers* / *K can transmit*. Do not write
       "N providers" for the rule count — that is the error that keeps
