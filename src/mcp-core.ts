@@ -904,7 +904,19 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
     // re-validate across. Nothing stale is served either: the context is
     // omitted rather than quoted from a cache whose file no longer resolves
     // where it did.
-    const stillContained = finding.file ? fileWithinWorkspace(scan.root, finding.file) : false;
+    //
+    // An archive member is the one finding with a `file` that is not a file:
+    // its display path names the container and the member, and nothing on disk
+    // resolves to it. Context is not served for members -- the member text is
+    // not retained after the scan and the archive is never reopened here -- so
+    // the containment re-check is skipped rather than failed, and the reason
+    // below says what is actually the case instead of the symlink/replacement
+    // explanation that is false for a member (pre-release security review,
+    // finding F2). Decided on the archive-source discriminator, not on the
+    // presence of a `source` object.
+    const archiveMember = finding.source?.kind === "archive-member";
+    const stillContained =
+      !archiveMember && finding.file ? fileWithinWorkspace(scan.root, finding.file) : false;
     const text =
       finding.file && stillContained ? scan.textByFile.get(finding.file) : undefined;
     const context =
@@ -943,8 +955,10 @@ export function toolGetFinding(input: GetFindingInput): ToolResult {
         // Said out loud when it happens, for the same reason a skipped file is
         // counted: a context that is absent because the file moved out of the
         // workspace must not read like a finding that simply had none.
-        contextOmittedReason:
-          context === null && finding.file && !stillContained
+        contextOmittedReason: archiveMember
+          ? "the finding is inside an archive member, which has no re-readable file: context " +
+            "is not served for archive members, and the archive is never reopened for it"
+          : context === null && finding.file && !stillContained
             ? "the finding's file no longer resolves inside the workspace — it is a symlink " +
               "pointing outside the allowed roots, or was replaced since the scan"
             : null,
@@ -1379,10 +1393,17 @@ export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
   }
   // Nor for an archive member: the consent flow re-reads the finding from disk
   // to commit to what would be sent, and a member has no file to re-read.
+  //
+  // The container path and the member name are repository-chosen text -- a
+  // member name is whatever the archive's author wrote into its directory --
+  // so both go through quoteUntrusted like every other fragment this file did
+  // not compose. Unquoted, a member named with instructions and the literal
+  // closing tag arrived in front of the client in SecretLoop's own voice
+  // (pre-release security review, finding F1).
   if (known.source) {
     return fail(
-      `This finding is inside an archive member (${known.source.container}, member ` +
-        `${known.source.member}). Archive-member findings are not verified in this version. ` +
+      `This finding is inside an archive member (${quoteUntrusted(known.source.container)}, member ` +
+        `${quoteUntrusted(known.source.member)}). Archive-member findings are not verified in this version. ` +
         `No consent is requested and nothing will be transmitted. Judge it on format alone.`
     );
   }
