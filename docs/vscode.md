@@ -48,7 +48,7 @@ All under **SecretLoop** in the Command Palette:
 
 | command | what it does |
 |---|---|
-| Scan Entire Workspace | Scans every file git would track, through the same enumeration the CLI uses |
+| Scan Entire Workspace | Scans every file git would track, through the same enumeration the CLI uses. The summary reports what was scanned and what was skipped, including findings dropped by inline directives or by fixture-path suppression **(unreleased — published 0.5.0 omits the two suppression counts)** |
 | Scan Staged Files | Checks what you are about to commit |
 | Scan Git History for Secrets | Walks commits and opens the report as a document |
 | Accept Current Findings as Baseline | Writes `.secretloop-baseline.json` so only new findings fail |

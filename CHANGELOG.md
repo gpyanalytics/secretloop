@@ -7,6 +7,16 @@ that heading below.
 
 ### VS Code
 
+- **The workspace-scan summary discloses suppressed findings.** The CLI scope
+  sentence and the MCP `scope` object both report findings dropped by an inline
+  `secretloop:allow` or `gitleaks:allow` directive, and generic-tier findings
+  suppressed in test and fixture paths. The editor summary reported neither,
+  although the per-file counters were already carried through the shared
+  workspace scan, so a scan that silently dropped findings read exactly like one
+  with nothing to drop. **Scan Entire Workspace** now totals both counters and
+  passes them to the same formatter the CLI uses, so the clauses, their wording
+  and their order are identical across the three surfaces, and a zero count
+  still prints nothing. No finding, fingerprint or suppression decision changed.
 - **`secretloop.excludePaths` is now read.** The setting has been declared in
   the extension manifest since it was added, and nothing consumed it: a user
   could add a glob in editor settings, get no error, and watch the files be

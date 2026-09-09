@@ -114,6 +114,11 @@ refresh is closed (PR #52).
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).
+- **Editor suppression disclosure** — **implemented, unreleased.** The
+  workspace-scan summary omitted the
+  inline and fixture suppression counts the CLI and MCP both report; it now
+  totals them from the same per-file counters and passes them to the shared
+  formatter. Not in published 0.5.0.
 - **VS Code `excludePaths`** — **implemented, unreleased.** The setting was
   declared and never read; the editor configuration builder now resolves it and
   adds it to the exclusions already in force. Not in published 0.5.0.

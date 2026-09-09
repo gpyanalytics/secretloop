@@ -605,6 +605,8 @@ async function scanWorkspace() {
   for (const s of scanned) if (s.archive) mergeArchiveAccounting(archiveTotals, s.archive);
   const archives = hasArchiveActivity(archiveTotals) ? archiveTotals : undefined;
   const apiDocumentsScoped = scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0);
+  const suppressed = scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0);
+  const fixtureSuppressed = scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0);
   log(
     `SecretLoop: workspace scan covered ${scanned.length} file(s) under ${root}` +
       (generatedExcluded > 0 ? `; ${generatedExcluded} generated file(s) excluded` : "") +
@@ -621,7 +623,16 @@ async function scanWorkspace() {
 
   const findings = scanned.flatMap((s) => s.findings);
   vscode.window.showInformationMessage(
-    workspaceScanSummary(findings, scanned.length, generatedExcluded, outsideExcluded, apiDocumentsScoped, archives)
+    workspaceScanSummary(
+      findings,
+      scanned.length,
+      generatedExcluded,
+      outsideExcluded,
+      apiDocumentsScoped,
+      archives,
+      suppressed,
+      fixtureSuppressed
+    )
   );
 }
 
@@ -650,11 +661,25 @@ export function workspaceScanSummary(
   generatedExcluded = 0,
   outsideExcluded = 0,
   apiDocumentsScoped = 0,
-  archives?: ArchiveAccounting
+  archives?: ArchiveAccounting,
+  suppressed = 0,
+  fixtureSuppressed = 0
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
-  // scan differently — the same reason workspace.ts exists at all.
-  const scope = describeScope(fileCount, "file", { generatedExcluded, outsideExcluded, apiDocumentsScoped, archives });
+  // scan differently — the same reason workspace.ts exists at all. The two
+  // suppression counts were the only disclosure this summary dropped: the CLI
+  // sentence and the MCP scope object both carried them, and workspace.ts has
+  // carried them per file all along, so a scan that silently dropped findings
+  // read here exactly like one with nothing to drop. Appended so the existing
+  // shorter call shape stays byte-identical.
+  const scope = describeScope(fileCount, "file", {
+    generatedExcluded,
+    outsideExcluded,
+    apiDocumentsScoped,
+    archives,
+    suppressed,
+    fixtureSuppressed,
+  });
   return findings.length > 0
     ? `SecretLoop: scanned ${scope}. ${livenessCounts(findings)}.`
     : `SecretLoop: no secrets found across ${scope}.`;
