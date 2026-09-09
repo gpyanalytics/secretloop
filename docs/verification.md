@@ -3,8 +3,7 @@
 Verification asks a provider whether a detected credential still works. It is
 the one thing SecretLoop does that sends a credential to a third party, so it is
 off everywhere by default and has a separate control on each surface. Applies to
-**published 0.4.0**; the archive-member and encoded-finding refusals are
-**`main`, unreleased**.
+**published 0.5.0**.
 
 ## Three surfaces, three switches
 
@@ -58,13 +57,13 @@ Reasons an outcome is `unknown`:
 | `missing-pair` | the check needs a second credential that is not nearby | AWS: the secret key must sit in the same file |
 | `no-verifier` | no rule-level check exists at all | judge it on format |
 | `ambiguous-issuer` | the format is shared by several providers | confirm it in the issuing provider's dashboard |
-| `unsupported-transform` **(main)** | the finding came from decoding an encoded span; the encoded text is not the credential and the decoded form is never kept | judge it on format |
-| `unsupported-container` **(main)** | the finding is inside an archive member, which no surface can re-read to confirm what would be sent | judge it on format |
+| `unsupported-transform` | the finding came from decoding an encoded span; the encoded text is not the credential and the decoded form is never kept | judge it on format |
+| `unsupported-container` | the finding is inside an archive member, which no surface can re-read to confirm what would be sent | judge it on format |
 
 ## What is never transmitted
 
 - Values matched by rules without a verifier, and the ambiguous Stripe format.
-- **(main)** Findings inside archive members and findings recovered by decoding.
+- Findings inside archive members and findings recovered by decoding.
   On every surface the refusal happens before dispatch, and the outbound record
   never counts them. Over MCP the refusal also happens before a consent record
   is written, so a human is never asked to approve a send that cannot happen.

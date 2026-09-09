@@ -4,8 +4,7 @@ The `secretloop` command is the same engine the extension and the MCP server run
 All three read the same `.secretloop.json`, so "passed locally, failed in CI"
 cannot come from a different rule set.
 
-Applies to **published 0.4.0**; flags and behaviours that exist only on `main`
-are marked **(main, unreleased)**.
+Applies to **published 0.5.0**.
 
 ## Commands
 
@@ -33,7 +32,7 @@ are marked **(main, unreleased)**.
 | `--include-fixtures` | scan, staged, history | Also report *generic-tier* findings in test, fixture and example paths. Named rules already report there. |
 | `--include-generated` | scan, staged, history | Also scan generated files (lockfiles, Gradle/Maven wrappers, Xcode project files, SARIF reports). Never re-enables `node_modules`, `package-lock.json` or minified bundles. |
 | `--key-context` | scan, staged, history | Report a *quoted* generic high-entropy string only if the identifier it is assigned to carries a secret-like word. Off by default. |
-| `--include-api-document-entropy` **(main, unreleased)** | scan, staged | With `--include-entropy`, also run the entropy heuristic inside recognized OpenAPI, Swagger and AsyncAPI documents. Named rules are unaffected. Not applicable to history or mask. |
+| `--include-api-document-entropy` | scan, staged | With `--include-entropy`, also run the entropy heuristic inside recognized OpenAPI, Swagger and AsyncAPI documents. Named rules are unaffected. Not applicable to history or mask. |
 | `--max-commits <n>` | history | Scan only the most recent `n` commits. |
 | `--rev-range <range>` | history | Scan a git revision range, for example `origin/main..HEAD`. |
 | `--entropy` | mask only | Also mask generic high-entropy strings in the piped stream. Off by default, which is the opposite of a scan. |

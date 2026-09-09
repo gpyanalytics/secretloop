@@ -49,7 +49,7 @@ encryption-config test data. Neither mode is better in general; the number that
 would settle the trade — the recall the tier uniquely adds over rule-based
 scanning — is not measured.
 
-## 3. Changes on `main` since 0.4.0 (unreleased), same corpus
+## 3. Changes in 0.5.0 since 0.4.0, same corpus
 
 Each change was measured against the frozen reports with fail-closed comparison
 checkers exercised on synthetic mutations before use. Populations are stated
@@ -65,7 +65,7 @@ one.
 | Archive coverage disclosure (PR #47): finding objects identical in all 18 repository-mode pairs; only the scope sentence and `summary.archives` changed | 0 | 0 | 0 |
 | `encryption-key-assignment` (PR #48): one finding added, the validated `transformation_test.go` site in `kubernetes`; zero removals, zero changed survivors, fifteen non-kubernetes reports byte-identical | +1 TP | +1 TP | +1 TP |
 
-Resulting populations on `main`:
+Resulting populations in 0.5.0:
 
 | mode | FULL TP / FP / unknown | HISTORICAL (frozen labels only) | HISTORICAL + additive recall label | TP-file coverage |
 |---|---|---|---|---|

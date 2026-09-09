@@ -1,7 +1,7 @@
 # Troubleshooting
 
 The messages SecretLoop prints when it refuses, cannot look, or gates a build,
-and what each one means. Applies to **published 0.4.0** unless marked.
+and what each one means. Applies to **published 0.5.0**.
 
 ## Exit codes
 
@@ -48,14 +48,14 @@ corrupt. It is named so you know which file to fix.
 `maxFileSizeBytes` in `.secretloop.json` if those files matter.
 
 **`N file(s) not scanned — binary or unreadable`** — a NUL byte in the first
-8,000 bytes, an unreadable entry, or on `main` a container that would not open
-and also read as binary. PKCS#12 keystores are still detected structurally.
+8,000 bytes, an unreadable entry, or a container that would not open and also
+read as binary. PKCS#12 keystores are still detected structurally.
 
-**`N recognized archive container(s) not opened` (main)** — a file with archive
+**`N recognized archive container(s) not opened`** — a file with archive
 magic that the parser declined (corrupt, or ZIP64). It was scanned as raw text
 instead; the structured `summary.archives` object says why.
 
-**`N archive(s) not fully enumerated` (main)** — a container walk stopped at the
+**`N archive(s) not fully enumerated`** — a container walk stopped at the
 10,000-entry cap, the decompression budget, a truncation or a bad header. The
 remainder was not looked at; for a ZIP the count of uninspected entries is
 known, for a tar it is not.
@@ -97,7 +97,7 @@ previous output byte for byte. On `main`, a value inside an OpenAPI document is
 no longer reported by the entropy tier unless `--include-api-document-entropy`
 is passed.
 
-**A finding changed rule or fingerprint on `main`.** The one intended case: with
+**A finding changed rule or fingerprint after upgrading to 0.5.0.** The one intended case: with
 `--include-entropy --include-fixtures`, a 32-byte base64 key that
 `encryption-key-assignment` now claims reports under that rule instead of
 `generic-high-entropy`, so its fingerprint changes and a baseline entry for the

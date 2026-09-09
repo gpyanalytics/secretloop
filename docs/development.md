@@ -36,9 +36,9 @@ src/
   scanner.ts        rule + encoded + entropy passes, tiers, suppression, fingerprints
   rules.ts          the named rules (110) with keyword prescreen and allowlists
   entropy.ts        the generic high-entropy tier and its structural filters
-  encoded.ts        one-layer base64 / hex / percent decoding (main)
-  archive.ts        zip / tar / gzip / tgz, in memory, one layer (main)
-  api-document.ts   OpenAPI / Swagger / AsyncAPI classifier (main)
+  encoded.ts        one-layer base64 / hex / percent decoding
+  archive.ts        zip / tar / gzip / tgz, in memory, one layer
+  api-document.ts   OpenAPI / Swagger / AsyncAPI classifier
   pkcs12.ts         file-level PKCS#12 keystore detector
   config.ts         .secretloop.json, globs, fingerprints, baselines
   walk.ts           enumeration, containment, size and binary gates
@@ -121,12 +121,12 @@ limitations, not defects.
 
 ## Open items
 
-Accurate as of the 0.5.0 preparation (2026-09-09):
+Accurate as of the 0.5.0 release (2026-09-09):
 
-- **0.5.0 is prepared and not published.** The version is stamped and the
-  RELEASING.md prepublication gates have been run on the candidate; the release
-  pull request, the publication steps and the tag remain. Until 0.5.0 is
-  published, nothing in this section is in a package a user can install.
+- **0.5.0 is published.** npm, Open VSX and the VS Code Marketplace all serve
+  0.5.0, released from commit `fd6637d7` and tagged `v0.5.0`. The published npm
+  tarball and both extension packages were downloaded and verified byte-identical
+  to the artifacts the release gates ran against.
 - **Dependency advisories: closed.** PR #52 refreshed js-yaml to 4.3.2 and qs
   to 6.16.0 in the lockfile only, resolving the Dependabot alert and the two
   `qs` advisories in the release-tool chain. Full and production audits both

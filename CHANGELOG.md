@@ -1,11 +1,10 @@
 # Changelog
 
-## 0.5.0 — prepared 2026-09-09, pending publication
+## 0.5.0 — 2026-09-09
 
-Prepared from `main` at `24c7dd47`. **This version is not published yet.**
-Until it appears on npm, Open VSX and the VS Code Marketplace, **0.4.0 remains
-the latest published release**. Nine merged pull requests: #43, #44, #45, #47,
-#48, #49, #50, #51, #52.
+Published to npm, Open VSX and the VS Code Marketplace on 2026-09-09 from
+commit `fd6637d7`, tagged `v0.5.0`. Nine merged pull requests: #43, #44, #45,
+#47, #48, #49, #50, #51, #52.
 
 **Upgrade note.** A default scan now reads inside archives and decodes encoded
 spans, so a repository whose only exposed credential sat in a `.zip` or behind
