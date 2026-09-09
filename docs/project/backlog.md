@@ -99,10 +99,11 @@ features justify paying. Not before.
 
 ## Engineering follow-ups
 
-Small, none urgent. The items with a release consequence — pending release
-validation, the dependency advisory refresh, and the timing-dependent history
-cancellation test that flaked once in CI — are tracked in
-[development](../development.md#open-items), not here.
+Small, none urgent. The items with a release consequence — the outstanding
+publication steps for 0.5.0 and the timing-dependent history cancellation test
+that flaked once in CI — are tracked in
+[development](../development.md#open-items), not here. The dependency advisory
+refresh is closed (PR #52).
 
 - **`readRecord` id-match hardening** (`src/consent.ts`). `listRecords` refuses
   a record whose filename disagrees with its own `id`; `readRecord` does not

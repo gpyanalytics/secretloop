@@ -2,9 +2,9 @@
 
 One authoritative page per topic. Each page states which version a fact applies
 to: **published 0.4.0** (npm and the extension channels) or **`main`, unreleased**
-(merged after the 0.4.0 tag and not yet in any package). The table at the end
-of this page is the authoritative summary; each page repeats the distinction
-where it matters.
+(merged after the 0.4.0 tag and not yet in any package — this is the 0.5.0
+candidate). The table at the end of this page is the authoritative summary;
+each page repeats the distinction where it matters.
 
 ## Getting started
 
@@ -57,14 +57,14 @@ where it matters.
 ## What's in main and what's published
 
 npm and the VS Code Marketplace serve **0.4.0** (2026-09-08). Everything in the
-`main` column is merged, tested and benchmarked, is **not in any published
-package**, and is awaiting release validation. Rows marked *refused for
+0.5.0 column is merged, tested and benchmarked and is **not in any published
+package**: 0.5.0 is prepared and pending publication. Rows marked *refused for
 verification* mean a finding of that kind is never sent to a provider on any
 surface; a finding matched by a supported plaintext rule can still be
 transmitted after the switch or consent workflow described in
 [verification](verification.md).
 
-| capability | 0.4.0 (published) | `main` (unreleased) |
+| capability | 0.4.0 (published) | 0.5.0 (prepared, unpublished) |
 |---|---|---|
 | Named rules | 109 | 110 (`encryption-key-assignment`) |
 | Generic entropy tier | opt-in (`--include-entropy`) | opt-in; not run over OpenAPI / Swagger / AsyncAPI documents unless `--include-api-document-entropy` |

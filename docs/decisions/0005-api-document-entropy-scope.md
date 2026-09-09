@@ -1,6 +1,6 @@
 # 0005 — The entropy tier is not run over API description documents
 
-**Status:** `main`, unreleased (PR #45). **Surfaces:** scan, staged, VS Code,
+**Status:** in 0.5.0, prepared and pending publication (PR #45). **Surfaces:** scan, staged, VS Code,
 MCP. History and `mask` deliberately keep the pre-scope behaviour.
 
 ## Decision

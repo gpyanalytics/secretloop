@@ -1,8 +1,10 @@
 # Quickstart
 
-Applies to **published 0.4.0** unless a line says otherwise. Needs Node 18 or
-newer: the CLI refuses to start on an older runtime and says so, because the
-liveness checks use the runtime's built-in `fetch`.
+Applies to **published 0.4.0** unless a line says otherwise — that is what the
+unversioned commands below install. **0.5.0 is a release candidate: prepared,
+not published**, so nothing here downloads it yet. Needs Node 18 or newer: the
+CLI refuses to start on an older runtime and says so, because the liveness
+checks use the runtime's built-in `fetch`.
 
 ## 1. Scan without installing anything
 
@@ -65,8 +67,12 @@ For the editor, install **SecretLoop** from the VS Code Marketplace or from a
 `.vsix`:
 
 ```bash
-code --install-extension secretloop-0.4.0.vsix
+code --install-extension secretloop-0.5.0.vsix
 ```
+
+That filename names the release being prepared. Until 0.5.0 is published, the
+Marketplace and any `.vsix` you can download are **0.4.0**; substitute that
+filename.
 
 The extension scans on save and puts *redact*, *extract to `.env`* and, for some
 providers, *rotate* on the lightbulb. Live verification stays off until you turn

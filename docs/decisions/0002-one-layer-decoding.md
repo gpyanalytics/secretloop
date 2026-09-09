@@ -1,6 +1,6 @@
 # 0002 — Encoded spans are decoded once, strictly, and never re-decoded
 
-**Status:** `main`, unreleased (PR #43). **Surfaces:** every scan surface.
+**Status:** in 0.5.0, prepared and pending publication (PR #43). **Surfaces:** every scan surface.
 
 ## Decision
 

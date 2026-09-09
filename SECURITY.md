@@ -81,10 +81,11 @@ every other repository-authored fragment.
 
 ## Supported versions
 
-The latest published release, and only that one. The latest published release
-is 0.4.0, on npm and the VS Code Marketplace; there are no long-term support
-branches — fixes ship forward. Changes merged to `main` after 0.4.0 are not
-covered until they are released.
+The latest published release, and only that one. There are no long-term
+support branches — fixes ship forward. The latest published release is 0.4.0,
+on npm and the VS Code Marketplace. This source tree is 0.5.0, prepared and
+pending publication; changes merged after the latest published release are not
+covered until they ship.
 
 ## What to expect
 

@@ -67,14 +67,15 @@ The [documentation hub](docs/README.md) has one page per topic:
 
 ## What's in main and what's published
 
-npm and the VS Code Marketplace serve **0.4.0** (2026-09-08). The `main`
-branch carries changes that are merged, tested and benchmarked but **not in any
-published package**: one more named rule, one-layer decoding of encoded
-credentials, in-memory archive scanning with its coverage disclosure, the
-API-document entropy scope, and two MCP message corrections. Release
-validation for them is pending. The capability-by-version table lives in the
-[documentation hub](docs/README.md#whats-in-main-and-whats-published); every
-page marks such facts *main, unreleased*.
+This source tree is **0.5.0**, prepared on 2026-09-09 and **pending
+publication**. npm and the VS Code Marketplace serve **0.4.0** (2026-09-08)
+until 0.5.0 is published. The 0.5.0 changes — one more named rule, one-layer
+decoding of encoded credentials, in-memory archive scanning with its coverage
+disclosure, the API-document entropy scope, and two MCP message corrections —
+are merged, tested and benchmarked, and are **not in any installable package
+yet**. The capability-by-version table lives in the
+[documentation hub](docs/README.md#whats-in-main-and-whats-published); pages
+mark such facts *main, unreleased* until the release lands.
 
 ## In the editor
 

@@ -121,18 +121,17 @@ limitations, not defects.
 
 ## Open items
 
-Accurate as of `main` at the merge of PR #49:
+Accurate as of the 0.5.0 preparation (2026-09-09):
 
-- **Release validation is pending.** The RELEASING.md gates — docs accuracy
-  against shipped source, version selection, artifact byte-search, clean-room
-  build — have not been run for the unreleased changes. Nothing on `main` is in
-  a published package.
-- **Dependency advisory review and lockfile refresh are pending.** A
-  Dependabot alert (js-yaml, high, development-only through `@vscode/vsce`'s
-  secretlint integration; absent from every shipped bundle) and a moderate `qs`
-  advisory in the same development chain were triaged as not release-blocking;
-  the lockfile has not been refreshed and the advisory state must be rechecked
-  when that task runs.
+- **0.5.0 is prepared and not published.** The version is stamped and the
+  RELEASING.md prepublication gates have been run on the candidate; the release
+  pull request, the publication steps and the tag remain. Until 0.5.0 is
+  published, nothing in this section is in a package a user can install.
+- **Dependency advisories: closed.** PR #52 refreshed js-yaml to 4.3.2 and qs
+  to 6.16.0 in the lockfile only, resolving the Dependabot alert and the two
+  `qs` advisories in the release-tool chain. Full and production audits both
+  reported zero on 2026-09-09. Audit results are point-in-time and are re-run
+  at each release.
 - **A timing-dependent test flaked once in CI.** `history.test.ts` "cancelling
   mid-scan stops it well short of the end" failed on the push-to-main run for
   PR #49's merge and passed on an identical-commit rerun and in every other
