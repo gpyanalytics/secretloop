@@ -113,7 +113,4 @@ cancellation test that flaked once in CI — are tracked in
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).
-- **MCP tool description count.** `secretloop_scan`'s description string still
-  says "103 provider rules"; the count is 110. A one-string fix, listed here so
-  it is not lost.
 - **Prune stale worktrees** left over from previous releases.

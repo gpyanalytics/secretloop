@@ -50,6 +50,13 @@ Everything in this section is merged to `main`, tested and benchmarked, and is
   `secretloop_get_finding` now gives an archive-member finding the accurate
   reason for its missing context instead of the ordinary-file symlink
   explanation. Ordinary files behave exactly as before. (PR #49)
+- The `secretloop_scan` tool description no longer states a rule count. It said
+  "103 provider rules" from the server's first release in 0.1.7, when the rule
+  set already numbered 109. It now describes the scanner as
+  named credential-format rules with a keyword prescreen plus a generic
+  high-entropy tier that runs only when the project's `.secretloop.json`
+  enables it. Descriptive metadata only: no schema, scanning, consent,
+  verification or network behaviour changed.
 
 ### Documentation
 

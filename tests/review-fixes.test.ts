@@ -261,22 +261,74 @@ test("an empty staged set still exits 0 with the zero-count wording", () => {
 // ---------------------------------------------------------------------------
 suite("rider — Fix 4: the example config describes the code that exists");
 
-test("no document claims a .secretguard.json fallback", () => {
-  const { readFileSync } = require("fs") as typeof import("fs");
+// The pages this guards. The original list named the example config, the
+// README and the three prose files that summarised the project at the time
+// (docs/PRIMER.md, docs/MARKET.md, docs/ROADMAP.md). Those three moved when the
+// documentation was consolidated, and the primer was split by topic, so each
+// entry below names the page that now owns what the old file used to say:
+//   docs/PRIMER.md  -> docs/README.md (what SecretLoop is), docs/configuration.md
+//                      (the configuration file), docs/coverage.md (detection
+//                      summary), docs/development.md (build and layout)
+//   docs/MARKET.md  -> docs/project/market.md
+//   docs/ROADMAP.md -> docs/project/roadmap.md, docs/project/backlog.md
+// A page that is missing fails the test: silently skipping it is how a check
+// ends up guarding a redirect stub instead of the page people read.
+const AUTHORITATIVE_DOCS = [
+  ".secretloop.example.json",
+  "README.md",
+  "docs/README.md",
+  "docs/configuration.md",
+  "docs/coverage.md",
+  "docs/development.md",
+  "docs/project/market.md",
+  "docs/project/roadmap.md",
+  "docs/project/backlog.md",
+];
+
+// The old paths are kept as redirect stubs because the published 0.4.0 README
+// and older links point at them. They must exist, must not resurrect the claim,
+// and every relative link in them must resolve to a file that exists.
+const REDIRECT_STUBS = [
+  "docs/PRIMER.md",
+  "docs/MARKET.md",
+  "docs/ROADMAP.md",
+  "docs/BACKLOG.md",
+  "docs/BENCHMARK.md",
+  "RESULTS.md",
+];
+
+const SECRETGUARD_CLAIM = /secretguard\.json is still read|\.secretguard\.json/i;
+
+test("no authoritative document claims a .secretguard.json fallback", () => {
+  const { readFileSync, existsSync } = require("fs") as typeof import("fs");
   const repo = path.join(__dirname, "..");
-  const docs = [".secretloop.example.json", "README.md", "docs/PRIMER.md", "docs/MARKET.md", "docs/ROADMAP.md"];
-  for (const rel of docs) {
-    let text = "";
-    try {
-      text = readFileSync(path.join(repo, rel), "utf8");
-    } catch {
-      continue;
-    }
+  for (const rel of AUTHORITATIVE_DOCS) {
+    const file = path.join(repo, rel);
+    assert.ok(existsSync(file), `${rel} is missing — it is an authoritative page this check guards`);
     assert.doesNotMatch(
-      text,
-      /secretguard\.json is still read|\.secretguard\.json/i,
+      readFileSync(file, "utf8"),
+      SECRETGUARD_CLAIM,
       `${rel} still claims a .secretguard.json fallback that resolveConfigFile does not implement`
     );
+  }
+});
+
+test("redirect stubs at the old documentation paths resolve and make no config claim", () => {
+  const { readFileSync, existsSync } = require("fs") as typeof import("fs");
+  const repo = path.join(__dirname, "..");
+  for (const rel of REDIRECT_STUBS) {
+    const file = path.join(repo, rel);
+    assert.ok(existsSync(file), `${rel} is missing — published links point at it`);
+    const text = readFileSync(file, "utf8");
+    assert.doesNotMatch(text, SECRETGUARD_CLAIM, `${rel} claims a .secretguard.json fallback`);
+    const links = [...text.matchAll(/\]\(([^)\s#]+)(?:#[^)]*)?\)/g)].map((m) => m[1]).filter((t) => !/^[a-z]+:/i.test(t));
+    assert.ok(links.length > 0, `${rel} links to nothing — a stub must point at the page that replaced it`);
+    for (const target of links) {
+      assert.ok(
+        existsSync(path.resolve(path.dirname(file), target)),
+        `${rel} links to ${target}, which does not exist`
+      );
+    }
   }
 });
 
