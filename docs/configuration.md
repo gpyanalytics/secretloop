@@ -39,6 +39,17 @@ In VS Code, an explicit project-file value wins over the editor setting; the
 editor setting applies only when the project file is silent. See
 [VS Code settings](vscode.md#settings).
 
+`excludePaths` is different, and deliberately so: it is a list, not a switch, so
+the editor setting is **added to** the project file's list rather than replacing
+it **(unreleased)**. The scan excludes the built-in defaults, plus every
+glob in `.secretloop.json`, plus every glob in `secretloop.excludePaths`. An
+editor setting can therefore narrow a scan but never widen one, and an empty
+setting changes nothing. The globs use the same syntax and the same
+repository-relative base in both places, and `includePaths` still outranks every
+exclusion whichever list it came from — an explicit include wins over a
+built-in, project-file or editor exclusion alike. In published 0.5.0 the editor
+setting is declared but not read.
+
 The MCP server reads the project file of the repository it scans and reports
 which rules it excluded and whether the entropy tier was on, so an absence of
 findings can be read against what was actually looked for.

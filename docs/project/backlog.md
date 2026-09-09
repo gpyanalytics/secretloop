@@ -114,4 +114,7 @@ refresh is closed (PR #52).
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).
+- **VS Code `excludePaths`** — **implemented, unreleased.** The setting was
+  declared and never read; the editor configuration builder now resolves it and
+  adds it to the exclusions already in force. Not in published 0.5.0.
 - **Prune stale worktrees** left over from previous releases.

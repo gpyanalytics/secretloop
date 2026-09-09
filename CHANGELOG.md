@@ -1,5 +1,31 @@
 # Changelog
 
+## Unreleased
+
+**Not in any published package.** Published 0.5.0 behaves as described under
+that heading below.
+
+### VS Code
+
+- **`secretloop.excludePaths` is now read.** The setting has been declared in
+  the extension manifest since it was added, and nothing consumed it: a user
+  could add a glob in editor settings, get no error, and watch the files be
+  scanned anyway. The editor's configuration builder now resolves it through
+  VS Code and concatenates it onto the exclusions already in force, so a scan
+  skips the built-in defaults, plus `excludePaths` from `.secretloop.json`,
+  plus the editor setting. The merge is additive: an editor setting can exclude
+  more than the project file does, never less, and an empty setting changes
+  nothing. Non-string entries are ignored rather than passed to the glob
+  compiler. All three editor scan paths — the workspace command, the staged
+  scan and the on-save document scan — pick it up, because the read happens in
+  the shared builder rather than at each call site. Baseline generation
+  deliberately does not consult it: a baseline is a shared project artifact and
+  must not depend on one contributor's editor settings. The setting is declared
+  without a configuration scope, so VS Code resolves one value per window;
+  per-folder overrides in a multi-root workspace are still not supported.
+  Detection, fingerprints, verification, archive handling, the CLI and the MCP
+  server are unchanged.
+
 ## 0.5.0 — 2026-09-09
 
 Published to npm, Open VSX and the VS Code Marketplace on 2026-09-09 from

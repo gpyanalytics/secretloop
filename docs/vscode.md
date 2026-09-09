@@ -67,9 +67,17 @@ All under **SecretLoop** in the Command Palette:
 | `secretloop.autoScanOnSave` | `true` | Re-scan a file when it is saved |
 | `secretloop.blockCommitOnSecret` | `true` | Warn in Source Control when staged files contain unresolved secrets |
 | `secretloop.envFilePath` | `.env` | Where extracted secrets are written |
-| `secretloop.excludePaths` | `[]` | Extra globs never scanned, added to the built-in excludes |
+| `secretloop.excludePaths` | `[]` | Extra globs never scanned, **added to** the built-in excludes and to any `excludePaths` in `.secretloop.json` **(unreleased — the published 0.5.0 extension declares this setting but does not read it)** |
 | `secretloop.entropyPassEnabled` | `false` | Opt in to the generic high-entropy tier. A `.secretloop.json` value for `entropyPassEnabled` overrides this setting |
 | `secretloop.enableLiveVerification` | `false` | Make read-only provider calls to confirm a credential is active. The extension offers to turn this on the first time it finds a credential it could check |
+
+`excludePaths` is the one setting that **adds to** the project file rather than
+deferring to it: the two lists are concatenated, so the editor can exclude more
+than the project does and never less. `includePaths` in the project file still
+outranks the result, so an explicit include is not overridden by an editor
+exclusion. It is declared without a configuration
+scope, so VS Code resolves one value per window and applies it to every folder
+of a multi-root workspace alike; per-folder overrides are not supported.
 
 There is no editor setting for `includeFixtures`, `keyContextRequired` or
 `includeApiDocumentEntropy`; set those in the project file. See

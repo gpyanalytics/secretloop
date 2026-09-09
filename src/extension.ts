@@ -777,7 +777,11 @@ export function effectiveConfig(
   entropyPass: boolean
 ): SecretLoopConfig {
   if (folderPath === undefined) {
-    return mergeConfig({ entropyThreshold: threshold, entropyPassEnabled: entropyPass });
+    return mergeConfig({
+      entropyThreshold: threshold,
+      entropyPassEnabled: entropyPass,
+      excludePaths: editorExcludePaths(),
+    });
   }
   return configForFolder(folderPath, threshold, entropyPass);
 }
@@ -833,11 +837,38 @@ export function maskClipboardText(text: string): ClipboardMaskOutcome {
   };
 }
 
+/**
+ * `secretloop.excludePaths`, as VS Code resolves it.
+ *
+ * Read here rather than passed in by each caller, which is the difference
+ * between this and `entropyThreshold`/`entropyPassEnabled`. Those two interact
+ * with the project file's precedence, so a caller sometimes needs to decide
+ * them; this one is a plain additive union with no caller-specific behaviour,
+ * and a caller that forgets to pass it is exactly the defect being fixed --
+ * the setting was declared in package.json and read by nothing.
+ *
+ * The value comes from `setting`, so VS Code resolves user and workspace scopes
+ * itself; nothing here unions raw scope values by hand. The setting is declared
+ * without a `scope`, so VS Code resolves it at window scope: one list for the
+ * whole window, applied to every folder alike. Per-folder overrides would need
+ * the declaration to become `resource`-scoped, which is a separate decision.
+ *
+ * Non-string entries are dropped rather than passed to the glob compiler: a
+ * settings file is hand-edited JSON, and one bad entry should not break a scan.
+ */
+function editorExcludePaths(): string[] {
+  const raw = setting<unknown[]>("excludePaths", []);
+  return Array.isArray(raw)
+    ? raw.filter((g): g is string => typeof g === "string" && g.length > 0)
+    : [];
+}
+
 function configForFolder(
   folderPath: string,
   threshold: number,
   entropyPass: boolean
 ): SecretLoopConfig {
+  const editorExcludes = editorExcludePaths();
   try {
     const { config, raw } = loadConfigWithSource(folderPath);
     // A project that hasn't set a threshold defers to the user's editor setting.
@@ -851,10 +882,20 @@ function configForFolder(
     if (raw?.entropyPassEnabled == null) {
       config.entropyPassEnabled = entropyPass;
     }
+    // Additive, never subtractive: the editor can exclude more than the project
+    // file does, never less. Same glob syntax and same repo-relative base as the
+    // project file's entries, because they end up in the same list.
+    if (editorExcludes.length > 0) {
+      config.excludePaths = [...config.excludePaths, ...editorExcludes];
+    }
     return config;
   } catch (err) {
     vscode.window.showWarningMessage(`SecretLoop: ${(err as Error).message}`);
-    return mergeConfig({ entropyThreshold: threshold, entropyPassEnabled: entropyPass });
+    return mergeConfig({
+      entropyThreshold: threshold,
+      entropyPassEnabled: entropyPass,
+      excludePaths: editorExcludes,
+    });
   }
 }
 

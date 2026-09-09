@@ -17,10 +17,11 @@ import {
 } from "../src/extension";
 import { Finding, UnknownReason } from "../src/scanner";
 import { mergeConfig } from "../src/config";
+import { scanWorkspaceScan } from "../src/workspace";
 import { UNKNOWN_REASONS } from "../src/report";
 import { MigrationOutcome } from "../src/rotate";
 import { DiagnosticSeverity, setConfiguration, resetConfiguration } from "./stubs/vscode";
-import { mkdtempSync, writeFileSync, rmSync } from "fs";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
 import { test, suite, finish, assert } from "./harness";
@@ -625,6 +626,161 @@ test("the editor setting cannot widen an unrelated project policy", () => {
     assert.strictEqual(config.entropyThreshold, 5.5, "project threshold must win");
     assert.strictEqual(config.entropyPassEnabled, false, "project opt-out must win");
   });
+});
+
+
+// ---------------------------------------------------------------------------
+suite("\nextension.ts — secretloop.excludePaths reaches the walk");
+
+/**
+ * The same defect class as entropyPassEnabled above: the setting was declared
+ * in package.json and never read, so a user could exclude a path in editor
+ * settings, see no error, and have the files scanned anyway.
+ *
+ * These drive the real editor configuration builder and the real traversal, not
+ * a hand-built ScanConfig: effectiveConfig reads the setting through the same
+ * `setting<T>` helper the extension uses at run time, and scanWorkspaceScan is
+ * the walk every editor entry point runs.
+ *
+ * Fixture directories are deliberately neutral. `vendor/` and `dist/` are in
+ * baseExcludePaths, so a test using them would pass without the fix.
+ */
+function excludeFixture(project: object | null): string {
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-ext-excl-"));
+  mkdirSync(path.join(dir, "reports"), { recursive: true });
+  mkdirSync(path.join(dir, "notes"), { recursive: true });
+  writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n", "utf8");
+  // Built at run time from the corpus rather than written as a literal.
+  writeFileSync(path.join(dir, "reports", "lib.js"), `const t = "${positiveSamples["github-token"]}";\n`, "utf8");
+  writeFileSync(path.join(dir, "notes", "memo.js"), `const t = "${positiveSamples["github-token"]}";\n`, "utf8");
+  if (project !== null) writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify(project), "utf8");
+  return dir;
+}
+
+function withExcludeFixture(project: object | null, run: (dir: string) => void): void {
+  const dir = excludeFixture(project);
+  try {
+    run(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+/** The setting as VS Code reports it, package default included. */
+function setExcludeSetting(entry: { defaultValue?: unknown; globalValue?: unknown; workspaceValue?: unknown; workspaceFolderValue?: unknown }): void {
+  resetConfiguration();
+  setConfiguration("secretloop", "excludePaths", entry);
+}
+
+/** Repo-relative paths the walk actually reads, through the editor's own config. */
+function walked(dir: string): string[] {
+  return scanWorkspaceScan(dir, effectiveConfig(dir, 4.3, false))
+    .scanned.map((f) => f.path)
+    .sort();
+}
+
+test("a VS Code setting excludes an otherwise scanned file", () => {
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+  withExcludeFixture(null, (dir) => {
+    const files = walked(dir);
+    assert.ok(!files.includes("reports/lib.js"), `the setting did not exclude it: ${files.join(", ")}`);
+    assert.ok(files.includes("app.js"), "an unrelated file stopped being scanned");
+  });
+});
+
+test("an unrelated file keeps its finding when the setting excludes another path", () => {
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+  withExcludeFixture(null, (dir) => {
+    const scanned = scanWorkspaceScan(dir, effectiveConfig(dir, 4.3, false)).scanned;
+    const notes = scanned.find((f) => f.path === "notes/memo.js");
+    assert.ok(notes, "notes/memo.js was excluded too");
+    assert.ok(
+      notes.findings.some((f) => f.ruleId === "github-token"),
+      "the planted finding outside the excluded path was lost"
+    );
+  });
+});
+
+test("a project-file exclusion is still honoured", () => {
+  setExcludeSetting({ defaultValue: [] });
+  withExcludeFixture({ excludePaths: ["reports/**"] }, (dir) => {
+    assert.ok(!walked(dir).includes("reports/lib.js"), "the project file stopped excluding");
+  });
+});
+
+test("the editor setting and the project file both apply", () => {
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["notes/**"] });
+  withExcludeFixture({ excludePaths: ["reports/**"] }, (dir) => {
+    const files = walked(dir);
+    assert.ok(!files.includes("reports/lib.js"), "the project-file exclusion was dropped");
+    assert.ok(!files.includes("notes/memo.js"), "the editor exclusion was dropped");
+    assert.ok(files.includes("app.js"), "an unrelated file stopped being scanned");
+  });
+});
+
+test("the editor setting cannot un-exclude what the project file excluded", () => {
+  // Raise-only, the same contract the CLI flags follow.
+  setExcludeSetting({ defaultValue: [], workspaceValue: [] });
+  withExcludeFixture({ excludePaths: ["reports/**"] }, (dir) => {
+    assert.ok(!walked(dir).includes("reports/lib.js"), "an empty editor list widened the scan");
+  });
+});
+
+test("no setting leaves the walk exactly as it was", () => {
+  setExcludeSetting({ defaultValue: [] });
+  withExcludeFixture(null, (dir) => {
+    const files = walked(dir);
+    assert.ok(files.includes("reports/lib.js") && files.includes("notes/memo.js") && files.includes("app.js"),
+      `default settings changed the walk: ${files.join(", ")}`);
+  });
+});
+
+test("the resolved value applies to every folder of a multi-root workspace", () => {
+  // secretloop.excludePaths is declared without a scope, so VS Code resolves it
+  // at window scope: one resolved list, applied to each folder alike. Per-folder
+  // overrides would need a scope change, which this fix deliberately does not make.
+  setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+  withExcludeFixture(null, (a) => {
+    withExcludeFixture(null, (b) => {
+      for (const dir of [a, b]) {
+        assert.ok(!walked(dir).includes("reports/lib.js"), "a folder did not receive the resolved list");
+      }
+    });
+  });
+});
+
+test("changing the setting changes the next scan", () => {
+  withExcludeFixture(null, (dir) => {
+    setExcludeSetting({ defaultValue: [] });
+    assert.ok(walked(dir).includes("reports/lib.js"), "precondition: the file is scanned with no setting");
+    setExcludeSetting({ defaultValue: [], workspaceValue: ["reports/**"] });
+    assert.ok(!walked(dir).includes("reports/lib.js"), "the next scan did not pick the new setting up");
+  });
+});
+
+test("the no-workspace branch reads the setting too", () => {
+  setExcludeSetting({ defaultValue: [], globalValue: ["reports/**"] });
+  assert.ok(
+    effectiveConfig(undefined, 4.3, false).excludePaths.includes("reports/**"),
+    "effectiveConfig(undefined) dropped the editor exclusions"
+  );
+});
+
+test("every editor entry point builds its config through the same builder", () => {
+  // Structural: the read lives in configForFolder, so scanWorkspace, the staged
+  // scan and scanDocument all inherit it. A future caller cannot forget to pass it.
+  const { readFileSync: read } = require("fs") as typeof import("fs");
+  const body = read(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  const builders = body.match(/configForFolder\(/g) ?? [];
+  assert.ok(builders.length >= 4, `expected the three callers plus the definition, saw ${builders.length}`);
+  // The read lives in the builder, not at the call sites, so scanWorkspace, the
+  // staged scan and scanDocument all inherit it and a new caller cannot omit it.
+  const start = body.indexOf("function configForFolder(");
+  const end = body.indexOf("\nfunction ", start + 1);
+  const builderBody = body.slice(start, end === -1 ? undefined : end);
+  assert.match(builderBody, /editorExcludePaths\(\)/, "configForFolder does not read the setting");
+  assert.match(body, /function editorExcludePaths\(\)[\s\S]{0,400}setting<[^>]*>\("excludePaths"/,
+    "editorExcludePaths does not go through the resolved VS Code setting");
 });
 
 finish();
