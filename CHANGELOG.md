@@ -5,6 +5,35 @@
 **Not in any published package.** Published 0.5.0 behaves as described under
 that heading below.
 
+### Verification diagnostics
+
+- **A GitHub 403 that carries rate-limit evidence is no longer read as a refusal.**
+  GitHub documents that both a primary and a secondary rate limit can arrive as a
+  `403`, distinguished by `x-ratelimit-remaining: 0` or a `retry-after` header. Every
+  `403` was mapped to `provider-refused`, whose remedy tells the reader to go and
+  inspect the credential — the opposite of what a rate-limited check needs. Those two
+  responses now map to `provider-unavailable` and name the header that says when to
+  retry. A `403` carrying neither keeps `provider-refused` and its wording unchanged.
+  The evidence is read in the GitHub verifier rather than in the shared status mapper,
+  so Stripe, Google, Cloudflare and every caller of the shared bearer-token helper are
+  untouched.
+- **Slack's documented policy refusals are no longer reported as transient.**
+  `access_denied`, `accesslimited`, `ekm_access_denied` and `enterprise_is_restricted`
+  are described in Slack's own error table as policy or administrative restrictions.
+  All four were mapped to `provider-unavailable`, telling the reader to retry later —
+  advice that can never succeed against a policy. They now map to `provider-refused`.
+  The five errors that mean a token is finished still read `dead`, unchanged, and every
+  other error, including one this build has never seen, stays `provider-unavailable`.
+- **A Slack rate-limit response is no longer reported as a network failure.** Slack
+  documents `429` with `Retry-After` and no JSON payload. The verifier parsed the body
+  before looking at the status, so that response threw, and the throw was reported as
+  `network`: "failed before reaching the provider", about a provider that had answered.
+  The status is now read first and the body is never touched for a `429`. A response
+  that arrives and cannot be parsed is `provider-unavailable`; `network` is reserved
+  for a request that never arrived.
+- No credential's liveness verdict changed. `live` and `dead` are pinned by a separate
+  test, no request count changed, and no retry, delay or additional request was added.
+
 ### VS Code
 
 - **The workspace-scan summary discloses suppressed findings.** The CLI scope

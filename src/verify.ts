@@ -425,8 +425,64 @@ async function verifyGitHubToken(value: string, ctx: VerifyContext): Promise<Ver
     return live(`Active GitHub token. Scopes: ${scopes}`);
   }
   if (res.status === 401) return dead("GitHub token is invalid or already revoked.");
-  // GitHub also answers 403 for secondary rate limiting, so it proves nothing.
+  // GitHub answers 403 for a primary rate limit, a secondary rate limit and a genuine
+  // refusal alike -- and its own documentation names the discriminators: a primary limit
+  // sets `x-ratelimit-remaining` to 0, a secondary limit sets `retry-after`. Without them a
+  // 403 still proves nothing, which is what fromStatus says. With them it proves something
+  // specific, and the remedy is the opposite one: wait, rather than go and inspect the
+  // credential.
+  //
+  // Read HERE and not in fromStatus on purpose. Those headers are documented for GitHub;
+  // fromStatus is shared with Stripe, Google, Cloudflare and every caller of
+  // verifyByStatus, and nothing documents the same meaning for them. Provider-specific
+  // evidence gets provider-specific handling.
+  if (res.status === 403) {
+    const limited = gitHubRateLimited(res);
+    if (limited) return limited;
+  }
   return fromStatus("GitHub", res.status);
+}
+
+/**
+ * The documented rate-limit reading of a GitHub 403, or null when the response carries no
+ * such evidence and the 403 keeps its refusal reading unchanged.
+ *
+ * Only header NAMES and a parsed integer ever reach the message. No header text and no
+ * response body is echoed, so a provider can never place arbitrary content in a line a
+ * user reads.
+ */
+function gitHubRateLimited(res: Response): VerificationResult | null {
+  const retryAfter = retryAfterSeconds(res);
+  if (retryAfter !== null) {
+    return unknown(
+      "provider-unavailable",
+      `GitHub rate-limited the check (403 with a retry-after header). Liveness could not be ` +
+        `determined; retry after ${retryAfter} seconds.`
+    );
+  }
+  if (res.headers.get("x-ratelimit-remaining") === "0") {
+    return unknown(
+      "provider-unavailable",
+      `GitHub rate-limited the check (403 with x-ratelimit-remaining: 0). Liveness could ` +
+        `not be determined; retry after the time given in the x-ratelimit-reset header.`
+    );
+  }
+  return null;
+}
+
+/**
+ * `retry-after` in seconds, or null when absent or not a plain integer.
+ *
+ * Parsed rather than echoed. The header is provider-controlled text, and a message that
+ * interpolated it raw would let a response put anything it liked in front of a reader.
+ * The HTTP-date form of this header is deliberately not accepted: it would have to be
+ * rendered into a wait, and no observed provider response in the review used it.
+ */
+function retryAfterSeconds(res: Response): number | null {
+  const raw = res.headers.get("retry-after");
+  if (raw === null) return null;
+  const t = raw.trim();
+  return /^\d{1,7}$/.test(t) ? Number(t) : null;
 }
 
 async function verifySlackToken(value: string, ctx: VerifyContext): Promise<VerificationResult> {
@@ -434,21 +490,80 @@ async function verifySlackToken(value: string, ctx: VerifyContext): Promise<Veri
     "https://slack.com/api/auth.test",
     requestInit(ctx, { method: "POST", headers: { Authorization: `Bearer ${value}` } })
   );
-  const body = (await res.json()) as { ok: boolean; team?: string; error?: string };
+
+  // The status is read BEFORE the body, and that order is the fix rather than a style
+  // choice. Slack's Web API answers HTTP 200 and carries the outcome in `ok` -- its
+  // documentation says callers should always check that field -- with one documented
+  // exception: rate limiting arrives as HTTP 429 with a Retry-After header and no JSON
+  // payload. Parsing first made that response throw, and the catch upstream reported it as
+  // `network`: "failed before reaching the provider", about a provider that had answered.
+  if (res.status === 429) {
+    const retryAfter = retryAfterSeconds(res);
+    return unknown(
+      "provider-unavailable",
+      `Slack rate-limited the check (429). Liveness could not be determined; ` +
+        (retryAfter === null ? `retry later.` : `retry after ${retryAfter} seconds.`)
+    );
+  }
+
+  let body: { ok?: boolean; team?: string; error?: string };
+  try {
+    body = (await res.json()) as { ok?: boolean; team?: string; error?: string };
+  } catch {
+    // The provider answered and the answer was not JSON. That is not a transport failure.
+    // `network` stays reserved for a request that never arrived, because the two carry
+    // different remedies and only one of them is about this machine's egress.
+    return unknown(
+      "provider-unavailable",
+      `Slack responded ${res.status} with a body that could not be read as JSON. ` +
+        `Liveness could not be determined; retry later.`
+    );
+  }
+
   if (body.ok) {
     return live(`Active Slack token for workspace "${body.team}".`);
   }
   // Slack reports transport problems through the same ok:false shape as a dead
   // token, so only the errors that actually mean "this token is finished" count.
-  const error = body.error ?? "unknown";
+  const error = safeErrorCode(body.error);
   const REVOKED = ["invalid_auth", "account_inactive", "token_revoked", "token_expired", "not_authed"];
   if (REVOKED.includes(error)) {
     return dead(`Slack reports token invalid: ${error}.`);
   }
+  // Documented in Slack's own error table as policy or administrative restrictions, not as
+  // transient conditions: access_denied is a denied resource, accesslimited is a network
+  // restriction on the method, ekm_access_denied is an administrator suspension, and
+  // enterprise_is_restricted is an org-level bar. "Retry later" is the wrong instruction for
+  // every one of them -- retrying never lifts a policy -- and the credential may well be
+  // live, so the honest reading is the same one a 403 with no rate-limit evidence gets.
+  const REFUSED = ["access_denied", "accesslimited", "ekm_access_denied", "enterprise_is_restricted"];
+  if (REFUSED.includes(error)) {
+    return unknown(
+      "provider-refused",
+      `Slack refused the check (${error}), which its documentation describes as a policy or ` +
+        `administrative restriction rather than a transient failure. Liveness could not be ` +
+        `determined — check this credential directly.`
+    );
+  }
+  // Everything else, including an error code this build has never seen, stays indeterminate
+  // and retryable. An unrecognised response must not be promoted into a verdict.
   return unknown(
     "provider-unavailable",
     `Slack could not complete the check (${error}). Liveness could not be determined; retry later.`
   );
+}
+
+/**
+ * A provider-supplied error code, reduced to something safe to place in a line a user reads.
+ *
+ * Slack's documented codes are short snake_case tokens. Anything else -- a long string, an
+ * HTML fragment, a sentence -- is provider-controlled text that has no business being
+ * interpolated into a diagnostic, so it is replaced rather than echoed. The message still
+ * says the check could not be completed; it just stops the response dictating the wording.
+ */
+function safeErrorCode(raw: string | undefined): string {
+  if (raw === undefined) return "unknown";
+  return /^[a-z0-9_]{1,40}$/.test(raw) ? raw : "unrecognised";
 }
 
 /**

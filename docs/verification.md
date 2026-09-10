@@ -52,10 +52,19 @@ Reasons an outcome is `unknown`:
 | reason | what happened | what to do |
 |---|---|---|
 | `network` | the provider was never reached, or the 5-second timeout fired | fix egress and re-run |
-| `provider-refused` | a 403: a live-but-scoped credential and a revoked one are indistinguishable | inspect it in the provider console |
-| `provider-unavailable` | a 429 or 5xx | retry later; says nothing about the credential |
+| `provider-refused` | the provider declined the check for a reason retrying will not lift: a 403 carrying no rate-limit evidence, or a Slack error its documentation describes as a policy or administrative restriction. A live-but-scoped credential and a revoked one are indistinguishable here | inspect it in the provider console |
+| `provider-unavailable` | a transient failure: a 429, a 5xx, a GitHub 403 that carries `x-ratelimit-remaining: 0` or a `retry-after` header, or a provider answer that could not be read | retry later; says nothing about the credential |
 | `missing-pair` | the check needs a second credential that is not nearby | AWS: the secret key must sit in the same file |
 | `no-verifier` | no rule-level check exists at all | judge it on format |
+
+A provider's HTTP status is read against that provider's own documentation, never
+by analogy with another. GitHub documents `403` for `GET /user` and documents that a
+rate limit can arrive as one, distinguished by `x-ratelimit-remaining` or `retry-after`.
+Slack's Web API answers `200` and carries the outcome in `ok`, and uses `429` with
+`Retry-After` for rate limiting; a `403` is not a documented Slack response and is never
+read as an invalid credential. A response that arrives but cannot be parsed is a
+`provider-unavailable`, not a `network` failure: `network` means the request never
+reached the provider at all.
 | `ambiguous-issuer` | the format is shared by several providers | confirm it in the issuing provider's dashboard |
 | `unsupported-transform` | the finding came from decoding an encoded span; the encoded text is not the credential and the decoded form is never kept | judge it on format |
 | `unsupported-container` | the finding is inside an archive member, which no surface can re-read to confirm what would be sent | judge it on format |
