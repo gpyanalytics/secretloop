@@ -229,8 +229,14 @@ Both components of views C and D are censuses, so their totals are exact:
 
 Two repositories dominate: `elastic/elasticsearch` contributes 640 of the 1080 default findings
 on the sixteen and `spring-projects/spring-boot` 214. **A pooled figure across this panel is
-largely a statement about those two.** Per-repository identification in the census ranges from
-100.0% (`hashicorp/terraform`, 14 findings) to 0.0% (`curl/curl`, 2 findings).
+largely a statement about those two.**
+
+Only **12 of the 16** additions produced any default finding at all. Among those twelve,
+identification runs from 100.0% (`hashicorp/terraform`, 14 findings; `nestjs/nest`, 1) down to
+0.0% (`curl/curl`, 2 findings) — both of those being exact point values, because those strata
+carry no UNKNOWN. The **four** that produced nothing (`laravel/laravel`, `redis/redis`,
+`rust-lang/cargo`, `tokio-rs/tokio`) have **no identification figure at all: N/A, never 0%**. A
+zero denominator is not a zero score, and nothing here says those repositories are clean.
 
 ## 7. Results — `include-entropy` and `restore`
 
@@ -468,7 +474,8 @@ dump appears on this page or in this repository as a result of this study.
    executed; coverage is narrowed and no repository is shown to be clean.
 4. **Mixed-date panel, no fresh holdout**, and no commit-for-commit comparison with the 0.1.2
    study, whose pins are unrecoverable.
-5. **Two repositories dominate the sixteen**; pooled figures largely describe them.
+5. **Two repositories dominate the sixteen** and four produced no default finding at all; pooled
+   figures largely describe the two, and the four carry no percentage — N/A, never 0%.
 6. **Unresolved-label bounds are not confidence intervals** and are reported separately from
    sampling intervals throughout.
 7. **Statistical interval coverage is approximate and nominal** — not to be confused with scan
