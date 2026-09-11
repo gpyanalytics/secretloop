@@ -91,6 +91,10 @@ character: 279 of 299 false positives on the frozen benchmark. Leave it off,
 try `--key-context`, or scope it with `.secretloop.json`. See
 [Benchmarks](benchmarks.md).
 
+**I want to see what the entropy tier finds in my fixtures.** There is one
+documented command for that, with what it does and does not establish:
+[Inspecting fixtures and test data](cli.md#inspecting-fixtures-and-test-data).
+
 **A finding disappeared after upgrading.** Compare the scope sentence. Since
 0.4.0 the entropy tier is off by default; `--include-entropy` reproduces the
 previous output byte for byte. On `main`, a value inside an OpenAPI document is

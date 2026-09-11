@@ -36,6 +36,8 @@ What a scan reads, what it deliberately does not, and how it says so. Applies to
   counted in fixture paths unless `includeFixtures` is set. It cannot report an
   all-hex or all-digit value at any length, because two-charset strings need
   4.5 bits and hex tops out at 4.0; named rules cover the known hex providers.
+  To inspect what it finds in fixture paths, see
+  [Inspecting fixtures and test data](cli.md#inspecting-fixtures-and-test-data).
 - **`encryption-key-assignment`** — a quoted 32-byte symmetric key in
   canonical base64 assigned to an `aes…key`, `secretbox…key` or `encryption…key`
   identifier. High severity, format match, no verifier, entropy floor 3.5.

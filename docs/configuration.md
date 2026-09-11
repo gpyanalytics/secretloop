@@ -19,7 +19,7 @@ Applies to **published 0.5.0**.
 | `allowValues` | `[]` | Regexes matched against the detected value. For fixtures and documented samples. An entry that is not a valid regular expression is rejected, and the error quotes the pattern, so use a prefix or shape here rather than a whole credential. |
 | `maxFileSizeBytes` | `1000000` | Files larger than this are skipped and counted in the scope sentence. On `main` the same bound applies to each archive member. |
 | `entropyPassEnabled` | `false` | Turn on the generic high-entropy tier. Off by default since 0.4.0. |
-| `includeFixtures` | `false` | Report generic-tier findings in test, fixture and example paths. Named rules already report there. |
+| `includeFixtures` | `false` | Report generic high-entropy findings in test, fixture and example paths. Named rules and `generic-api-key-assignment` already report there. |
 | `keyContextRequired` | `false` | Gate quoted generic-entropy findings on a secret-like identifier. Same as `--key-context`. |
 | `includeApiDocumentEntropy` | `false` | With the entropy tier on, also run it inside recognized OpenAPI, Swagger and AsyncAPI documents. Same as `--include-api-document-entropy`. |
 
@@ -68,12 +68,15 @@ first-class and every suppression is disclosed in the scope sentence.
   findings fail. See the [CLI reference](cli.md#baselines).
 - **Project file.** `allowValues` for a specific published sample,
   `excludeRules` to turn a rule off, `excludePaths` for a directory.
-- **Fixture paths.** With the entropy tier on, generic findings under `test`,
+- **Fixture paths.** With the entropy tier on, `generic-high-entropy` findings under `test`,
   `tests`, `__test__`, `__tests__`, `__mocks__`, `__snapshots__`, `__fixtures__`,
   `fixtures`, `snapshots` and `examples` segments are held back and counted unless
   `includeFixtures` is set. The comparison is case-sensitive: `Tests/` is not
   recognised, and that is recorded as a known limitation rather than changed,
-  because widening what is hidden needs its own measurement.
+  because widening what is hidden needs its own measurement. Only that tier is held
+  back: `generic-api-key-assignment` reports in fixture paths either way. To
+  inspect what the entropy tier finds in those paths, see
+  [Inspecting fixtures and test data](cli.md#inspecting-fixtures-and-test-data).
 
 ### Why fake keys in test fixtures are still reported
 
