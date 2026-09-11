@@ -35,6 +35,38 @@ This repository's own CI is the reference: the `self-scan` job copies
 `node out/cli.js scan --format sarif --output secretloop.sarif --fail-on high`
 and `node out/cli.js history --fail-on critical`.
 
+Two things about that job are worth knowing before copying it.
+
+**Only the working-tree scan produces SARIF.** The history scan sets the job's
+exit code and prints to the log; its findings are not in `secretloop.sarif` and
+so do not reach code scanning — read the job log for those.
+
+**The SARIF upload on a pull request is a special case, and this repository has
+not tested the fork path.** Three separate things are worth keeping apart.
+
+*The generic rule*: uploading code scanning results "usually requires the
+`security-events: write` scope", and GitHub reduces a fork pull request's token
+to read-only.
+
+*The event-specific exception*: "code scanning **always** allows the uploading of
+results when the `pull_request` event triggers the action run". This job runs on
+`pull_request`, so the generic permission rule is not the whole story, and a
+read-only token alone does **not** imply the upload fails.
+
+*What is untested here*: the code-scanning documentation does not discuss forks,
+and **no fork pull request has been run against this repository**. So whether a
+fork PR's results appear is not something this page can state either way — it has
+neither been demonstrated working nor shown to fail. **The scans themselves run
+and gate the build regardless**, which is the part that matters.
+
+A repository setting can grant write tokens to pull-request workflows. **Do not
+enable it**: it would hand a writable token to code from an untrusted fork, which
+is a far worse problem than an uncertain alert.
+([403: Resource not accessible by integration](https://docs.github.com/en/code-security/reference/code-scanning/troubleshoot-analysis-errors/resource-not-accessible),
+[`upload-sarif` action definition](https://github.com/github/codeql-action/blob/main/upload-sarif/action.yml)
+and [controlling permissions for `GITHUB_TOKEN`](https://docs.github.com/en/actions/writing-workflows/choosing-what-your-workflow-does/controlling-permissions-for-github_token),
+all accessed 2026-09-12.)
+
 ## Pre-commit hook
 
 From VS Code, **SecretLoop: Install Pre-commit Hook** writes
@@ -58,6 +90,13 @@ at commit time and can accept the latency.
 `--format sarif` emits SARIF 2.1.0. Each result carries the rule id, a masked
 value in its message, the finding's `secretloopFingerprint/v2` as a partial
 fingerprint, and the scan's scope sentence in `invocations[0].properties.scope`.
+GitHub renders uploaded results as code-scanning alerts, and shows *new alerts
+on lines changed in the pull request* as annotations in **Files changed**; the
+rest are reachable through *View all branch alerts*
+([GitHub: triaging code scanning alerts in pull requests](https://docs.github.com/en/code-security/code-scanning/managing-code-scanning-alerts/triaging-code-scanning-alerts-in-pull-requests),
+accessed 2026-09-12). The invocation properties are not part of that view, so
+the scope sentence — including any incomplete-coverage clause — is read from the
+SARIF file or the job log, not from the pull request.
 An archive-member result names the archive as the physical artifact and the
 member as a logical location, with the line relative to the member, and the
 invocation properties carry the archive accounting. This has shipped since
