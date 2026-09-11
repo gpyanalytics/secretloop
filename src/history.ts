@@ -30,6 +30,26 @@ export interface HistoryScanOptions {
   /** Generic findings dropped because the diff's file is test/fixture material. */
   onFixtureSuppressed?: (count: number) => void;
   /**
+   * The commits this scan actually selected, in the order git emitted them.
+   *
+   * Reported from the parser rather than recomputed by the caller: the caller
+   * knows the rev-range STRING it asked for, which is not the selection. What
+   * `--all`, `--no-merges`, `--full-history` and `-n` between them produce is
+   * only observable here, and two different range expressions can select
+   * exactly the same commits. A report's scope identity has to be the set that
+   * was read, not the request that asked for it.
+   */
+  onSelectedCommits?: (shas: string[]) => void;
+  /**
+   * The scan stopped early, so whatever it read is a PART of what was asked for.
+   *
+   * Reported INSTEAD of onSelectedCommits, never beside it. A partial commit
+   * list is a truthful record of what was parsed and a false record of what was
+   * selected, and a scope identity built from one would describe a scan nobody
+   * ran -- while the report still said the coverage was complete.
+   */
+  onIncompleteSelection?: () => void;
+  /**
    * Aborts the scan and kills the git process.
    *
    * Killing matters: merely stopping consumption leaves `git log -p` reading
@@ -271,6 +291,8 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
           options.onGeneratedExcluded?.(parser.generatedExcludedCount());
           options.onSuppressed?.(parser.suppressedCount());
           options.onFixtureSuppressed?.(parser.fixtureSuppressedCount());
+          // Deliberately NOT onSelectedCommits: see onIncompleteSelection.
+          options.onIncompleteSelection?.();
           return resolve(partial);
         }
         if (code !== 0) return reject(new Error(describeGitFailure(code, signal, stderr)));
@@ -279,6 +301,7 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
         options.onGeneratedExcluded?.(parser.generatedExcludedCount());
         options.onSuppressed?.(parser.suppressedCount());
         options.onFixtureSuppressed?.(parser.fixtureSuppressedCount());
+        options.onSelectedCommits?.(parser.selectedCommitShas());
         resolve(all);
       } catch (err) {
         // The trailing flush parses too, and on a repository small enough to
@@ -338,6 +361,8 @@ export class LogPatchParser {
   /** Inside a hunk body, where `+++` is content rather than a file header. */
   private inHunk = false;
   private commitsScanned = 0;
+  /** Every commit header this parse consumed -- the selection, as executed. */
+  private selectedCommits: string[] = [];
   /** Distinct paths the generated group kept out, for the scope disclosure. */
   private readonly generatedSkipped = new Set<string>();
   private suppressed = 0;
@@ -392,6 +417,7 @@ export class LogPatchParser {
       this.currentFile = null;
       this.inHunk = false;
       this.commitsScanned++;
+      if (this.commit.sha) this.selectedCommits.push(this.commit.sha);
       this.onProgress?.(this.commitsScanned, this.findings.length);
       return;
     }
@@ -458,6 +484,18 @@ export class LogPatchParser {
   }
 
   /** Distinct files the generated-file group excluded from this scan. */
+  /**
+   * The commits actually read, deduplicated and sorted.
+   *
+   * Sorted because the identity is the SET: git's emission order depends on the
+   * range expression, and two expressions selecting the same commits describe
+   * the same scan. Deduplicated defensively -- `--full-history` over several
+   * refs can reach one commit by more than one path.
+   */
+  selectedCommitShas(): string[] {
+    return [...new Set(this.selectedCommits)].sort();
+  }
+
   generatedExcludedCount(): number {
     return this.generatedSkipped.size;
   }

@@ -2,6 +2,17 @@
 // First, and deliberately: this refuses an unsupported Node before any other
 // module initializes. See src/node-guard.ts — the import order is the mechanism.
 import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
+import {
+  CoverageFacts,
+  REPORT_SCHEMA_VERSION,
+  ScopeSelection,
+  configDigest,
+  coverageLimitations,
+  repositoryIdentity,
+  ruleSetDigest,
+  scopeIdentity,
+  suppressionIdentity,
+} from "./report-metadata";
 import "./node-guard";
 import { writeFileSync, statSync, readFileSync } from "fs";
 import * as path from "path";
@@ -718,6 +729,14 @@ async function main(): Promise<void> {
   let scopeNoun: string | undefined;
   // Archive accounting for the machine-readable report; only a file scan can have any.
   let archives: ArchiveAccounting | undefined;
+  // What the scan could not reach, and what suppressed findings. Both branches
+  // fill what applies to them; a history scan has no file-level coverage gaps,
+  // so its zeroes are true rather than unfilled.
+  const coverage: CoverageFacts = {};
+  let inlineSuppressed = 0;
+  // What this scan selected, filled by whichever branch runs. Left undefined if
+  // a branch cannot establish it, which omits scopeDigest rather than guessing.
+  let selection: ScopeSelection | undefined;
 
   if (args.command === "history") {
     if (!isGitRepo(root)) {
@@ -739,6 +758,15 @@ async function main(): Promise<void> {
         onGeneratedExcluded: (count) => (generatedExcluded = count),
         onSuppressed: (count) => (suppressed = count),
         onFixtureSuppressed: (count) => (fixtureSuppressed = count),
+        // The selection as the parser executed it, never reconstructed here
+        // from the range string this code happens to have passed in.
+        onSelectedCommits: (shas) => (selection = { mode: "history", commits: shas }),
+        // A stopped scan leaves the selection unknown AND the coverage
+        // incomplete. Both are set here so neither can be reported alone.
+        onIncompleteSelection: () => {
+          selection = undefined;
+          coverage.cancelled = true;
+        },
       });
     } catch (err) {
       // scanHistory refuses a range git would read as an option. Caught here so
@@ -754,6 +782,7 @@ async function main(): Promise<void> {
     scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed, fixtureSuppressed });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
+    inlineSuppressed = suppressed;
   } else {
     let listed;
     if (args.command === "staged") {
@@ -791,6 +820,12 @@ async function main(): Promise<void> {
       unreadableExcluded: result.unreadable,
       archives,
     });
+    selection = { mode: args.command === "staged" ? "staged" : "worktree" };
+    inlineSuppressed = result.suppressed;
+    coverage.oversizedExcluded = result.oversized;
+    coverage.unreadableExcluded = result.unreadable;
+    coverage.outsideExcluded = listed.outsideExcluded + result.outside;
+    coverage.archives = archives;
   }
 
   if (args.baseline) {
@@ -827,14 +862,49 @@ async function main(): Promise<void> {
     return;
   }
 
+  // Computed here rather than in the reporter: the digests need the effective
+  // configuration and the repository, and reaching for either inside report.ts
+  // would put a git invocation into the extension and MCP bundles that neither
+  // needs. Same reason `toolVersion` is passed in.
+  const suppression = suppressionIdentity(config, {
+    allowValuesCount: config.allowValues.length,
+    baselineApplied: Boolean(args.baseline),
+    inlineSuppressed,
+  });
+  const limitations = coverageLimitations(coverage);
+  // Both resolved once: repositoryIdentity spawns git, and packageVersion reads
+  // the manifest.
+  const toolVersion = packageVersion();
+  const repoId = repositoryIdentity(root);
+  const scopeDigest = scopeIdentity(selection);
   const report = render(sortFindings(findings), args.format, {
-    toolVersion: packageVersion(),
+    toolVersion,
     redact: args.redact,
     root,
     scope,
     scannedCount,
     scopeNoun,
     archives,
+    comparison: {
+      schemaVersion: REPORT_SCHEMA_VERSION,
+      // Spread so an undetermined identity is absent, never null.
+      ...(toolVersion ? { toolVersion } : {}),
+      ...(repoId ? { root: repoId } : {}),
+      configDigest: configDigest(config),
+      ruleSetDigest: ruleSetDigest(),
+      ...(suppression.digest ? { suppressionDigest: suppression.digest } : {}),
+      ...(scopeDigest ? { scopeDigest } : {}),
+      incomplete: limitations.length > 0,
+    },
+    reportCoverage: {
+      limitations,
+      suppression: {
+        allowValuesCount: config.allowValues.length,
+        baselineApplied: Boolean(args.baseline),
+        inlineSuppressed,
+        unidentified: suppression.unidentified,
+      },
+    },
   });
   if (args.output) writeFileSync(args.output, report + "\n", "utf8");
   else process.stdout.write(report + "\n");

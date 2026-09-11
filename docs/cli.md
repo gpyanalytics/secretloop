@@ -199,6 +199,18 @@ all mean the report is what this configuration surfaced, not everything that is
 there. Read the scope line the scan prints before drawing a conclusion from an
 empty result.
 
+## The JSON report
+
+`--format json` carries the findings plus metadata identifying the scan: which
+tool version, which repository, which effective configuration and rule set, what
+suppressed findings, and whether the scan covered everything it set out to. A
+field SecretLoop could not determine is **absent, never null** — so a consumer
+reads a missing field as unknown rather than as a match.
+
+[The JSON report](reports.md) documents every field, what the digests do and do
+not cover, and why a project using a baseline, an allowlist or inline
+suppressions gets no suppression identity at all.
+
 ## Examples
 
 ```bash

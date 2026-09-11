@@ -1,3 +1,4 @@
+import type { ComparisonMetadata } from "./report-metadata";
 import { Finding, UnknownReason, redactValue } from "./scanner";
 import { ArchiveAccounting, countOf } from "./archive";
 import { isFixturePath } from "./config";
@@ -63,6 +64,41 @@ export interface ReportOptions {
    * because a consumer cannot tell it from a real one.
    */
   toolVersion?: string;
+  /**
+   * Identities a later comparison needs, and the coverage facts behind them.
+   *
+   * Computed by the caller for the same reason `toolVersion` is: the digests
+   * need the effective configuration and the repository, neither of which the
+   * reporter has, and reaching for them here would put a git invocation into
+   * the extension and MCP bundles. Absent for a caller that has none, which is
+   * exactly how a report without comparison metadata is produced -- and such a
+   * report is ineligible for comparison rather than assumed to match.
+   */
+  comparison?: ComparisonMetadata;
+  /** Descriptive coverage and suppression detail, rendered under `summary`. */
+  reportCoverage?: ReportCoverage;
+}
+
+/**
+ * The descriptive half: what the scan could not cover and what suppressed
+ * findings, in counts a machine can read rather than only in the scope
+ * sentence's prose.
+ *
+ * Descriptive, NOT comparison-bearing. `limitations` explains `incomplete`; it
+ * does not decide it, and equal coverage blocks do not make two scans
+ * comparable. Nothing here may be read as an identity -- in particular
+ * `inlineSuppressed`, where two scans suppressing the same number of findings in
+ * different places would otherwise look identical.
+ */
+export interface ReportCoverage {
+  limitations: string[];
+  suppression: {
+    allowValuesCount: number;
+    baselineApplied: boolean;
+    inlineSuppressed: number;
+    /** Empty when every active suppression mechanism is identified by a digest. */
+    unidentified: string[];
+  };
 }
 
 /**
@@ -451,6 +487,12 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
   return JSON.stringify(
     {
       tool: "secretloop",
+      // Comparison metadata, spread so that a field the caller could not
+      // determine is ABSENT rather than null. A consumer must read an absent
+      // key as unknown and refuse to compare; `null` would let two equally
+      // ignorant reports compare equal, which is the false "resolved" this
+      // metadata exists to prevent.
+      ...(options.comparison ?? {}),
       summary: {
         total: findings.length,
         // Scope in the machine-readable formats, not only in the text one. CI
@@ -461,6 +503,10 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
         scannedCount: options.scannedCount ?? null,
         scopeNoun: options.scopeNoun ?? null,
         ...(options.archives ? { archives: options.archives } : {}),
+        // Descriptive, and deliberately inside `summary` beside the scope
+        // sentence it puts numbers to -- never beside the identities above,
+        // which are the only fields a comparison may act on.
+        ...(options.reportCoverage ? { coverage: options.reportCoverage } : {}),
         confirmedLive: findings.filter((f) => f.verifyStatus === "live").length,
         bySeverity: countBy(findings, (f) => f.severity),
         byLiveness: {
