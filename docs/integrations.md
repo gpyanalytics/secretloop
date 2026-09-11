@@ -2,7 +2,7 @@
 
 Every integration runs the same engine with the same `.secretloop.json`. This
 page collects the wiring; the semantics are in the [CLI reference](cli.md) and
-the [MCP server](mcp.md) page. Applies to **published 0.5.0**.
+the [MCP server](mcp.md) page. Applies to **published 0.5.1**.
 
 ## CI
 
@@ -58,9 +58,11 @@ at commit time and can accept the latency.
 `--format sarif` emits SARIF 2.1.0. Each result carries the rule id, a masked
 value in its message, the finding's `secretloopFingerprint/v2` as a partial
 fingerprint, and the scan's scope sentence in `invocations[0].properties.scope`.
-On `main` (unreleased) an archive-member result names the archive as the
-physical artifact and the member as a logical location, with the line relative
-to the member, and the invocation properties carry the archive accounting.
+An archive-member result names the archive as the physical artifact and the
+member as a logical location, with the line relative to the member, and the
+invocation properties carry the archive accounting. This has shipped since
+0.5.0 (PR #47); the marker calling it unreleased was stale from that release
+onwards, not a 0.5.1 change.
 
 ## MCP clients
 

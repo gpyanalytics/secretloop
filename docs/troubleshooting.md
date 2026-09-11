@@ -1,7 +1,7 @@
 # Troubleshooting
 
 The messages SecretLoop prints when it refuses, cannot look, or gates a build,
-and what each one means. Applies to **published 0.5.0**.
+and what each one means. Applies to **published 0.5.1**.
 
 ## Exit codes
 

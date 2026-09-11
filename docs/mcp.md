@@ -6,7 +6,7 @@ SecretLoop**: no model, no API key, no LLM dependency. The assistant does the
 explaining; the deterministic scanner does the finding, and only the scanner
 decides what a finding is.
 
-Applies to **published 0.5.0**. Client configurations are in
+Applies to **published 0.5.1**. Client configurations are in
 [Integrations](integrations.md#mcp-clients).
 
 ## Starting it
