@@ -178,7 +178,14 @@ function parseRecord(file: string): ConsentRecord | null {
 export function readRecord(id: string): ConsentRecord | null {
   const file = recordPath(id);
   if (!existsSync(file)) return null;
-  return parseRecord(file);
+  const parsed = parseRecord(file);
+  // The same rule listRecords applies, so the two readers agree: a record whose
+  // contents disagree with the name it is filed under is not one this code
+  // wrote. No caller reads record.id today — toolVerify derives the id from the
+  // request and re-checks every field against it — so this closes no known hole.
+  // It keeps the invariant true for the next caller, who may not re-derive.
+  if (!parsed || parsed.id !== id) return null;
+  return parsed;
 }
 
 /** Every readable record. Malformed files are skipped, not fatal. */
