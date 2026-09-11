@@ -5,6 +5,21 @@
 **Not in any published package.** Published 0.5.0 behaves as described under
 that heading below.
 
+### Consent store
+
+- **`readRecord` now refuses a record whose contents disagree with the filename it
+  is stored under**, matching the check `listRecords` already made. The two readers
+  of `~/.secretloop/pending/` previously disagreed about what counted as a valid
+  record: `listRecords` rejected a planted file, `readRecord` returned it.
+  **Defensive hardening, not a fix for a reachable bypass.** `readRecord` has one
+  caller, the MCP `verify` tool, which derives the record id from the request and
+  independently re-checks the fingerprint, path, expiry, on-disk resolution,
+  commitment and provider before anything is transmitted; `record.id` is read by
+  nothing. Writing to the consent directory also requires the OS user account,
+  which is the documented trust boundary, and anyone with it could write a record
+  carrying the correct id. No storage format, commitment check, consent lifecycle,
+  consume-before-transmit ordering or public response schema changed.
+
 ### Verification diagnostics
 
 - **A GitHub 403 that carries rate-limit evidence is no longer read as a refusal.**

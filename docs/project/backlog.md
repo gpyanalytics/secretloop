@@ -104,12 +104,15 @@ Small, none urgent. The items with a release consequence are tracked in
 refresh is closed (PR #52), and the history cancellation flake is fixed,
 unreleased.
 
-- **`readRecord` id-match hardening** (`src/consent.ts`). `listRecords` refuses
-  a record whose filename disagrees with its own `id`; `readRecord` does not
-  make the same check. Reaching it requires write access to the consent
-  directory, which is outside the documented trust boundary — the OS user
-  account — and the fingerprint, path and commitment checks catch the attempt
-  anyway. Not a break; a rainy-day symmetry fix.
+- **`readRecord` id-match hardening** (`src/consent.ts`) — **implemented,
+  uncommitted, not released.** `readRecord` now applies the same filename/`id`
+  check `listRecords` already made, so the two readers of the consent store
+  agree. It remains what the original entry called it: a symmetry fix, not a
+  break. Reaching the gap required write access to the consent directory, which
+  is outside the documented trust boundary — the OS user account — and
+  `record.id` is read by no caller, so nothing was reachable through it. Five
+  behavioural tests in `tests/verify-consent.test.ts` pin the invariant; two
+  failed before the change.
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).
