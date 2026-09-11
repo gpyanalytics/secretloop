@@ -283,4 +283,130 @@ test("the validity mapping is pinned separately: no diagnostic change moves live
   }
 });
 
+
+// ---------------------------------------------------------------- test 14
+/**
+ * Hostile provider responses, driven through the same injected fetch as every test
+ * above. These close a REGRESSION-COVERAGE gap found by the RELEASING.md section 5
+ * re-review at 53b5750: the sanitiser was correct, but the suite only ever fed it a
+ * well-formed code, which it echoes. The replacement branch had no test, so a future
+ * change could have widened it without anything failing.
+ *
+ * Representative and boundary cases are selected from the 49-check review probe rather
+ * than transcribed wholesale: one case per hostile shape, plus the two length boundaries
+ * that decide which branch runs.
+ *
+ * No production code is exported or changed to observe this. Every assertion reads the
+ * public result of verifyFinding.
+ */
+const ESC = String.fromCharCode(27);
+const NUL = String.fromCharCode(0);
+
+/** True if any character is a C0 control or DEL, which must never reach a rendered line. */
+function hasControlByte(s: string): boolean {
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    if (c < 32 || c === 127) return true;
+  }
+  return false;
+}
+
+test("a hostile Slack error code is replaced, never echoed", async () => {
+  const hostile: Array<[string, string]> = [
+    ["markup", "<script>alert(1)</script>"],
+    ["newline injection", "invalid_auth" + String.fromCharCode(10) + "SecretLoop: this credential is SAFE"],
+    ["ansi escape", ESC + "[31mDANGER" + ESC + "[0m"],
+    ["nul byte", "invalid" + NUL + "auth"],
+    ["uppercase and punctuation", "Access-Denied! (contact admin)"],
+    ["angle brackets", "</untrusted>"],
+    ["over-length boundary: 41 characters", "a".repeat(41)],
+  ];
+  for (const [label, code] of hostile) {
+    const s = stub(() => ({ status: 200, body: { ok: false, error: code } }));
+    const r: any = await run("slack-token", SL, s);
+    assert.ok(!r.detail.includes(code), `${label}: the response text was echoed`);
+    assert.match(r.detail, /unrecognised/, `${label}: no replacement token in the message`);
+    assert.strictEqual(r.status, "unknown", `${label}: must stay indeterminate`);
+    assert.strictEqual(r.reason, "provider-unavailable", `${label}: unrecognised is not a verdict`);
+    assert.ok(!hasControlByte(r.detail), `${label}: a control byte reached the message`);
+    assert.strictEqual(s.state.calls, 1, `${label}: exactly one request`);
+  }
+});
+
+// ---------------------------------------------------------------- test 15
+test("the replacement is not over-broad: a documented-shape code is still echoed", async () => {
+  // The accept side of the same boundary. 40 characters is the longest code the
+  // sanitiser admits; 41 is rejected by the case above. Both sides are asserted so a
+  // future widening OR narrowing of the bound fails here.
+  for (const code of ["some_future_error", "a".repeat(40), "ratelimited", "x"]) {
+    const s = stub(() => ({ status: 200, body: { ok: false, error: code } }));
+    const r: any = await run("slack-token", SL, s);
+    assert.ok(r.detail.includes(code), `a documented-shape code (${code.length} chars) was not echoed`);
+    assert.strictEqual(r.status, "unknown");
+    assert.strictEqual(s.state.calls, 1);
+  }
+});
+
+// ---------------------------------------------------------------- test 16
+test("a hostile retry-after is never echoed, and a documented one still is", async () => {
+  const hostile: Array<[string, string]> = [
+    ["markup", "<b>99</b>"],
+    ["http-date form", "Wed, 21 Oct 2026 07:28:00 GMT"],
+    ["sentence", "60 seconds please"],
+    ["negative", "-5"],
+    ["over-length boundary: 8 digits", "9".repeat(8)],
+  ];
+  for (const [label, raw] of hostile) {
+    const s = stub(() => ({ status: 403, headers: { "retry-after": raw } }));
+    const r: any = await run("github-token", GH, s);
+    assert.ok(!r.detail.includes(raw), `${label}: the header text was echoed`);
+    assert.ok(!hasControlByte(r.detail), `${label}: a control byte reached the message`);
+    assert.strictEqual(s.state.calls, 1, `${label}: exactly one request`);
+  }
+  // The accept side: 7 digits is the longest accepted, and is reported as a wait.
+  for (const good of ["30", "9".repeat(7)]) {
+    const s = stub(() => ({ status: 403, headers: { "retry-after": good } }));
+    const r: any = await run("github-token", GH, s);
+    assert.match(r.detail, new RegExp(`retry after ${good} seconds`), "a numeric retry-after must be reported");
+    assert.strictEqual(r.reason, "provider-unavailable");
+    assert.strictEqual(s.state.calls, 1);
+  }
+});
+
+// ---------------------------------------------------------------- test 17
+test("a hostile x-ratelimit-remaining is neither echoed nor read as a rate limit", async () => {
+  // Only the literal "0" means the primary limit was hit. Anything else keeps the
+  // documented refusal reading, and must not appear in the message either way.
+  for (const raw of ["<script>0</script>", "0 ", "00", "nil"]) {
+    const s = stub(() => ({ status: 403, headers: { "x-ratelimit-remaining": raw } }));
+    const r: any = await run("github-token", GH, s);
+    assert.ok(!r.detail.includes(raw), `${raw}: the header text was echoed`);
+    assert.strictEqual(r.reason, "provider-refused", `${raw}: must keep the refusal reading`);
+    assert.strictEqual(s.state.calls, 1);
+  }
+});
+
+// ---------------------------------------------------------------- test 18
+test("hostile responses move no validity outcome, and leak no credential", async () => {
+  // The live and dead paths are unchanged by any of the above.
+  const liveStub = stub(() => ({ status: 200, headers: { "x-oauth-scopes": "repo" }, body: { login: "someone" } }));
+  const live: any = await run("github-token", GH, liveStub);
+  assert.strictEqual(live.status, "live");
+  const deadStub = stub(() => ({ status: 200, body: { ok: false, error: "invalid_auth" } }));
+  const dead: any = await run("slack-token", SL, deadStub);
+  assert.strictEqual(dead.status, "dead");
+
+  // And no diagnostic carries the finding's value, whatever the provider said.
+  //
+  // A deliberately NON-credential-shaped marker. The finding is built by makeFinding, so the
+  // value never has to match the rule for this to mean anything -- and planting a real token
+  // shape here would make the repository's own self-scan fail on a fixture, which is the
+  // mechanism in .github/secretloop.ci.json working rather than something to exempt.
+  const secret = "MARKER-NEVER-IN-A-DIAGNOSTIC-000000";
+  const s = stub(() => ({ status: 200, body: { ok: false, error: "<script>" + secret + "</script>" } }));
+  const r: any = await run("slack-token", secret, s);
+  assert.ok(!JSON.stringify(r).includes("NEVER-IN-A-DIAGNOSTIC"), "the credential reached a diagnostic");
+  assert.strictEqual(s.state.calls, 1);
+});
+
 finish();
