@@ -5,7 +5,7 @@
 Secret scanning for VS Code, the command line, and MCP workflows.
 A GPY Analytics product.
 
-This README describes SecretLoop 0.5.0.
+This README describes SecretLoop 0.5.1.
 
 SecretLoop scans your working tree, your staged changes or your full git
 history on your machine and reports each **finding** with its value masked.
@@ -28,7 +28,7 @@ npm install -g secretloop      # install it for CI and hooks
 ```
 
 **VS Code** — install **SecretLoop** from the Marketplace, or from a `.vsix`
-with `code --install-extension secretloop-0.5.0.vsix`. Findings become
+with `code --install-extension secretloop-0.5.1.vsix`. Findings become
 diagnostics as you type, and the lightbulb carries *redact*, *extract to
 `.env`* and, where the provider offers an API for it, *rotate*. Verification
 stays off until you turn it on.
@@ -65,9 +65,12 @@ Exit `0` means nothing met the gate; exit `1` means something did, and stderr
 names how many findings met which threshold. The SARIF file uploads to GitHub
 code scanning. [More CI, pre-commit and client recipes](https://github.com/gpyanalytics/secretloop/blob/main/docs/integrations.md).
 
-**Upgrading.** 0.5.0 scans inside archives and decodes encoded values by
-default, so a scan can report findings an earlier version missed, and the
-generic entropy tier no longer runs over API description documents unless you
+**Upgrading.** 0.5.1 is a maintenance release — four fixes, one piece of
+defensive hardening and three development-dependency updates — with no change to
+detection, fingerprints, thresholds or output format. Coming from a version
+before 0.5.0, note that 0.5.0 began scanning inside archives and decoding encoded
+values by default, so a scan can report findings an earlier version missed, and
+the generic entropy tier no longer runs over API description documents unless you
 ask. The [changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md) lists every behaviour change.
 
 ## What it does
