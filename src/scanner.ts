@@ -112,6 +112,18 @@ export interface Finding {
   severity: Severity;
   /** 1-based line number of the match within the scanned text. */
   line: number;
+  /**
+   * 1-based column of `startIndex` within its line, counted in UTF-16 code
+   * units -- the unit JavaScript string offsets already use, which is why the
+   * SARIF run declares `columnKind: "utf16CodeUnits"` rather than converting.
+   *
+   * Computed at scan time because that is the only place the line-start offsets
+   * exist; recovering it later would mean re-reading the file and searching for
+   * a value the report has already redacted.
+   *
+   * Absent when the scanner had no line-start offset to measure against.
+   */
+  column?: number;
   /** Liveness, once a verification pass has run. Undefined = not yet checked. */
   verifyStatus?: LivenessStatus;
   /** Why liveness is unknown. Set only when verifyStatus is "unknown". */
@@ -257,6 +269,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
         value: hit.value,
         startIndex: hit.startIndex,
         line,
+        lineStart: lineStarts[line - 1],
         confidence: "format-match",
         severity: hit.rule.severity,
         options,
@@ -302,6 +315,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
           value: candidate.source,
           startIndex: candidate.start,
           line,
+          lineStart: lineStarts[line - 1],
           confidence: "format-match",
           severity: hit.rule.severity,
           options,
@@ -364,6 +378,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
           value: hit.value,
           startIndex: hit.index,
           line,
+          lineStart: lineStarts[line - 1],
           confidence: "entropy-heuristic",
           severity: "medium",
           options,
@@ -688,6 +703,8 @@ function buildFinding(input: {
   matchEnd?: number;
   fingerprintStrategy?: FingerprintStrategy;
   encoding?: EncodedTransform;
+  /** Offset of the first character of `line`, for the column. */
+  lineStart?: number;
 }): Finding {
   const { options } = input;
   return {
@@ -699,6 +716,7 @@ function buildFinding(input: {
     confidence: input.confidence,
     severity: input.severity,
     line: input.line,
+    column: input.lineStart === undefined ? undefined : input.startIndex - input.lineStart + 1,
     file: options.filePath,
     commit: options.commit,
     matchStart: input.matchStart,

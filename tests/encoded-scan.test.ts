@@ -142,6 +142,11 @@ test("a plaintext finding's complete object and fingerprint are unchanged by the
     confidence: "format-match",
     severity: "critical",
     line: 1,
+    // Added by the SARIF-column work, not by the encoded feature this test
+    // guards. The snapshot is a COMPLETE object, so a new field has to appear
+    // here or the assertion stops meaning what it says: startIndex is 15 on a
+    // single-line input, and the column is one past it.
+    column: 16,
     file: FILE,
     commit: undefined,
     matchStart: 15,
