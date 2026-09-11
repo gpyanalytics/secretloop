@@ -5,6 +5,59 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### Reports
+
+- **The JSON report carries comparison metadata.** `schemaVersion`,
+  `toolVersion`, `root`, `configDigest`, `ruleSetDigest`, `suppressionDigest`
+  and `incomplete` at the top level, with descriptive coverage and suppression
+  counts under `summary.coverage`. Additive: every pre-existing field keeps its
+  name, position and meaning, the findings array is untouched, and SARIF, the
+  text report and the baseline format are unchanged. A report produced before
+  this existed still parses — it is ineligible for comparison rather than
+  assumed to match.
+  - **A field that could not be determined is ABSENT, never `null`.** Two
+    reports that both said `"root": null` would compare equal on a naive read,
+    and a finding that is still present would then be reported as gone.
+  - `root` is a digest of the repository's root commit, so it is portable across
+    machines and clones and publishes no absolute local path. Absent outside a
+    git repository.
+  - `allowValues` **content is never hashed** — only its count. A digest over a
+    short guessable input is an oracle, not anonymisation.
+  - `suppressionDigest` is **withheld entirely** when an allowlist, a baseline or
+    an inline directive was in play, because none of those can be identified
+    without publishing a new secret-derived hash or treating an equal count as
+    equal suppression.
+  - **`scopeDigest` identifies which population the scan examined**, so a
+    working-tree, staged and history scan of one repository no longer share an
+    identity. For history it covers the commits actually read, reported by the
+    parser that read them — not the rev-range string, which is the request and
+    not the selection. Two disjoint ranges of equal length previously carried
+    identical metadata and an identical scope sentence; they no longer do.
+    Equivalent selections still compare equal: `HEAD~1..HEAD`, an explicit SHA
+    range naming the same commit, and `--max-commits 1` are one selection. Any
+    difference in the selected commit set is incomparable in this first version.
+  - **A staged report carries no scope identity and is never comparable.** Its
+    population is the index: unstaging a byte-identical file makes a finding
+    vanish from a staged scan while the secret is still in the working tree, and
+    a mode-only identity let that pair read as the finding being gone. Making it
+    comparable needs a comparator that labels a staged report as an index
+    snapshot, which does not exist.
+  - A history scan that stopped early reports **no** selection and marks its
+    coverage incomplete, rather than presenting the commits it happened to read
+    as the ones it selected.
+  - `schemaVersion` is **2**. Version 1 carried no `scopeDigest`, so a
+    version-1 report cannot be shown to have examined any particular population
+    and must not be compared; a seven-field report is rejected on both counts.
+  - The required-field contract is now explicit and normative in
+    [docs/reports.md](docs/reports.md): all eight fields, each with its own
+    validity rule, and `incomplete` required to be **`false` in both** reports —
+    `true === true` must not permit comparison.
+  - `root` is documented as **shared ancestry**, not repository identity and not
+    anonymisation: a root commit is public, so the digest is confirmable rather
+    than concealing, and a fork shares its upstream's.
+  - No comparison command, no rename tracking, no "resolved" claim and no new
+    detector. Metadata alone does not establish that two scans are comparable.
+
 ### SARIF
 
 - **`tool.driver.version` is emitted**, so a code-scanning alert can be attributed
