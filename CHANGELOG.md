@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+**Not in any published package.** Published 0.5.1 behaves as described under that
+heading below.
+
+### SARIF
+
+- **`tool.driver.version` is emitted**, so a code-scanning alert can be attributed
+  to the SecretLoop version that raised it. The value comes from the CLI's
+  existing `packageVersion()` read of `package.json` — the release authority — and
+  is passed into the reporter rather than read there, so no second constant exists
+  and neither the extension nor the MCP bundle gains a filesystem dependency. A
+  caller that supplies no version emits no key: an empty version cannot be told
+  from a real one.
+- **Results carry `startColumn` and `endColumn`**, with the run declaring
+  `columnKind: "utf16CodeUnits"`. GitHub previously annotated the whole line for a
+  twenty-character credential. The columns are computed at scan time from the
+  offsets the scanner already records — never by searching for the value, which
+  the report has redacted by then — and `endColumn` is exclusive, as SARIF
+  requires. Columns are **omitted** where they would be wrong: an archive member,
+  whose span belongs to the member while the artifact is the container; a span
+  crossing a newline, which would need a paired `endLine`; and any finding whose
+  line-start offset was unavailable. Line, artifact, logical location,
+  fingerprints and invocation properties are unchanged.
+
 ## 0.5.1 — 2026-09-11
 
 A maintenance release: four defect fixes, one piece of defensive hardening,

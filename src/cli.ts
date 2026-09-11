@@ -828,6 +828,7 @@ async function main(): Promise<void> {
   }
 
   const report = render(sortFindings(findings), args.format, {
+    toolVersion: packageVersion(),
     redact: args.redact,
     root,
     scope,
