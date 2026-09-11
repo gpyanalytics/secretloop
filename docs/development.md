@@ -114,10 +114,22 @@ Changes to `src/mcp*.ts`, `src/consent.ts`, `src/verify*.ts` or
 `src/workspace*.ts` require the adversarial re-review in RELEASING.md §5
 against the invariants: consent gate, commitment integrity,
 consume-before-transmit, TOCTOU, workspace boundary, untrusted content, no
-leak, protocol purity, git argument smuggling. The review for the current
-`main` range found two low-severity disclosure issues in the MCP layer, both
-fixed in PR #49 with RED-checked tests; its other findings were documented
-limitations, not defects.
+leak, protocol purity, git argument smuggling.
+
+**Reviewed endpoints.** A §5 review covers the commit it was run against and
+nothing later; a change to the surface after that endpoint needs its own
+reassessment.
+
+- Up to and including the `v0.5.0` tag (`fd6637d7`): the review found two
+  low-severity disclosure issues in the MCP layer, both fixed in PR #49 with
+  RED-checked tests; its other findings were documented limitations, not
+  defects.
+- `fd6637d7..53b5750` (current `main`): re-reviewed against all nine
+  invariants. The settling command reports exactly two changed surface files,
+  `src/consent.ts` (PR #59, `readRecord` id-match) and `src/verify.ts`
+  (PR #56, GitHub and Slack verification diagnostics). All nine established;
+  no defect found. The consent change is **defensive hardening** — no
+  reachable bypass was demonstrated, and none is claimed.
 
 ## Open items
 

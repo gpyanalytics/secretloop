@@ -29,7 +29,7 @@ Applies to **published 0.5.0**.
 | `--write-baseline <file>` | scan, staged, history | Write every current finding's fingerprint to the file and exit `0`. |
 | `--path <dir>` | all scans | Directory to scan. Default: the current directory. |
 | `--include-entropy` | scan, staged, history | Also report generic high-entropy findings. Off by default since 0.4.0. |
-| `--include-fixtures` | scan, staged, history | Also report *generic-tier* findings in test, fixture and example paths. Named rules already report there. |
+| `--include-fixtures` | scan, staged, history | Also report *generic high-entropy* findings in test, fixture and example paths. Named rules and `generic-api-key-assignment` already report there. |
 | `--include-generated` | scan, staged, history | Also scan generated files (lockfiles, Gradle/Maven wrappers, Xcode project files, SARIF reports). Never re-enables `node_modules`, `package-lock.json` or minified bundles. |
 | `--key-context` | scan, staged, history | Report a *quoted* generic high-entropy string only if the identifier it is assigned to carries a secret-like word. Off by default. |
 | `--include-api-document-entropy` | scan, staged | With `--include-entropy`, also run the entropy heuristic inside recognized OpenAPI, Swagger and AsyncAPI documents. Named rules are unaffected. Not applicable to history or mask. |
@@ -145,6 +145,59 @@ and that an MCP client asked for it, then waits for `y` or `N`. It refuses to ru
 without an interactive terminal, so it cannot be piped or scripted, and an input
 that ends (Ctrl-D) is a no. Approval is one credential, one file, one provider,
 one use, five minutes. See [Verification](verification.md#the-consent-gate).
+
+## Inspecting fixtures and test data
+
+To look at what the generic entropy heuristic finds in test, fixture and mock
+data — the run people usually mean by "inspect my fixtures":
+
+```bash
+secretloop scan --path ./tests --include-entropy --include-fixtures \
+  --format json --fail-on never
+```
+
+This is the authoritative description of that workflow; other pages link here.
+
+What each part does, and what it does **not** do:
+
+- **Named provider rules stay enabled.** `--include-fixtures` does not switch
+  anything off. A real GitHub token committed to `tests/` is reported as
+  `github-token` whether or not you pass it — that is the point: a leaked
+  credential in a fixture is still leaked.
+- **`--include-fixtures` lifts the fixture-path suppression of the generic
+  high-entropy tier, and only that tier.** Without it, `generic-high-entropy`
+  findings under recognized test, fixture and example path segments are dropped
+  and the scan says how many. **`generic-api-key-assignment` is not suppressed
+  there** — it is a high-severity format match, and it reports in fixture paths
+  with or without this flag. The segment list and its case sensitivity are in
+  [Configuration](configuration.md#suppressing-findings).
+- **API-document entropy is a separate control.** Recognized OpenAPI, Swagger
+  and AsyncAPI documents are still skipped by the entropy heuristic unless you
+  also pass `--include-api-document-entropy`. `--include-fixtures` does not
+  imply it, and the scan reports how many documents were skipped.
+- **Your existing exclusions still apply.** `excludePaths`, `baseExcludePaths`,
+  generated-file exclusions, `maxFileSizeBytes` and `includePaths` precedence
+  are unchanged by either flag. So are inline suppressions
+  (`secretloop:allow`, `secretloop-ignore`, `gitleaks:allow`), which stay
+  suppressed and counted, and the built-in placeholder and documentation-sample
+  value filters, which drop obvious non-secrets before anything is reported.
+  **An inspection run is not a way to see everything the scanner considered.**
+- **`--fail-on never` only makes findings non-blocking**, so an inspection in a
+  script does not exit `1` and read like a failure. It does not suppress
+  operational failures: an unreadable configuration, a bad flag or a scan that
+  could not run still exits non-zero. See [Exit codes](#exit-codes).
+- **`--format json`** is convenient because it lets you filter the result with
+  any JSON tool — for example to the entropy tier alone, by `ruleId` or by the
+  `entropy-heuristic` confidence tier. The text report already separates the
+  tiers by rule id, severity and tier.
+
+**What this run does not establish.** It does not check whether any value is
+live: liveness requires `--verify`, which is a separate, consent-gated action
+(see [Verification](verification.md)). And it is not a completeness claim —
+excluded paths, unreadable files, suppressed findings and filtered placeholders
+all mean the report is what this configuration surfaced, not everything that is
+there. Read the scope line the scan prints before drawing a conclusion from an
+empty result.
 
 ## Examples
 

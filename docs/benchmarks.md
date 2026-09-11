@@ -80,7 +80,37 @@ measured in any repository. The six repositories were the discovery corpus for
 the new rule, so its yield there is in-sample; its independent validation is a
 57-case synthetic corpus, which is not evidence of real-world generalization.
 
-## 4. Older studies, kept for the record
+## 4. The twenty-two-repository study (unreleased build, not 0.5.0)
+
+A separate, larger population, measured on 10 September 2026 against an
+**unreleased build eight commits ahead of the `v0.5.0` tag**. Full record:
+[twenty-two-repository study](benchmarks/22-repository-study.md).
+
+Twenty-two pinned repositories, working tree only, three modes, 66 runs each
+with a determinism repeat. `default` was adjudicated as a full census; the
+entropy modes were adjudicated as a 600-unit random sample of the sixteen
+repositories added to the frozen six.
+
+| view | mode | TP / FP / unknown | findings | identification |
+|---|---|---|---|---|
+| combined twenty-two | `default` | 840 / 409 / 72 | 1321 | 63.5882% – 69.0386% |
+| the sixteen additions | `default` | 620 / 388 / 72 | 1080 | 57.4074% – 64.0741% |
+| frozen six | `--include-entropy` | 234 / 199 / 0 | 433 | 54.04% |
+
+**Read these with their population attached.** The four views on that page —
+frozen six, sixteen additions, original twenty, combined twenty-two — **overlap
+and cannot be summed**, and none of them is the corpus measured in §1–§3 above.
+The percentage ranges are **unresolved-label bounds, not confidence
+intervals**: 72 findings whose verdict the triage policy does not decide, 71 of
+them committed password hashes.
+
+Nothing in that study is a competitor comparison (no other tool was run on that
+panel), a recall measurement (no positive-site inventory exists for the sixteen),
+or evidence that the detector improved (one build, one measurement — every
+difference between views is a difference of population). The entropy-enabled
+figure that the 57% target is defined against remains **54.04%**, unchanged.
+
+## 5. Older studies, kept for the record
 
 - [0.1.2 multi-repository study](benchmarks/0.1.2-multi-repo-study.md) — raw,
   untriaged finding counts across twenty repositories. It measures nothing about
@@ -96,7 +126,7 @@ the new rule, so its yield there is in-sample; its independent validation is a
 - [`bench/precision/`](../bench/precision/README.md) — how the six-repository
   measurement is reproduced: pinned SHAs, scan scripts, the triage policy.
 
-## 5. Capability comparison, from vendor documentation
+## 6. Capability comparison, from vendor documentation
 
 Not measured — these rows are read from each tool's own current documentation,
 and only the three-tool table in §1 was benchmarked. The root README links here
@@ -123,7 +153,16 @@ rather than repeating them.
 
 ## Limitations
 
-Six repositories, one point in time, one dominating by volume; every true
-positive a committed fixture; recall unmeasured; GitHub Secret Scanning and
-GitGuardian not benchmarked and no figure attributed to them. Detection is
-offline in every study: no credential was ever verified against a provider.
+**§1–§3, the six-repository corpus.** Six repositories, one point in time, one
+dominating by volume; every true positive a committed fixture; recall
+unmeasured; GitHub Secret Scanning and GitGuardian not benchmarked and no figure
+attributed to them.
+
+**§4, the twenty-two-repository study**, carries its own limitations, which are
+different and are listed in full on
+[its own page](benchmarks/22-repository-study.md#12-limitations-collected):
+an unreleased build, a mixed-date panel, no competitor run, no recall, and
+labels that are not independently reproducible.
+
+Detection is offline in every study: no credential was ever verified against a
+provider.
