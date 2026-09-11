@@ -396,8 +396,13 @@ test("hostile responses move no validity outcome, and leak no credential", async
   const dead: any = await run("slack-token", SL, deadStub);
   assert.strictEqual(dead.status, "dead");
 
-  // And no diagnostic carries the credential, whatever the provider said.
-  const secret = "xoxb-NEVER-IN-A-DIAGNOSTIC-000000";
+  // And no diagnostic carries the finding's value, whatever the provider said.
+  //
+  // A deliberately NON-credential-shaped marker. The finding is built by makeFinding, so the
+  // value never has to match the rule for this to mean anything -- and planting a real token
+  // shape here would make the repository's own self-scan fail on a fixture, which is the
+  // mechanism in .github/secretloop.ci.json working rather than something to exempt.
+  const secret = "MARKER-NEVER-IN-A-DIAGNOSTIC-000000";
   const s = stub(() => ({ status: 200, body: { ok: false, error: "<script>" + secret + "</script>" } }));
   const r: any = await run("slack-token", secret, s);
   assert.ok(!JSON.stringify(r).includes("NEVER-IN-A-DIAGNOSTIC"), "the credential reached a diagnostic");
