@@ -1,9 +1,11 @@
 # Changelog
 
-## Unreleased
+## 0.5.1 — 2026-09-11
 
-**Not in any published package.** Published 0.5.0 behaves as described under
-that heading below.
+A maintenance release: four defect fixes, one piece of defensive hardening,
+permanent regression tests and three dependency updates. No rule was added,
+removed or renamed, the rule count is unchanged at 110, and no detection
+threshold, fingerprint, severity or output format changed.
 
 ### Consent store
 
@@ -93,6 +95,25 @@ that heading below.
   rejecting, and an uncancelled scan is unchanged. This also removes the timing
   dependence from the one test that had flaked in CI: it can now assert the
   exact commit count instead of "fewer than the whole history".
+
+### Dependencies
+
+- **`@types/vscode` 1.134.0 → 1.136.0** (PR #30), **`@aws-sdk/client-sts`
+  3.1116.0 → 3.1127.0** (PR #31) and **`@aws-sdk/client-iam` 3.1116.0 →
+  3.1127.0** (PR #32). All three are devDependencies; `dependencies` remains
+  absent, so an installed package still pulls nothing at runtime.
+- **The shipped bundles changed, and a lockfile-only diff was not
+  behaviour-free.** The AWS SDK is bundled into `out/cli.js`, `out/mcp.js` and
+  `out/extension.js`, so PR #31 carried `@aws-sdk/credential-provider-node`
+  3.972.81 → 3.972.82 into all three: a `.catch(() => {})` added to the passive
+  credential-refresh chain, plus a version constant.
+- **That change is not reachable from either AWS caller.** Both construct their
+  client with explicit static credentials, which selects a different provider
+  path; measured offline, the default credential-provider chain was constructed
+  **zero** times across every exercised path. Verification against STS was
+  exercised offline only, against synthetic responses; the IAM rotation path was
+  reviewed from source and not exercised at runtime. The SDK's own retry
+  behaviour on a throttled response is unchanged by this update.
 
 ## 0.5.0 — 2026-09-09
 

@@ -3,7 +3,7 @@
   "displayName": "SecretLoop",
   "description": "Find exposed secrets, verify supported credentials with explicit consent, and act on them — in VS Code, on the command line, and over MCP. A GPY Analytics product.",
   "icon": "docs/icon.png",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "publisher": "gpyanalytics",
   "engines": {
     "vscode": "^1.85.0",

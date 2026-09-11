@@ -124,12 +124,20 @@ reassessment.
   low-severity disclosure issues in the MCP layer, both fixed in PR #49 with
   RED-checked tests; its other findings were documented limitations, not
   defects.
-- `fd6637d7..53b5750` (current `main`): re-reviewed against all nine
-  invariants. The settling command reports exactly two changed surface files,
+- `fd6637d7..53b5750`: re-reviewed against all nine invariants. The settling
+  command reports exactly two changed surface files,
   `src/consent.ts` (PR #59, `readRecord` id-match) and `src/verify.ts`
   (PR #56, GitHub and Slack verification diagnostics). All nine established;
   no defect found. The consent change is **defensive hardening** — no
   reachable bypass was demonstrated, and none is claimed.
+- `53b5750..33a21020` (the 0.5.1 candidate source): the settling command
+  reports **no changed surface file**. The only changes after the endpoint are
+  `docs/development.md`, `tests/verify-diagnostics.test.ts` and lockfile
+  version fields, so the review above still applies and **the endpoint is not
+  extended**. The dependency updates in that range do change the AWS SDK bytes
+  bundled into all three artifacts; that was assessed offline rather than under
+  §5, and the changed passive-refresh code is unreachable from both callers,
+  each of which passes explicit static credentials.
 
 ## Open items
 

@@ -83,7 +83,7 @@ every other repository-authored fragment.
 The latest published release, and only that one. There are no long-term
 support branches — fixes ship forward, so a fix lands in the next release
 rather than as a patch to an older one. This document ships with **SecretLoop
-0.5.0**; check what you are running with `secretloop --version`, or the version
+0.5.1**; check what you are running with `secretloop --version`, or the version
 on the extension's listing, and upgrade before reporting an issue against an
 older one.
 
