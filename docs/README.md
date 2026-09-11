@@ -1,8 +1,10 @@
 # SecretLoop documentation
 
-One authoritative page per topic. Every page describes **published 0.5.0**, the
+One authoritative page per topic. Every page describes **published 0.5.1**, the
 current release on npm and the extension channels. The table at the end of this
-page summarises what changed from 0.4.0.
+page summarises what 0.5.0 changed from 0.4.0. 0.5.1 is a maintenance release:
+it added or changed no detector rules, and its fixes are listed in the
+[changelog](../CHANGELOG.md).
 
 ## Getting started
 
@@ -54,19 +56,19 @@ page summarises what changed from 0.4.0.
 
 ## What's in main and what's published
 
-Release status, current as of **2026-09-09**. This page is repository-only: it
+Release status, current as of **2026-09-11**. This page is repository-only: it
 is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 
-npm, Open VSX and the VS Code Marketplace all serve **0.5.0** (2026-09-09),
-which is also what `main` carries. The previous release was 0.4.0 (2026-09-08).
+npm, Open VSX and the VS Code Marketplace all serve **0.5.1** (2026-09-11),
+which is also what `main` carries. The previous release was 0.5.0 (2026-09-09).
 Rows marked *refused for
 verification* mean a finding of that kind is never sent to a provider on any
 surface; a finding matched by a supported plaintext rule can still be
 transmitted after the switch or consent workflow described in
 [verification](verification.md).
 
-| capability | 0.4.0 (previous) | 0.5.0 (published) |
+| capability | 0.4.0 | 0.5.0 |
 |---|---|---|
 | Named rules | 109 | 110 (`encryption-key-assignment`) |
 | Generic entropy tier | opt-in (`--include-entropy`) | opt-in; not run over OpenAPI / Swagger / AsyncAPI documents unless `--include-api-document-entropy` |

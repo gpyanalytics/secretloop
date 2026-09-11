@@ -141,27 +141,32 @@ reassessment.
 
 ## Open items
 
-Accurate as of the 0.5.0 release (2026-09-09):
+Accurate as of the 0.5.1 release (2026-09-11):
 
-- **0.5.0 is published.** npm, Open VSX and the VS Code Marketplace all serve
-  0.5.0, released from commit `fd6637d7` and tagged `v0.5.0`. The published npm
+- **0.5.1 is published.** npm, Open VSX and the VS Code Marketplace all serve
+  0.5.1, released from commit `88d2197` and tagged `v0.5.1`. The published npm
   tarball and both extension packages were downloaded and verified byte-identical
-  to the artifacts the release gates ran against.
+  to the artifacts the release gates ran against. The previous release, 0.5.0
+  from `fd6637d7` and tagged `v0.5.0`, was verified the same way at the time.
 - **Dependency advisories: closed.** PR #52 refreshed js-yaml to 4.3.2 and qs
   to 6.16.0 in the lockfile only, resolving the Dependabot alert and the two
   `qs` advisories in the release-tool chain. Full and production audits both
-  reported zero on 2026-09-09. Audit results are point-in-time and are re-run
-  at each release.
-- **The timing-dependent cancellation test is fixed, unreleased.**
+  reported zero on 2026-09-09, and again on 2026-09-11 for the 0.5.1 release.
+  Audit results are point-in-time and are re-run at each release.
+- **The timing-dependent cancellation test is fixed, shipped in 0.5.1.**
   `history.test.ts` "cancelling mid-scan stops it well short of the end" failed
   once on the push-to-main run for PR #49's merge. Its assertion was a proxy for
   "SIGTERM truncated git's output", which holds only when the kill wins a race
   against git writing the rest. Cancellation now stops parsing at the abort
   point, so the test asserts an exact commit count and no longer depends on
-  delivery timing. Not in published 0.5.0.
-- **Live-host validation.** The VS Code extension host and live MCP clients were
-  not exercised for the `main` changes; wiring was compiled and inspected and
-  the shared engine is unit-tested.
+  delivery timing.
+- **Live-host validation.** Real extension-host behaviour was exercised at
+  `53b5750` and passed 17/17; that is the source identity the run covers, and
+  **the published 0.5.1 VSIX was not installed into a running host**. A VS Code
+  UX review — notifications, diagnostics, prompts — needs a person at a screen
+  and has **not** been done. **Actual MCP-client validation remains NOT RUN**:
+  the stdio exchanges on record are protocol probes, not a client. Neither is a
+  release gate; `RELEASING.md` requires neither.
 - **Stale strings in code.** Closed: the MCP `secretloop_scan` description no
   longer states a rule count, and SECURITY.md's supported-version line was
   corrected in the documentation consolidation. The RELEASING.md §6 count check

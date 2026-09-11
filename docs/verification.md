@@ -3,7 +3,7 @@
 Verification asks a provider whether a detected credential still works. It is
 the one thing SecretLoop does that sends a credential to a third party, so it is
 off everywhere by default and has a separate control on each surface. Applies to
-**published 0.5.0**.
+**published 0.5.1**.
 
 ## Three surfaces, three switches
 

@@ -5,7 +5,7 @@ CLI, the VS Code extension and the MCP server. Only that filename is read; there
 is no fallback to any other name. A documented template ships in the repository
 as `.secretloop.example.json`.
 
-Applies to **published 0.5.0**.
+Applies to **published 0.5.1**.
 
 ## Keys
 
@@ -41,14 +41,14 @@ editor setting applies only when the project file is silent. See
 
 `excludePaths` is different, and deliberately so: it is a list, not a switch, so
 the editor setting is **added to** the project file's list rather than replacing
-it **(unreleased)**. The scan excludes the built-in defaults, plus every
+it. The scan excludes the built-in defaults, plus every
 glob in `.secretloop.json`, plus every glob in `secretloop.excludePaths`. An
 editor setting can therefore narrow a scan but never widen one, and an empty
 setting changes nothing. The globs use the same syntax and the same
 repository-relative base in both places, and `includePaths` still outranks every
 exclusion whichever list it came from — an explicit include wins over a
-built-in, project-file or editor exclusion alike. In published 0.5.0 the editor
-setting is declared but not read.
+built-in, project-file or editor exclusion alike. Published 0.5.0 declared this
+setting without reading it; 0.5.1 reads it.
 
 The MCP server reads the project file of the repository it scans and reports
 which rules it excluded and whether the entropy tier was on, so an absence of

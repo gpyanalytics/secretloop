@@ -1,7 +1,7 @@
 # Coverage
 
 What a scan reads, what it deliberately does not, and how it says so. Applies to
-**published 0.5.0**.
+**published 0.5.1**.
 
 ## What is scanned
 

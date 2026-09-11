@@ -1,7 +1,7 @@
 # VS Code extension
 
 The extension runs the same engine as the CLI on the file you are editing, on
-save, and on demand across the workspace. Applies to **published 0.5.0**.
+save, and on demand across the workspace. Applies to **published 0.5.1**.
 
 ## Findings as diagnostics
 
@@ -48,7 +48,7 @@ All under **SecretLoop** in the Command Palette:
 
 | command | what it does |
 |---|---|
-| Scan Entire Workspace | Scans every file git would track, through the same enumeration the CLI uses. The summary reports what was scanned and what was skipped, including findings dropped by inline directives or by fixture-path suppression **(unreleased — published 0.5.0 omits the two suppression counts)** |
+| Scan Entire Workspace | Scans every file git would track, through the same enumeration the CLI uses. The summary reports what was scanned and what was skipped, including findings dropped by inline directives or by fixture-path suppression |
 | Scan Staged Files | Checks what you are about to commit |
 | Scan Git History for Secrets | Walks commits and opens the report as a document |
 | Accept Current Findings as Baseline | Writes `.secretloop-baseline.json` so only new findings fail |
@@ -67,7 +67,7 @@ All under **SecretLoop** in the Command Palette:
 | `secretloop.autoScanOnSave` | `true` | Re-scan a file when it is saved |
 | `secretloop.blockCommitOnSecret` | `true` | Warn in Source Control when staged files contain unresolved secrets |
 | `secretloop.envFilePath` | `.env` | Where extracted secrets are written |
-| `secretloop.excludePaths` | `[]` | Extra globs never scanned, **added to** the built-in excludes and to any `excludePaths` in `.secretloop.json` **(unreleased — the published 0.5.0 extension declares this setting but does not read it)** |
+| `secretloop.excludePaths` | `[]` | Extra globs never scanned, **added to** the built-in excludes and to any `excludePaths` in `.secretloop.json` |
 | `secretloop.entropyPassEnabled` | `false` | Opt in to the generic high-entropy tier. A `.secretloop.json` value for `entropyPassEnabled` overrides this setting |
 | `secretloop.enableLiveVerification` | `false` | Make read-only provider calls to confirm a credential is active. The extension offers to turn this on the first time it finds a credential it could check |
 

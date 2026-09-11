@@ -4,7 +4,7 @@ The `secretloop` command is the same engine the extension and the MCP server run
 All three read the same `.secretloop.json`, so "passed locally, failed in CI"
 cannot come from a different rule set.
 
-Applies to **published 0.5.0**.
+Applies to **published 0.5.1**.
 
 ## Commands
 
