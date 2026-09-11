@@ -53,6 +53,16 @@ export interface ReportOptions {
    * byte-identical to before.
    */
   archives?: ArchiveAccounting;
+  /**
+   * The product version, for SARIF's `tool.driver.version`.
+   *
+   * Passed in rather than read here: `packageVersion()` in the CLI is already
+   * the single authority, and a second read inside the reporter would put a
+   * filesystem dependency into the extension and MCP bundles that neither needs.
+   * Omitted when the caller has none -- an empty version is worse than none,
+   * because a consumer cannot tell it from a real one.
+   */
+  toolVersion?: string;
 }
 
 /**
@@ -498,9 +508,16 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
     version: "2.1.0",
     runs: [
       {
+        // Columns below are JavaScript string offsets, which are UTF-16 code
+        // units. Declaring that is exact and needs no conversion; the
+        // alternative, SARIF's other kind, would mean counting code points and
+        // getting a surrogate pair wrong in exactly the files -- minified
+        // bundles, non-Latin source -- where a precise column matters most.
+        columnKind: "utf16CodeUnits",
         tool: {
           driver: {
             name: "SecretLoop",
+            ...(options.toolVersion ? { version: options.toolVersion } : {}),
             rules: ruleIds.map((id) => {
               const sample = findings.find((f) => f.ruleId === id)!;
               return {
@@ -568,7 +585,7 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
             {
               physicalLocation: {
                 artifactLocation: { uri: f.source ? f.source.container : f.file ?? "unknown" },
-                region: { startLine: Math.max(1, f.line) },
+                region: { startLine: Math.max(1, f.line), ...sarifColumns(f) },
               },
               ...(f.source
                 ? {
@@ -584,6 +601,31 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
     ],
   };
   return JSON.stringify(sarif, null, 2);
+}
+
+/**
+ * `startColumn`/`endColumn` for a finding, or nothing when they would be wrong.
+ *
+ * SARIF's `endColumn` is exclusive -- one past the last character of the region
+ * -- so it is the start plus the span's length in the declared units. The span
+ * comes from the ORIGINAL source offsets the scan recorded; the redacted value
+ * has a different length, and measuring that would encode the mask into the
+ * location.
+ *
+ * Three cases deliberately get no columns, because a wrong column is worse than
+ * an honest line:
+ *
+ *  - no `column`: the scanner had no line-start offset to measure against.
+ *  - a span crossing a newline: SARIF would need `endLine` paired with it, and a
+ *    multiline credential is rare enough that inventing that pairing here is not
+ *    worth the risk of getting it wrong.
+ *  - an archive member: the physical artifact is the CONTAINER, while the span is
+ *    an offset into the member's text. The line already carries that mismatch and
+ *    says so in the message; a column would compound it.
+ */
+function sarifColumns(f: Finding): { startColumn?: number; endColumn?: number } {
+  if (f.column === undefined || f.source || f.value.includes("\n")) return {};
+  return { startColumn: f.column, endColumn: f.column + f.value.length };
 }
 
 /**
