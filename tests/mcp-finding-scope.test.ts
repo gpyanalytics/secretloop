@@ -12,6 +12,7 @@ import {
   resetSessions,
 } from "../src/mcp-core";
 import { positiveSamples } from "./fixtures";
+import { buildZip } from "./archive-builders";
 
 /**
  * WHERE THE FINDINGS A CLIENT IS LOOKING AT CAME FROM.
@@ -207,6 +208,63 @@ test("a stopped history scan stays partial and still writes nothing to the cache
 
   const after = payload(toolListFindings({ path: dir }));
   assert.deepStrictEqual(after.scope, scan.scope, "the partial history scan labelled nothing");
+});
+
+// ---------------------------------------------------------------------------
+suite("MCP finding scope — overlapping operations and per-scan accounting");
+
+test("a history scan in flight cannot pair its work with the workspace cache", async () => {
+  // DETERMINISTIC, not timing-dependent: toolScan is a SYNCHRONOUS function, so
+  // once it starts it runs to completion before any pending promise resumes.
+  // Starting the async history scan and then calling toolScan without awaiting
+  // puts a real history scan in flight across a real workspace scan.
+  const dir = repo({ "app.js": `const gh = "${TOKEN}";\n` });
+  resetSessions();
+  setAllowedRoots([dir]);
+  payload(toolScan({ path: dir }));
+
+  const inFlight = toolHistoryScan({ path: dir });     // async, deliberately not awaited
+  const during = payload(toolScan({ path: dir }));     // synchronous: completes now
+
+  const whileFlying = cachedScan(dir)!;
+  assert.strictEqual(whileFlying.scope, during.scope, "the cache holds the scan that just ran");
+
+  await inFlight;                                       // the history scan now resolves
+
+  const afterwards = cachedScan(dir)!;
+  assert.strictEqual(afterwards.scope, during.scope, "a resolving history scan relabels nothing");
+  assert.strictEqual(
+    afterwards.findings.length,
+    during.findings.length,
+    "and contributes no findings to the workspace cache"
+  );
+  const list = payload(toolListFindings({ path: dir }));
+  assert.deepStrictEqual(list.scope, during.scope, "list_findings still reports the workspace scan");
+});
+
+test("archive accounting in scope is per scan, never accumulated across scans", () => {
+  // scope.archives is the only non-primitive it carries. If that accumulator
+  // were ever shared between calls, a second scan would report the first scan's
+  // containers on top of its own -- visible in the serialized payload, not just
+  // in memory.
+  const dir = repo({ "app.js": "const ok = 1;\n" }, false);
+  writeFileSync(path.join(dir, "one.zip"), buildZip([{ name: "a.txt", data: Buffer.from("x\n") }]));
+  resetSessions();
+  setAllowedRoots([dir]);
+  const first = payload(toolScan({ path: dir }));
+  assert.strictEqual(first.scope.archives.containersOpened, 1);
+
+  writeFileSync(path.join(dir, "two.zip"), buildZip([{ name: "b.txt", data: Buffer.from("y\n") }]));
+  const second = payload(toolScan({ path: dir }));
+  assert.strictEqual(
+    second.scope.archives.containersOpened,
+    2,
+    "two containers are present, so two are reported -- not three"
+  );
+  assert.strictEqual(second.scope.archives.members.scanned, 2);
+
+  const list = payload(toolListFindings({ path: dir }));
+  assert.deepStrictEqual(list.scope.archives, second.scope.archives, "the listing carries the later scan's accounting");
 });
 
 // ---------------------------------------------------------------------------
