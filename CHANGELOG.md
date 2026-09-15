@@ -5,6 +5,36 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### Remediation
+
+- **A redaction now checks whether the value it removed is still there.** Both
+  redaction quick-fixes, and the rotation path that shares them, run one
+  automatic check after a successful edit — never a retry, never a second edit.
+  Three outcomes: the value occurs nowhere in that editor document, it is still
+  there (a warning, with the number of surviving occurrences), or nothing could
+  be established.
+- **It looks for the exact value, not for a finding.** A `secretloop:allow`, an
+  `excludeRules` entry, an `allowValues` pattern or a fixture path makes a
+  credential vanish from a scan while it sits in the buffer untouched, so
+  absence from a filtered detector run proves nothing. The value the fix already
+  held in memory is searched for directly; it is never persisted, logged,
+  printed, transmitted or hashed, and no new digest of credential material
+  exists. Occurrences are counted non-overlapping.
+- **The scope is one editor document and the wording says so.** Nothing is
+  saved, disk is not read, and no claim is made about other files, the working
+  tree, history, archives or the provider — and never that a credential was
+  revoked or rotated. It is an observation of the buffer that was read, not a
+  promise that it stays that way, and it claims no causation: another change can
+  land between the edit and the read, so the two facts are reported side by side
+  and joined by nothing.
+- **Unavailable is a first-class outcome**, for a refused or stale edit, an
+  unreadable document, no usable value, text containing a NUL byte, and encoded
+  findings — whose recorded value is the encoded spelling. A positive
+  observation always outranks a coverage doubt; an absence claim never survives
+  one.
+- `.env` extraction is deliberately not covered by this first slice: it moves
+  the value into another file, so it needs its own wording.
+
 ### Suppression
 
 - **A suppression can now say why, and none of them has to.**

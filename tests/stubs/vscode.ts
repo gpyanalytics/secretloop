@@ -28,6 +28,9 @@ export function reset(): void {
   calls.length = 0;
   outputLines.length = 0;
   applyEditResult = true;
+  // Registered documents go too: one test's edited buffer must not be another
+  // test's starting text.
+  resetDocuments();
 }
 
 /**
@@ -157,10 +160,101 @@ export class Range {
   ) {}
 }
 
+/** One queued replacement, kept so applyEdit can actually perform it. */
+interface QueuedReplace {
+  fsPath: string;
+  range: vscode.Range;
+  newText: string;
+}
+
 export class WorkspaceEdit {
+  /** Recorded for assertions AND retained, so applyEdit can apply them. */
+  readonly queued: QueuedReplace[] = [];
+
   replace(uri: vscode.Uri, range: vscode.Range, newText: string): void {
     record("WorkspaceEdit.replace", uri, range, newText);
+    this.queued.push({ fsPath: (uri as { fsPath: string }).fsPath, range, newText });
   }
+}
+
+/**
+ * A document whose text actually changes when an edit is applied to it.
+ *
+ * The stub used to record `WorkspaceEdit.replace` and stop there, which was
+ * enough while every assertion was about the edit that was requested. It is not
+ * enough for anything that reads the document AFTERWARDS: a confirmation pass
+ * would have read pre-edit text every time and reported the credential still
+ * present, and a test written against that would have been asserting the
+ * harness rather than the product.
+ *
+ * `positionAt` and `offsetAt` are real conversions rather than the
+ * `{line: 0, character: offset}` shortcut, so a multi-line document edits where
+ * the product says it does.
+ */
+export class StubTextDocument {
+  version = 1;
+  isClosed = false;
+  /** Set by a test to make getText throw, modelling a disposed document. */
+  readFails = false;
+
+  constructor(
+    private text: string,
+    readonly uri: { fsPath: string; scheme: string } = {
+      fsPath: "/repo/src/app.ts",
+      scheme: "file",
+    },
+    readonly languageId: string = "typescript"
+  ) {}
+
+  getText(): string {
+    if (this.readFails) throw new Error("document is disposed");
+    return this.text;
+  }
+
+  positionAt(offset: number): vscode.Position {
+    const clamped = Math.max(0, Math.min(offset, this.text.length));
+    const before = this.text.slice(0, clamped);
+    const line = before.split("\n").length - 1;
+    const character = clamped - (before.lastIndexOf("\n") + 1);
+    return { line, character } as unknown as vscode.Position;
+  }
+
+  offsetAt(position: vscode.Position): number {
+    const { line, character } = position as unknown as { line: number; character: number };
+    const lines = this.text.split("\n");
+    let offset = 0;
+    for (let i = 0; i < line && i < lines.length; i++) offset += lines[i].length + 1;
+    return Math.min(offset + character, this.text.length);
+  }
+
+  /** Applied by workspace.applyEdit only, and only when it reports success. */
+  applyReplace(range: vscode.Range, newText: string): void {
+    const start = this.offsetAt(range.start);
+    const end = this.offsetAt(range.end);
+    this.text = this.text.slice(0, start) + newText + this.text.slice(end);
+    this.version++;
+  }
+}
+
+/** Documents applyEdit is allowed to change, keyed by path. */
+const editableDocuments = new Map<string, StubTextDocument>();
+
+/**
+ * A document this stub will edit. Tests that pass their own plain object still
+ * work: applyEdit simply has nothing registered to change, exactly as before.
+ */
+export function createDocument(
+  text: string,
+  fsPath = "/repo/src/app.ts",
+  languageId = "typescript"
+): StubTextDocument {
+  const doc = new StubTextDocument(text, { fsPath, scheme: "file" }, languageId);
+  editableDocuments.set(fsPath, doc);
+  return doc;
+}
+
+export function resetDocuments(): void {
+  editableDocuments.clear();
 }
 
 /** Configuration state a test can set up, mirroring inspect()'s scopes. */
@@ -198,9 +292,17 @@ export const workspace = {
       record("configuration.update", `${namespace}.${key}`, value, target);
     },
   }),
-  applyEdit: async (edit: WorkspaceEdit): Promise<boolean> => {
+  applyEdit: async (edit: vscode.WorkspaceEdit): Promise<boolean> => {
     record("workspace.applyEdit", edit);
-    return applyEditResult;
+    // A refused edit changes nothing, which is the whole point of modelling it:
+    // the document a test then inspects still holds the credential.
+    if (!applyEditResult) return false;
+    // The real type has no `queued`; this stub's does. Read it defensively so
+    // the signature stays the one vscode declares.
+    for (const q of (edit as unknown as WorkspaceEdit).queued ?? []) {
+      editableDocuments.get(q.fsPath)?.applyReplace(q.range, q.newText);
+    }
+    return true;
   },
   get workspaceFolders() {
     return workspaceFolders;

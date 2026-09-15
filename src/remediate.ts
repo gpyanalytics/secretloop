@@ -2,6 +2,12 @@ import * as vscode from "vscode";
 import * as path from "path";
 import { Finding } from "./scanner";
 import { isTracked } from "./walk";
+import {
+  FixConfirmation,
+  confirmTargetRemoved,
+  describeConfirmation,
+  notApplied,
+} from "./confirm";
 
 /** Derives a reasonable env var name from the rule/description, e.g. "AWS_ACCESS_KEY". */
 export function suggestEnvVarName(finding: Finding, existingNames: Set<string>): string {
@@ -55,22 +61,40 @@ const STALE_SPAN_MESSAGE =
   "Nothing was modified. Re-scan the file and try again.";
 
 /**
- * Replaces the secret in the document with a redaction placeholder.
+ * What a redaction attempt did, and what could be established afterwards.
  *
- * Returns whether the secret was actually replaced, so a caller does not have
- * to infer it from the absence of a thrown error.
+ * Two facts, kept apart because they are different: `applied` says the edit
+ * landed, `confirmation` says what the document then contained. A successful
+ * edit with an unavailable confirmation is an ordinary, expected combination,
+ * and so is a successful edit that still observes the value.
+ */
+export interface RedactResult {
+  applied: boolean;
+  confirmation: FixConfirmation;
+}
+
+/**
+ * Replaces the secret in the document with a redaction placeholder, then checks
+ * -- once -- whether that document still contains the value.
+ *
+ * One pass, automatically, after a successful edit. No retry, no second edit,
+ * no loop: if the value is still there the person is told, and what to do next
+ * is theirs to decide.
+ *
+ * Returns both facts, so a caller does not have to infer either from the
+ * absence of a thrown error.
  */
 export async function redactInPlace(
   document: vscode.TextDocument,
   finding: Finding,
   options: RedactOptions = {}
-): Promise<boolean> {
+): Promise<RedactResult> {
   // Before the clipboard, not just before the edit. Copy-then-redact copies
   // first, so checking later would put a live credential on a syncing clipboard
   // for a redaction that was never going to happen.
   if (!spanStillHolds(document, finding)) {
     vscode.window.showErrorMessage(STALE_SPAN_MESSAGE);
-    return false;
+    return { applied: false, confirmation: notApplied() };
   }
 
   const copied = options.copyToClipboard === true;
@@ -92,15 +116,31 @@ export async function redactInPlace(
         ? "SecretLoop: the edit could not be applied, so the secret is still in the file — and it is now also on your clipboard. Clear the clipboard, and check whether the file is read-only."
         : "SecretLoop: the edit could not be applied, so the secret is still in the file. Check whether it is read-only."
     );
-    return false;
+    return { applied: false, confirmation: notApplied() };
   }
 
-  vscode.window.showInformationMessage(
-    copied
-      ? "Secret redacted and copied to the clipboard. Paste it somewhere safe (like a password manager) now — anything running on this machine can read the clipboard."
-      : "Secret redacted. Undo restores it if you still need the value."
-  );
-  return true;
+  // Only after the edit has been applied and awaited: inspecting before it
+  // lands would read the text the edit was about to change and report the
+  // credential still present every time.
+  //
+  // The target is the value this operation already holds -- the same string
+  // spanStillHolds compared above -- passed straight in and not stored
+  // anywhere, so two commands running at once cannot mix up whose value is
+  // whose.
+  const confirmation = confirmTargetRemoved(document, finding);
+
+  const base = copied
+    ? "Secret redacted and copied to the clipboard. Paste it somewhere safe (like a password manager) now — anything running on this machine can read the clipboard."
+    : "Secret redacted. Undo restores it if you still need the value.";
+  const message = `${base} ${describeConfirmation(confirmation)}`;
+
+  // A surviving copy is louder than a success. Everything else stays an
+  // information message, including an unavailable confirmation: the edit did
+  // work, and not being able to check is not a warning about the edit.
+  if (confirmation.outcome === "still-observed") vscode.window.showWarningMessage(message);
+  else vscode.window.showInformationMessage(message);
+
+  return { applied: true, confirmation };
 }
 
 /** Moves the secret into the workspace .env file and replaces the source occurrence with an env reference. */
