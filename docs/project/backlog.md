@@ -120,12 +120,27 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   CLI and MCP both report; it now
   totals them from the same per-file counters and passes them to the shared
   formatter.
-- **MCP history suppression disclosure** — implemented on a branch, not merged
-  and not published. `secretloop_history_scan` omitted the inline-suppression
+- **MCP history suppression disclosure** — **merged (PR #77), not published.**
+  `secretloop_history_scan` omitted the inline-suppression
   counts its scope sentence exists to carry, while the CLI reported them for the
   same selection; the tool now asks `scanHistory` for the accounting it already
   produces and passes it to the shared formatter. Aggregate only: counts, never
   reason text or a suppressed finding. The gap predated the suppression work.
+- **binaryIdentity path normalization** — implemented on a branch, not merged
+  and not published. `binaryIdentity` rewrote `\` to `/`, so on POSIX a real
+  file named `dir\file.png` produced the same exclusion identity as the
+  unrelated path `dir/file.png`. It now takes canonical, repository-relative,
+  `/`-separated paths and refuses ambiguous or non-canonical input outright,
+  withholding the whole digest rather than dropping a path or claiming the empty
+  set; separator conversion for Windows producers stays at the enumeration. The
+  original follow-up recorded this as unreachable through the shipped scanner —
+  true of the git-backed enumeration, whose refusal comes from git's own
+  quoting rather than from a containment guarantee, but the fallback directory
+  walk admits such a path and it was reachable there, end to end through the
+  real comparator. `BINARY_CONTRACT_VERSION` moves 1 → 2 because the
+  representation changed and version-1 and version-2 reports would otherwise
+  compare silently; `REPORT_SCHEMA_VERSION` stays 4. Reports already written by
+  a version-1 build are not repaired by this.
 - **VS Code `excludePaths`** — **shipped in 0.5.1** (PR #55). The setting was
   declared and never read; the editor configuration builder now resolves it and
   adds it to the exclusions already in force.

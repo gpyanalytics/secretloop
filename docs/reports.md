@@ -399,6 +399,62 @@ the two reports share**. Specifically:
   file-level exclusion events, so it cannot establish the set. Claiming the
   empty set there would be metadata invented for a mode that never produced it.
 
+**The paths `binaryDigest` accepts.** A canonical, repository-relative,
+`/`-separated path, exactly as the enumeration produces it. A leading `./` is
+stripped and duplicates collapse; nothing else is rewritten.
+
+- **Where native separators are converted.** At the enumeration, not here. The
+  directory walk emits `path.relative(root, file).split(path.sep).join("/")`, so
+  a Windows producer's `\` **separators** become `/` at the one place where the
+  originating path semantics are known, and `git ls-files` emits `/` on every
+  platform. No separator reaches the digest as a `\`.
+- **A literal backslash still reaches it, and legitimately.** On POSIX `\` is an
+  ordinary filename character and `path.sep` is `/`, so that same conversion
+  correctly leaves a backslash that is part of a **name** alone: the fallback
+  directory walk really does emit `dir\file.png` for a file called that. Such a
+  filename is valid on POSIX. It is this *representation* that cannot express
+  it, because the representation uses `/` as its separator and has no escape for
+  a literal one.
+- **So it is refused, never reinterpreted.** Rewriting `\` to `/` mapped a real
+  file named `dir\file.png` onto the unrelated real path `dir/file.png` and gave
+  two different exclusion sets one identity. Refusal is not a claim that such a
+  path cannot arrive — it is the only answer available when a valid filename
+  falls outside what the identity can encode.
+- **Non-canonical spellings are refused** — a `.` or `..` segment, a repeated
+  separator, a trailing separator — because one file would otherwise get two
+  identities depending on how it was spelled. Absolute, drive (`C:/…`) and UNC
+  paths are refused as before.
+- **Case and Unicode are left alone.** Distinct case-sensitive filenames stay
+  distinct, and NFC and NFD spellings are different names: normalizing either
+  would decide a filesystem question this contract cannot answer.
+- **Refusal withholds the WHOLE digest.** One unrepresentable path means no
+  `binaryDigest` at all. The path is never dropped so the rest can be hashed,
+  and the empty-set digest is never substituted — the first would publish a
+  confident identity for a subset, the second would claim nothing was excluded.
+  A withheld digest makes the pair ineligible, which is the safe direction.
+
+**What the git route does, and what it is not.** `git ls-files` C-quotes a path
+containing a backslash (`"dir\\file.png"`) whatever `core.quotePath` is set to, so
+the git-backed enumeration is handed a path that does not exist, the containment
+guard refuses it, and that refusal is already a coverage limitation making the
+report `incomplete`. **This is a formatting behaviour of one producer, not a
+containment guarantee**, and nothing in the identity may depend on it: the
+fallback directory walk, used when `git ls-files` cannot answer, has no such
+behaviour and forwards the real name. That is the route where the identity had
+to stop collapsing.
+
+**The representation is versioned inside the digest** (`BINARY_CONTRACT_VERSION`),
+like the scope contract. It moved **1 → 2** when backslash rewriting was removed,
+because a version-1 report and a version-2 report of *different* trees could
+otherwise carry the same digest and compare as though their exclusion sets
+matched. Every digest therefore changed: a report written before that change is
+incomparable with one written after, **even for an unchanged tree**, and the
+comparator reports `identity-mismatch (binaryDigest)`. That is the intended
+cost — an ineligible pair says nothing, while a silently equal one says
+something false. It does **not** repair reports two version-1 builds already
+wrote: those still compare with each other and still carry the collapsed
+identity.
+
 **`binaryDigest` is not anonymisation.** It hashes a set of repository-relative
 paths, and repository paths are often predictable — `docs/icon.png`,
 `assets/logo.gif`. Anyone holding a candidate list can test guesses against the
