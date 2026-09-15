@@ -40,8 +40,13 @@ and binary contract 1 existed only during development and were never published.
   count nor the reasoned count, so its scope sentence read exactly like a scan
   with nothing to suppress — the one thing that sentence exists to prevent, and
   a gap that predates the suppression work rather than coming from it. It now
-  passes the same accounting the CLI consumes into the same shared formatter,
-  producing the same sentence for the same selection.
+  passes the same accounting the CLI consumes into `describeScope`, producing the
+  same sentence for the same selection. **Not by sharing one function:**
+  `src/mcp-core.ts` carries its own copy of `describeScope`, deliberately, so the
+  MCP bundle does not import a module with a top-level side effect. The two
+  implementations are held identical by a parity test in `tests/mcp.test.ts`
+  rather than by import — coupling by assertion, which is what makes the
+  sentences byte-identical across the bundle boundary.
 - **Aggregate only, and unknown is not zero.** Counts and nothing else: no
   reason text, suppressed value, fingerprint, path or source line, no suppressed
   finding as a result row, no new hash and no suppression identity. The reason
@@ -408,18 +413,26 @@ and binary contract 1 existed only during development and were never published.
   - A history scan that stopped early reports **no** selection and marks its
     coverage incomplete, rather than presenting the commits it happened to read
     as the ones it selected.
-  - `schemaVersion` is **2**. Version 1 carried no `scopeDigest`, so a
-    version-1 report cannot be shown to have examined any particular population
-    and must not be compared; a seven-field report is rejected on both counts.
-  - The required-field contract is now explicit and normative in
-    [docs/reports.md](docs/reports.md): all eight fields, each with its own
+  - **Development history — superseded within this same unreleased candidate.**
+    When this entry was written `schemaVersion` was **2** and the contract had
+    **eight** required fields. Neither figure describes what 0.6.0 ships. The
+    version reached **4** under *Coverage* above, when `binaryDigest` became the
+    **ninth** required field; schemas 1, 2 and 3 existed only during development
+    and were never published. The steps are kept because they record why each
+    bump happened, not because either number is current.
+  - The required-field contract is explicit and normative in
+    [docs/reports.md](docs/reports.md): **all nine fields**, each with its own
     validity rule, and `incomplete` required to be **`false` in both** reports —
     `true === true` must not permit comparison.
   - `root` is documented as **shared ancestry**, not repository identity and not
     anonymisation: a root commit is public, so the digest is confirmable rather
     than concealing, and a fork shares its upstream's.
-  - No comparison command, no rename tracking, no "resolved" claim and no new
-    detector. Metadata alone does not establish that two scans are comparable.
+  - **Development history — superseded within this same unreleased candidate.**
+    This entry originally recorded "no comparison command". `secretloop compare`
+    is implemented in this release, described under *Comparison* above; it is
+    merged and, like everything in this section, **not published**. What still
+    holds unchanged: no rename tracking, no "resolved" claim, no new detector,
+    and metadata alone does not establish that two scans are comparable.
 
 ### SARIF
 

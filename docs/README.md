@@ -1,10 +1,17 @@
 # SecretLoop documentation
 
-One authoritative page per topic. Every page describes **published 0.5.1**, the
-current release on npm and the extension channels. The table at the end of this
-page summarises what 0.5.0 changed from 0.4.0. 0.5.1 is a maintenance release:
-it added or changed no detector rules, and its fixes are listed in the
-[changelog](../CHANGELOG.md).
+One authoritative page per topic. **Published 0.5.1** is the current release on
+npm and the extension channels, and it is what these pages describe **except
+where a page marks a passage as new in 0.6.0** — the release prepared on `main`
+and not published. Those marks are the exception, not the rule; a passage with no
+mark describes 0.5.1. The pages carrying marked 0.6.0 material are
+[CLI reference](cli.md), [The JSON report](reports.md), [MCP server](mcp.md),
+[VS Code extension](vscode.md), [Configuration](configuration.md),
+[Coverage](coverage.md) and [Troubleshooting](troubleshooting.md).
+
+The table at the end of this page summarises what 0.5.0 changed from 0.4.0. 0.5.1
+is a maintenance release: it added or changed no detector rules, and its fixes are
+listed in the [changelog](../CHANGELOG.md).
 
 ## Getting started
 
@@ -28,6 +35,9 @@ it added or changed no detector rules, and its fixes are listed in the
 
 ## Understand results
 
+- [The JSON report](reports.md) — the report schema, the comparison identities,
+  what `secretloop compare` enforces, and what an eligible pair still does not
+  establish.
 - [Coverage](coverage.md) — what is scanned (files, staged changes, history,
   archives, encoded spans), what is deliberately not, and how a scan discloses
   what it did not look at.
@@ -56,16 +66,28 @@ it added or changed no detector rules, and its fixes are listed in the
 
 ## What's in main and what's published
 
-Release status, current as of **2026-09-11**. This page is repository-only: it
+Release status, current as of **2026-09-16**. This page is repository-only: it
 is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 
-npm, Open VSX and the VS Code Marketplace all serve **0.5.1** (2026-09-11),
-which is also what `main` carries. The previous release was 0.5.0 (2026-09-09).
-Rows marked *refused for
-verification* mean a finding of that kind is never sent to a provider on any
-surface; a finding matched by a supported plaintext rule can still be
-transmitted after the switch or consent workflow described in
+npm, Open VSX and the VS Code Marketplace all serve **0.5.1** (2026-09-11), and
+the previous release was 0.5.0 (2026-09-09). That is still the whole of what is
+published.
+
+`main` no longer matches it. `main` carries **0.6.0, prepared and not
+published** — the version is bumped, the changelog section is written and
+undated, and no tag, npm publish, Open VSX publish or Marketplace upload has
+happened. Everything 0.6.0 adds is reporting and review: `secretloop compare`,
+the report comparison metadata, MCP scope and suppression disclosure, the
+editor's post-fix confirmation, and suppression reasons with scoped directives.
+**No rule, threshold, severity or fingerprint changed**, so a tree reports the
+same findings under 0.6.0 that it does under 0.5.1.
+
+The table below covers 0.4.0 and 0.5.0 only; it predates both 0.5.1 and the
+prepared 0.6.0, and is kept as the record of what those two releases changed.
+Rows marked *refused for verification* mean a finding of that kind is never sent
+to a provider on any surface; a finding matched by a supported plaintext rule can
+still be transmitted after the switch or consent workflow described in
 [verification](verification.md).
 
 | capability | 0.4.0 | 0.5.0 |

@@ -2,8 +2,17 @@
 
 Parked work, and the trigger that would un-park each item. The governing rule:
 **build when real usage points the way, not from a market chart or a feature
-idea.** Everything here is deliberately not started, and this file exists so
+idea.** The parked items are deliberately not started, and this file exists so
 that stays a decision rather than a thing nobody got round to.
+
+**Not everything here is parked.** *Engineering follow-ups* below is a closed
+list: those items were picked up and finished, and each one states its own
+status. Two statuses are tracked separately and never conflated — **implemented**
+(merged to `main`, with the PR that merged it) and **published** (available from
+npm, Open VSX or the Marketplace). An item can be the first without being the
+second, and several currently are: everything marked *merged, not published* is
+in the prepared **0.6.0** candidate, which is not released. Published 0.5.1 does
+not have it.
 
 ## Native editor ports (demand-gated)
 
@@ -124,9 +133,15 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   `secretloop_history_scan` omitted the inline-suppression
   counts its scope sentence exists to carry, while the CLI reported them for the
   same selection; the tool now asks `scanHistory` for the accounting it already
-  produces and passes it to the shared formatter. Aggregate only: counts, never
+  produces and passes it to `describeScope`. **Not a shared function:**
+  `src/mcp-core.ts` carries its own copy, so the MCP bundle avoids importing a
+  module with a top-level side effect, and a parity test in `tests/mcp.test.ts`
+  holds the two implementations identical. (The editor entry above really does
+  use the one in `src/report.ts`, by import.) Aggregate only: counts, never
   reason text or a suppressed finding. The gap predated the suppression work.
-- **MCP finding scope** — implemented on a branch, not merged and not published.
+- **MCP finding scope** — **merged (PR #79).** Publication status, separately:
+  **not published** — it is in the prepared 0.6.0 candidate, which has not been
+  released, so an installed 0.5.1 does not have it.
   `secretloop_list_findings` returned findings with no `scope` key at all (the
   earlier note that it returned `scope: null` did not describe the source), so a
   client got rows with no account of what had been inspected. The session cache
