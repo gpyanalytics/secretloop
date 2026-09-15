@@ -323,7 +323,9 @@ COMPARE
 
   Each result names the rule and the 16-hex identity digest. Scanned paths are
   NOT printed: a path is arbitrary text and no format check can prove it holds
-  no secret. Look the digest up in either report to find the file.
+  no secret. Look the digest up in either report to find the file -- the digest
+  covers the value, not the path, so one credential in several files shares a
+  digest and the lookup may return more than one row.
 
   Both reports must be working-tree scans carrying all nine schema-4 comparison
   fields, with matching tool, repository, configuration, rule set, suppression,

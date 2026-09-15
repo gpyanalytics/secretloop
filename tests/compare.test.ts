@@ -497,6 +497,101 @@ test("mixed supported and unsupported findings refuse the WHOLE comparison", () 
   assert.deepStrictEqual(rev.added, []);
 });
 
+test("BOTH reports mixed: whole-comparison refusal regardless of ordering", () => {
+  // The existing mixed test varies one side at a time. This is the case where
+  // BOTH sides carry valid findings that would otherwise produce differences
+  // AND an unsupported rule id -- the same id on both, and different ids.
+  const pathMark = `zpath${unknownRuleId().slice(2, 14)}`;
+  const goodA = finding(FP1);
+  const goodB = finding(FP2);
+  const goodC = finding(`src/${pathMark}/c.js:slack-token:${hex("5")}`);
+
+  const shared = unknownRuleId();
+  const idA = unknownRuleId();
+  const idB = unknownRuleId();
+  assert.notStrictEqual(idA, idB, "the two markers must differ");
+
+  const badWith = (id: string, d: string) => finding(`src/${pathMark}/x.js:${id}:${hex(d)}`);
+
+  const cases: Array<[string, any[], any[]]> = [
+    // same unsupported id on both sides, unsupported FIRST on both
+    ["same id, both first", [badWith(shared, "7"), goodA, goodC], [badWith(shared, "8"), goodB, goodC]],
+    // same id, unsupported LAST on both
+    ["same id, both last", [goodA, goodC, badWith(shared, "7")], [goodB, goodC, badWith(shared, "8")]],
+    // different unsupported ids, opposite positions
+    ["different ids, first/last", [badWith(idA, "7"), goodA], [goodB, badWith(idB, "8")]],
+    ["different ids, last/first", [goodA, badWith(idA, "7")], [badWith(idB, "8"), goodB]],
+  ];
+
+  for (const [label, beforeFindings, afterFindings] of cases) {
+    const r = cmp(report({}, beforeFindings), report({}, afterFindings));
+    assert.strictEqual(r.comparable, false, `${label}: must refuse the whole comparison`);
+    // The valid findings differ between the sides and would have produced
+    // results; none may survive the refusal.
+    assert.deepStrictEqual(r.added, [], label);
+    assert.deepStrictEqual(r.persisting, [], label);
+    assert.deepStrictEqual(r.noLongerObserved, [], label);
+    assert.deepStrictEqual(r.ambiguousIdentity, [], label);
+    const parsed = JSON.parse(renderJson(r));
+    assert.deepStrictEqual(Object.keys(parsed).sort(), ["comparable", "reasons", "tool"], label);
+    // The comparator stops at the first invalid finding, so only one side is
+    // listed. That is the existing policy and is not asserted against.
+    assert.ok(r.reasons.some((x) => x.code === "malformed-finding-identity"), label);
+    const out = renderText(r) + renderJson(r);
+    for (const mark of [shared, idA, idB, pathMark]) {
+      assert.ok(!out.includes(mark), `${label}: ${mark} must not be echoed`);
+    }
+  }
+});
+
+test("CLI: both reports mixed — exit 3, no difference keys, no markers on stdout or stderr", () => {
+  withDir((dir) => {
+    const pathMark = `zpath${unknownRuleId().slice(2, 14)}`;
+    const idA = unknownRuleId();
+    const idB = unknownRuleId();
+    const A = path.join(dir, "A.json"), B = path.join(dir, "B.json");
+    // Both sides: a valid finding unique to that side (so a difference exists),
+    // a shared valid finding, and an unsupported one at opposite ends.
+    writeFileSync(A, JSON.stringify(report({}, [
+      finding(`src/${pathMark}/x.js:${idA}:${hex("7")}`),
+      finding(FP1),
+      finding(`src/${pathMark}/shared.js:slack-token:${hex("5")}`),
+    ])));
+    writeFileSync(B, JSON.stringify(report({}, [
+      finding(FP2),
+      finding(`src/${pathMark}/shared.js:slack-token:${hex("5")}`),
+      finding(`src/${pathMark}/y.js:${idB}:${hex("8")}`),
+    ])));
+
+    for (const args of [["compare", A, B], ["compare", A, B, "--format", "json"]]) {
+      const out = cli(args);
+      assert.strictEqual(out.status, 3, `${args.join(" ")}: both-mixed must exit 3`);
+      const both = out.stdout + out.stderr;
+      for (const mark of [idA, idB, pathMark]) {
+        assert.ok(!both.includes(mark), `${mark} reached stdout or stderr`);
+      }
+      // No partial difference may appear: neither side's unique digest.
+      assert.ok(!both.includes(hex("1")) && !both.includes(hex("2")),
+        "no partial findings may be emitted");
+    }
+    const d = JSON.parse(cli(["compare", A, B, "--format", "json"]).stdout);
+    assert.deepStrictEqual(Object.keys(d).sort(), ["comparable", "reasons", "tool"]);
+    assert.strictEqual(d.comparable, false);
+  });
+});
+
+test("distinct identities stay distinct, even when their displayed pair is identical", () => {
+  // The digest covers the matched VALUE, not the path, so one credential found
+  // by one rule in two files shares ruleId and digest. Matching must still keep
+  // them apart; only the presentation is ambiguous, which the docs now say.
+  const twin = (p: string) => finding(`${p}:github-token:${hex("2")}`);
+  const r = cmp(report(), report({}, [twin("a/one.js"), twin("b/two.js")]));
+  assert.strictEqual(r.comparable, true);
+  assert.strictEqual(r.added.length, 2, "two distinct identities must not be merged");
+  assert.deepStrictEqual(r.added[0], r.added[1], "and their displayed pairs are identical");
+  assert.deepStrictEqual(r.ambiguousIdentity, [], "distinct identities are not a multiplicity");
+});
+
 test("EVERY rule id this build emits is accepted", () => {
   // Derived from the same authorities the comparator uses, so a new rule cannot
   // be admitted by one and refused by the other.

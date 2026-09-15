@@ -504,9 +504,17 @@ report's own `file` and `ruleId` fields are ignored entirely in favour of the
 identity that was actually matched on.
 
 To locate a finding, look up its `ruleId` and `digest` in whichever report you
-already hold: together they identify it, and neither is new — the digest is a
-substring of the fingerprint the report already carries. **No new
-secret-derived identifier is computed**; nothing is hashed here.
+already hold. Neither value is new — the digest is a substring of the fingerprint
+the report already carries — and **no new secret-derived identifier is
+computed**; nothing is hashed here.
+
+**The displayed pair narrows the search; it does not uniquely identify a
+finding.** The digest covers the matched *value*, not the path, so the same
+credential found by the same rule in two different files produces the **same**
+`ruleId` and `digest` while being two distinct identities. Matching is unaffected
+— it uses the full raw fingerprint, so those two remain separate results — but
+the output cannot tell you which file each one came from, and a lookup may return
+more than one row.
 
 **Matching is unaffected.** Eligibility and matching use the **full raw
 fingerprint**, exactly as it appears in the report. It is never sanitized,
