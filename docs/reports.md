@@ -8,6 +8,11 @@ The comparison command does not exist yet. This page documents the metadata it
 will require, because the metadata has to be in reports **before** the tool can
 use them — a report written today is the "before" side of tomorrow's comparison.
 
+**Status: merged, not yet released.** This metadata is on `main` and is **not in
+any published package** — published 0.5.1 does not emit it. The `toolVersion`
+value in the example below is illustrative, not a claim about which release
+carries these fields.
+
 ## Shape
 
 ```jsonc
@@ -21,7 +26,9 @@ use them — a report written today is the "before" side of tomorrow's compariso
   "configDigest": "3071344b11905ec5",
   "ruleSetDigest": "c6f8fdd1265654d9",
   "suppressionDigest": "9b1c…",     // omitted when suppression cannot be identified
-  "scopeDigest": "scope:4a9f5bca…", // omitted when the selection cannot be established
+  // omitted for a staged scan, when the selection cannot be established,
+  // and when a history scan was interrupted
+  "scopeDigest": "scope:4a9f5bca…",
   "incomplete": false,
 
   "summary": {
@@ -69,7 +76,7 @@ refuse the comparison**, never as "the same". The same applies to a
 |---|---|---|
 | `schemaVersion` | the meaning of the fields below | never |
 | `toolVersion` | which SecretLoop produced the report | the caller supplied none |
-| `root` | which repository was scanned | the scan root is not a git repository, or has no commits |
+| `root` | the scanned repository's ancestry — shared by forks, so not a unique identity | the scan root is not a git repository, or has no commits |
 | `configDigest` | the effective configuration | never |
 | `ruleSetDigest` | the rule definitions this build applies | never |
 | `suppressionDigest` | the configured exclusions | any suppression mechanism was active that cannot be identified |
@@ -134,9 +141,11 @@ with the file:
 
 With a mode-only identity those two reports carried the same `scopeDigest`, the
 same everything else, and both complete — so the pair was eligible and the second
-report read as the finding being *gone*. Tracking the staged file set instead
-would not help: the index is working-tree state, so every pair would differ and
-nothing would ever compare.
+report read as the finding being *gone*.
+
+Tracking staged file selection could permit comparison when the selection remains
+identical, including across content changes. This version keeps staged reports
+ineligible pending an explicit staged-snapshot comparison contract.
 
 What such a pair actually needs is a comparator that labels a staged report as a
 **snapshot of the index** and refuses to read its absences as disappearances.

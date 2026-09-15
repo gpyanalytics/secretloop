@@ -201,11 +201,24 @@ empty result.
 
 ## The JSON report
 
+The comparison metadata described here is **merged but not yet released**:
+published 0.5.1 does not emit it. Everything else on this page applies to
+published 0.5.1.
+
 `--format json` carries the findings plus metadata identifying the scan: which
-tool version, which repository, which effective configuration and rule set, what
-suppressed findings, and whether the scan covered everything it set out to. A
-field SecretLoop could not determine is **absent, never null** — so a consumer
-reads a missing field as unknown rather than as a match.
+tool version, which repository ancestry, which effective configuration and rule
+set, **what the scan selected** — a working-tree scan, a staged scan, or a
+particular set of commits — what suppressed findings, and whether the scan
+covered everything it set out to. A field SecretLoop could not determine is
+**absent, never null** — so a consumer reads a missing field as unknown rather
+than as a match.
+
+The repository field is a **shared-ancestry marker, not a unique repository
+identity**: a fork and its upstream produce the same value.
+
+A **staged** scan is the exception to the selection field: it is given no
+selection identity, so a staged report **omits `scopeDigest`** and is never
+eligible for comparison.
 
 [The JSON report](reports.md) documents every field, what the digests do and do
 not cover, and why a project using a baseline, an allowlist or inline
