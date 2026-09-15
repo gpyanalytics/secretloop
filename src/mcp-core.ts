@@ -105,6 +105,8 @@ import {
 export interface ScopeNotes {
   generatedExcluded?: number;
   suppressed?: number;
+  /** How many of `suppressed` came from a directive that recorded a reason. */
+  suppressedWithReason?: number;
   outsideExcluded?: number;
   fixtureSuppressed?: number;
   /** Files enumerated but skipped for exceeding maxFileSizeBytes. */
@@ -127,6 +129,7 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   const {
     generatedExcluded = 0,
     suppressed = 0,
+    suppressedWithReason = 0,
     outsideExcluded = 0,
     fixtureSuppressed = 0,
     oversizedExcluded = 0,
@@ -148,6 +151,11 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   }
   if (suppressed > 0) {
     out += `; ${suppressed} finding(s) suppressed by inline directives`;
+    // Parity clause. describeScope in report.ts appends the identical text for
+    // the identical inputs, and the pin test compares the two sentences.
+    if (suppressedWithReason > 0) {
+      out += `, ${suppressedWithReason} with a recorded reason`;
+    }
   }
   if (outsideExcluded > 0) {
     out += `; ${outsideExcluded} file(s) excluded (symlinks resolving outside the scan root)`;
@@ -803,6 +811,13 @@ export function toolScan(input: ScanInput): ToolResult {
         statement: `Scanned ${describeScope(scanned.length, "file", {
           generatedExcluded,
           suppressed: scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0),
+          // The count of explained suppressions, and only the count. The
+          // reasons themselves are not sent. The untrusted-content wrapper this
+          // file puts around repository text marks where text came from; it is
+          // not an authorization boundary and does not make disclosing a reason
+          // safe, and a reason may describe -- or contain -- the credential it
+          // was written beside.
+          suppressedWithReason: scanned.reduce((n, f) => n + (f.suppressedWithReason ?? 0), 0),
           // The read enforces containment too, and can disagree with the walk
           // if a link is retargeted between them. Summed the way the CLI sums
           // it, so the same tree yields the same sentence.

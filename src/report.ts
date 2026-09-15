@@ -96,6 +96,22 @@ export interface ReportCoverage {
     allowValuesCount: number;
     baselineApplied: boolean;
     inlineSuppressed: number;
+    /**
+     * How many of `inlineSuppressed` carried a reason. A count, and for the
+     * same reason as the count beside it: NOT an identity. Two scans in which
+     * one suppression was explained are not thereby the same scan, and the
+     * reasons themselves are not published here -- they are a comment someone
+     * wrote next to a credential, and a machine-readable report is the wrong
+     * place to republish them beside the count of what they hid.
+     *
+     * ABSENT when the producer that ran could not establish it, which is not
+     * the same as zero -- the distinction this file already draws for
+     * `binaryExclusions`. A present 0 means a producer counted and found none.
+     * It shipped required, and a history scan therefore published a zero it had
+     * never counted; every producer in tree establishes it today, so a report
+     * from any of them still carries the field.
+     */
+    inlineSuppressedWithReason?: number;
     /** Empty when every active suppression mechanism is identified by a digest. */
     unidentified: string[];
   };
@@ -126,6 +142,15 @@ export interface ScopeNotes {
   generatedExcluded?: number;
   /** Findings dropped by an inline secretloop:allow / gitleaks:allow. */
   suppressed?: number;
+  /**
+   * How many of `suppressed` came from a directive that recorded a reason.
+   *
+   * Never a clause of its own. It qualifies the suppression clause or it says
+   * nothing: "1 with a recorded reason" on its own names a number whose
+   * denominator is missing, and a scan that suppressed nothing has nothing to
+   * qualify.
+   */
+  suppressedWithReason?: number;
   /** Files skipped because their realpath is outside the scan root. */
   outsideExcluded?: number;
   /** Generic-tier findings dropped because the file is test/fixture material. */
@@ -150,6 +175,7 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   const {
     generatedExcluded = 0,
     suppressed = 0,
+    suppressedWithReason = 0,
     outsideExcluded = 0,
     fixtureSuppressed = 0,
     oversizedExcluded = 0,
@@ -179,6 +205,12 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   // the callers pinned against it are unaffected.
   if (suppressed > 0) {
     out += `; ${suppressed} finding(s) suppressed by inline directives`;
+    // Appended to the existing clause, never inserted into it, so a scan with
+    // no reasons recorded produces the byte-identical sentence it produced
+    // before this existed -- which is what every pinned caller is asserting.
+    if (suppressedWithReason > 0) {
+      out += `, ${suppressedWithReason} with a recorded reason`;
+    }
   }
   // A scan that silently read through a symlink and out of the directory it was
   // pointed at would be the worst of both: content from outside reported under

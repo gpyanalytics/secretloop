@@ -16,6 +16,7 @@ import {
   createFingerprint,
   FingerprintStrategy,
   isFixturePath,
+  sanitizeReason,
 } from "./config";
 
 /**
@@ -175,6 +176,32 @@ export interface Finding {
   source?: ArchiveSource;
 }
 
+/**
+ * What the inline directives on this text said, beyond how many findings they
+ * hid.
+ *
+ * A COUNT, and deliberately nothing else. The reason text is not carried out of
+ * the scanner and no surface publishes it: a reason sits on the line beside the
+ * credential it explains, which is repository content, and a reader who is
+ * entitled to the reason is already reading that line. Published beside a count
+ * of what was hidden, the same sentence can describe a credential someone
+ * deliberately kept out of the report, and it may contain one outright --
+ * nothing validates what a person types after `--`.
+ *
+ * Neither sanitising nor wrapping changes that. Sanitising bounds the length and
+ * strips characters that would wreck a terminal or a tag; it is not evidence
+ * that the text contains no credential. An untrusted-content wrapper marks
+ * provenance; it is not an authorization boundary and does not prevent
+ * disclosure. So the text does not travel.
+ *
+ * `withReason` counts suppressed findings, not directives: one annotation over
+ * two findings is two suppressions, one of which is not "half reasoned".
+ */
+export interface SuppressionAccounting {
+  /** Suppressed findings whose directive recorded a reason. Never > the count. */
+  withReason: number;
+}
+
 export interface ScanOptions {
   config?: SecretLoopConfig;
   /**
@@ -192,7 +219,17 @@ export interface ScanOptions {
    * suppressions for one annotated credential, which is an overstatement in a
    * disclosure whose whole purpose is not to overstate.
    */
-  onSuppressed?: (count: number) => void;
+  onSuppressed?: (count: number, accounting?: SuppressionAccounting) => void;
+  /**
+   * Called with what the parser had to argue with in this text's annotations:
+   * an oversized reason, or a reason written after a foreign directive.
+   *
+   * Separate from `onSuppressed` because it is not a count of anything hidden,
+   * and because it must fire for an annotation that suppressed nothing at all
+   * -- the directive whose typo means it never matched is exactly the one whose
+   * author most needs telling.
+   */
+  onSuppressionDiagnostic?: (messages: string[]) => void;
   /**
    * Called with the number of generic-tier findings dropped because this file
    * sits in a test, fixture or example path. Named provider rules are never
@@ -247,9 +284,29 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
   // the two places `ignoredLines` is read: a guard that has to be repeated is a
   // guard that can be half-applied, which is exactly how the fixture
   // suppression first shipped covering one half of the generic tier.
-  const ignoredLines =
-    options.honorInlineDirectives === false ? NO_IGNORED_LINES : collectIgnoredLines(text);
+  const inline =
+    options.honorInlineDirectives === false ? NO_INLINE_DIRECTIVES : collectIgnoredLines(text);
+  const ignoredLines = inline.lines;
   const suppressedSpans = new Set<number>();
+  const reasonedSpans = new Set<number>();
+  /**
+   * Suppress this span when a directive covering the line covers the rule.
+   *
+   * One closure rather than the same three lines at each pass: the fixture
+   * suppression shipped covering one half of the generic tier precisely because
+   * the check was written twice and updated once.
+   */
+  const suppress = (line: number, ruleId: string, spanStart: number): boolean => {
+    const directives = ignoredLines.get(line);
+    if (!directives) return false;
+    const applicable = directives.filter((d) => covers(d, ruleId));
+    if (applicable.length === 0) return false;
+    suppressedSpans.add(spanStart);
+    // Whether a reason was written, never which. The text stays where its
+    // author put it.
+    if (applicable.some((d) => d.reason !== undefined)) reasonedSpans.add(spanStart);
+    return true;
+  };
 
   const findings: Finding[] = [];
   const excluded = new Set(config.excludeRules);
@@ -257,10 +314,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
 
   for (const hit of matchRules(text, excluded, allowValueRegexes)) {
     const line = lineOf(hit.startIndex, lineStarts);
-    if (ignoredLines.has(line)) {
-      suppressedSpans.add(hit.startIndex);
-      continue;
-    }
+    if (suppress(line, hit.rule.id, hit.startIndex)) continue;
 
     findings.push(
       buildFinding({
@@ -301,10 +355,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       claimed.add(key);
 
       const line = lineOf(candidate.start, lineStarts);
-      if (ignoredLines.has(line)) {
-        suppressedSpans.add(candidate.start);
-        continue;
-      }
+      if (suppress(line, hit.rule.id, candidate.start)) continue;
 
       findings.push(
         buildFinding({
@@ -366,10 +417,7 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
       if (overlaps) continue;
 
       const line = lineOf(hit.index, lineStarts);
-      if (ignoredLines.has(line)) {
-        suppressedSpans.add(hit.index);
-        continue;
-      }
+      if (suppress(line, ENTROPY_RULE_ID, hit.index)) continue;
 
       findings.push(
         buildFinding({
@@ -387,7 +435,13 @@ export function scanText(text: string, optionsOrThreshold?: ScanOptions | number
     }
   }
 
-  if (suppressedSpans.size > 0) options.onSuppressed?.(suppressedSpans.size);
+  // The count is the first argument and still the whole story for every caller
+  // that only wanted a count. Accounting rides beside it, so nothing pinned
+  // against the old one-argument call had to change.
+  if (suppressedSpans.size > 0) {
+    options.onSuppressed?.(suppressedSpans.size, { withReason: reasonedSpans.size });
+  }
+  if (inline.diagnostics.length > 0) options.onSuppressionDiagnostic?.(inline.diagnostics);
 
   // Generic-tier findings in test and fixture paths, dropped and counted.
   //
@@ -834,21 +888,204 @@ function isPlaceholder(value: string): boolean {
  * installed base, so a repository already annotated for it needs no
  * re-annotation to adopt SecretLoop — and a suppression annotation that stops
  * being honoured silently re-reports a finding someone deliberately dismissed.
+ *
+ * Two optional parts were added, and BOTH are optional on purpose:
+ *
+ *     secretloop:allow                        every rule on the line (today)
+ *     secretloop:allow(rule-id,rule-id)       only those rules
+ *     secretloop:allow -- why                 a reason, recorded
+ *     secretloop:allow(rule-id) -- why        both
+ *
+ * A required reason would invalidate every annotation already written and turn
+ * adoption into a migration, so an unscoped, unreasoned directive behaves
+ * exactly as it always has. Scope narrows and never widens: naming a rule can
+ * only suppress less than the bare form did.
  */
-const IGNORE_DIRECTIVE = /(?:secretloop[:-](?:allow|ignore)|gitleaks:allow)/i;
+/**
+ * The directive token itself. Everything after it is parsed by hand, because
+ * an optional regex group cannot fail closed.
+ *
+ * The first cut wrote the scope as `(?:\((?<rules>[\w,\- ]*)\))?`. An optional
+ * group that does not match is not an error, so `secretloop:allow(aws-access-key`
+ * -- one missing bracket -- matched the bare prefix and suppressed EVERY rule on
+ * the line. A typo in new syntax silently widened suppression, which is the one
+ * direction this feature must never move.
+ */
+const DIRECTIVE_TOKEN = /(?<tool>secretloop[:-](?:allow|ignore)|gitleaks:allow)/i;
 
-/** Shared empty set for `honorInlineDirectives: false`. Never written to. */
-const NO_IGNORED_LINES: ReadonlySet<number> = new Set<number>();
+/** A reason, which must follow directly: `-- why`, after the scope if there is one. */
+const REASON_MARKER = /^[ \t]*--[ \t]*(.*)$/;
 
-function collectIgnoredLines(text: string): Set<number> {
-  const ignored = new Set<number>();
-  const lines = text.split("\n");
-  for (let i = 0; i < lines.length; i++) {
-    if (!IGNORE_DIRECTIVE.test(lines[i])) continue;
-    ignored.add(i + 1); // the annotated line itself
-    ignored.add(i + 2); // and the line below, for above-the-line annotations
+/** One rule id, as a scope may spell it. Membership is checked separately. */
+const RULE_ID = /^[A-Za-z0-9_-]+$/;
+
+/**
+ * The rule ids a scope may name, from the producers themselves.
+ *
+ * `rules` is the rule table and `ENTROPY_RULE_ID` is the pass that synthesises
+ * findings without one, which is exactly the pair that `genericRuleIds` alone
+ * gets wrong. A copied list would drift the first time a rule is added, and it
+ * would drift silently: a scope naming a real rule would be refused, and the
+ * finding would be reported rather than hidden -- safe, but wrong and baffling.
+ */
+const SUPPORTED_RULE_IDS: ReadonlySet<string> = new Set([
+  ...rules.map((r) => r.id),
+  ENTROPY_RULE_ID,
+]);
+
+/**
+ * One parsed annotation.
+ *
+ * `rules` absent means every rule, which is what a bare directive has always
+ * meant, and `refused` means this directive suppresses nothing at all.
+ *
+ * The three states are deliberately distinct. A GENUINELY bare directive -- no
+ * bracket after the token -- keeps its legacy behaviour untouched. An ATTEMPTED
+ * scope that does not parse, names nothing, or names a rule this build does not
+ * have is REFUSED whole: it hides nothing, and the findings it was aimed at are
+ * reported. `allow()` is an attempted scope, not the bare form: someone typed
+ * brackets, and reading their mistake as "suppress everything" is the widening
+ * this must not do.
+ */
+interface InlineDirective {
+  rules?: string[];
+  reason?: string;
+  diagnostic?: string;
+  /** Set when the directive was understood well enough to be rejected outright. */
+  refused?: true;
+}
+
+/** What one text's annotations amount to. */
+interface InlineDirectives {
+  lines: Map<number, InlineDirective[]>;
+  diagnostics: string[];
+}
+
+/** Shared empty result for `honorInlineDirectives: false`. Never written to. */
+const NO_INLINE_DIRECTIVES: InlineDirectives = { lines: new Map(), diagnostics: [] };
+
+/**
+ * Diagnostics a directive can raise.
+ *
+ * Fixed strings with stable codes, and no fragment of the line that produced
+ * them. The annotation is repository content: quoting the malformed scope back
+ * would put source text into stderr and into anything that captures it, to say
+ * something the code already says.
+ */
+const DIRECTIVE_DIAGNOSTIC = {
+  malformed:
+    "an inline directive has a malformed rule scope and was refused; it suppressed " +
+    "nothing [directive-scope-malformed]",
+  empty:
+    "an inline directive has an empty rule scope and was refused; it suppressed " +
+    "nothing [directive-scope-empty]",
+  unsupported:
+    "an inline directive names a rule id this build does not have and was refused " +
+    "whole; it suppressed nothing [directive-scope-unsupported-rule]",
+  foreign:
+    "gitleaks:allow carries no reason or rule scope; use secretloop:allow to record one",
+} as const;
+
+/**
+ * Parse one line's annotation, or return undefined when it carries none.
+ *
+ * `gitleaks:allow` never gains a scope or a reason. It is another tool's
+ * directive with another tool's meaning, and reinterpreting the text beside it
+ * would change what a foreign annotation does in a repository that never opted
+ * into ours -- including refusing it, which would stop suppressing a finding
+ * somebody dismissed years ago in another tool. So it keeps suppressing exactly
+ * what it always did, and someone who writes a scope or a reason after it is
+ * told that it carries neither.
+ */
+export function parseInlineDirective(line: string): InlineDirective | undefined {
+  const m = DIRECTIVE_TOKEN.exec(line);
+  if (!m) return undefined;
+  const rest = line.slice(m.index + m[0].length);
+  const foreign = m.groups?.tool?.toLowerCase().startsWith("gitleaks") ?? false;
+
+  if (foreign) {
+    // Legacy behaviour, unchanged: unscoped, unreasoned, suppresses the line.
+    const attempted = rest.startsWith("(") || REASON_MARKER.test(rest);
+    return attempted ? { diagnostic: DIRECTIVE_DIAGNOSTIC.foreign } : {};
   }
-  return ignored;
+
+  // No bracket attached to the token: the genuinely bare directive, and the
+  // only form that has ever existed. A `(` further along the line is prose --
+  // `// secretloop:allow (see TICKET-12)` predates this syntax and must keep
+  // working -- so the scope is recognised only when it is attached.
+  if (!rest.startsWith("(")) {
+    const { reason, diagnostic } = sanitizeReason(REASON_MARKER.exec(rest)?.[1]);
+    return {
+      ...(reason !== undefined ? { reason } : {}),
+      ...(diagnostic !== undefined ? { diagnostic } : {}),
+    };
+  }
+
+  const close = rest.indexOf(")");
+  if (close === -1) return { refused: true, diagnostic: DIRECTIVE_DIAGNOSTIC.malformed };
+
+  const inner = rest.slice(1, close);
+  if (inner.trim() === "") return { refused: true, diagnostic: DIRECTIVE_DIAGNOSTIC.empty };
+
+  const named = inner.split(",").map((r) => r.trim());
+  // Every item, not the ones that happen to parse. A scope naming one real rule
+  // and one typo is not half a scope: interpreting the half that parsed would
+  // suppress a finding under an instruction nobody actually wrote.
+  if (named.some((r) => !RULE_ID.test(r))) {
+    return { refused: true, diagnostic: DIRECTIVE_DIAGNOSTIC.malformed };
+  }
+  if (named.some((r) => !SUPPORTED_RULE_IDS.has(r))) {
+    return { refused: true, diagnostic: DIRECTIVE_DIAGNOSTIC.unsupported };
+  }
+
+  const { reason, diagnostic } = sanitizeReason(REASON_MARKER.exec(rest.slice(close + 1))?.[1]);
+  return {
+    rules: named,
+    ...(reason !== undefined ? { reason } : {}),
+    ...(diagnostic !== undefined ? { diagnostic } : {}),
+  };
+}
+
+/**
+ * Whether a directive covers this rule. No scope means every rule, as before;
+ * a refused directive covers nothing, so a malformed annotation hides nothing
+ * and the findings under it are reported.
+ */
+function covers(directive: InlineDirective, ruleId: string): boolean {
+  if (directive.refused) return false;
+  return directive.rules === undefined || directive.rules.includes(ruleId);
+}
+
+/**
+ * Line number -> the directives that can suppress on it.
+ *
+ * A list rather than one directive because a line can be covered twice: its own
+ * annotation and the one above it. Keeping both is what lets a scoped directive
+ * above and a bare one on the line behave like the union a reader would expect,
+ * instead of whichever the collector happened to write last.
+ */
+function collectIgnoredLines(text: string): InlineDirectives {
+  const lines = new Map<number, InlineDirective[]>();
+  const diagnostics: string[] = [];
+  const add = (line: number, directive: InlineDirective) => {
+    const existing = lines.get(line);
+    if (existing) existing.push(directive);
+    else lines.set(line, [directive]);
+  };
+  const source = text.split("\n");
+  for (let i = 0; i < source.length; i++) {
+    const directive = parseInlineDirective(source[i]);
+    if (!directive) continue;
+    // Reported whether or not the annotation went on to suppress anything. A
+    // directive nobody's findings matched is exactly the one whose typo would
+    // otherwise never be noticed.
+    if (directive.diagnostic !== undefined && !diagnostics.includes(directive.diagnostic)) {
+      diagnostics.push(directive.diagnostic);
+    }
+    add(i + 1, directive); // the annotated line itself
+    add(i + 2, directive); // and the line below, for above-the-line annotations
+  }
+  return { lines, diagnostics };
 }
 
 function computeLineStarts(text: string): number[] {

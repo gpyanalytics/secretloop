@@ -623,6 +623,10 @@ interface ScannedList {
   findings: Finding[];
   texts: Map<string, string>;
   suppressed: number;
+  /** How many of `suppressed` came from a directive that recorded a reason. */
+  suppressedWithReason: number;
+  /** What the directive parser had to argue with, deduplicated across files. */
+  suppressionDiagnostics: string[];
   fixtureSuppressed: number;
   /** Enumerated but never read: over the size cap, or outside the root. */
   oversized: number;
@@ -687,6 +691,13 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
     findings: scanned.flatMap((s) => s.findings),
     texts: new Map(scanned.map((s) => [s.path, s.text])),
     suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
+    suppressedWithReason: scanned.reduce((n, s) => n + (s.suppressedWithReason ?? 0), 0),
+    // Deduplicated across files: one mistyped directive repeated in forty files
+    // is one thing to fix, and forty copies of the same line is a wall of text
+    // that gets scrolled past.
+    suppressionDiagnostics: [
+      ...new Set(scanned.flatMap((s) => s.suppressionDiagnostics ?? [])),
+    ],
     fixtureSuppressed: scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0),
     apiDocumentsScoped: scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0),
     archives,
@@ -884,6 +895,19 @@ async function main(): Promise<void> {
   // so its zeroes are true rather than unfilled.
   const coverage: CoverageFacts = {};
   let inlineSuppressed = 0;
+  /**
+   * How many suppressions carried a reason, or undefined when the producer that
+   * ran could not establish it. Absent from the report rather than zero: a zero
+   * here is a claim that nothing was explained, and only a producer that counted
+   * may make it.
+   */
+  let inlineSuppressedWithReason: number | undefined;
+  /**
+   * Annotations the directive parser had to argue with. Surfaced as notices on
+   * stderr beside the baseline's, never folded into the report: they are about
+   * how an annotation was WRITTEN, not about what the scan found.
+   */
+  let suppressionDiagnostics: string[] = [];
   // What this scan selected, filled by whichever branch runs. Left undefined if
   // a branch cannot establish it, which omits scopeDigest rather than guessing.
   let selection: ScopeSelection | undefined;
@@ -904,6 +928,12 @@ async function main(): Promise<void> {
     let commitsScanned = 0;
     let generatedExcluded = 0;
     let suppressed = 0;
+    /**
+     * Undefined until the history producer reports it, and undefined afterwards
+     * if that producer could not establish it. Never defaulted to 0: this field
+     * published a zero it had not counted, which is the defect this fixes.
+     */
+    let suppressedWithReason: number | undefined;
     let fixtureSuppressed = 0;
     try {
       findings = await scanHistory({
@@ -913,7 +943,16 @@ async function main(): Promise<void> {
         revRange: args.revRange,
         onProgress: (commits) => (commitsScanned = commits),
         onGeneratedExcluded: (count) => (generatedExcluded = count),
-        onSuppressed: (count) => (suppressed = count),
+        onSuppressed: (count, accounting) => {
+          // Totals, assigned -- the shape this callback has always had.
+          suppressed = count;
+          suppressedWithReason = accounting?.withReason;
+        },
+        onSuppressionDiagnostic: (messages) => {
+          for (const m of messages) {
+            if (!suppressionDiagnostics.includes(m)) suppressionDiagnostics.push(m);
+          }
+        },
         onFixtureSuppressed: (count) => (fixtureSuppressed = count),
         // The selection as the parser executed it, never reconstructed here
         // from the range string this code happens to have passed in.
@@ -943,10 +982,18 @@ async function main(): Promise<void> {
     // is left undefined, which omits the field and makes history reports
     // ineligible under this contract -- the honest answer rather than metadata
     // invented for a mode that never produced it.
-    scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed, fixtureSuppressed });
+    scope = describeScope(commitsScanned, "commit", {
+      generatedExcluded,
+      suppressed,
+      // Spread, so an unestablished accounting adds no clause rather than a
+      // clause saying zero.
+      ...(suppressedWithReason !== undefined ? { suppressedWithReason } : {}),
+      fixtureSuppressed,
+    });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
     inlineSuppressed = suppressed;
+    inlineSuppressedWithReason = suppressedWithReason;
   } else {
     let listed;
     if (args.command === "staged") {
@@ -973,6 +1020,7 @@ async function main(): Promise<void> {
     scope = describeScope(result.texts.size, scopeNoun, {
       generatedExcluded: listed.generatedExcluded,
       suppressed: result.suppressed,
+      suppressedWithReason: result.suppressedWithReason,
       // The read enforces containment too, and it can disagree with the walk
       // if a link is retargeted between the two. Added to the walk's count
       // rather than given a clause of its own: it is the same fact, and the
@@ -989,6 +1037,8 @@ async function main(): Promise<void> {
     });
     selection = { mode: args.command === "staged" ? "staged" : "worktree" };
     inlineSuppressed = result.suppressed;
+    inlineSuppressedWithReason = result.suppressedWithReason;
+    suppressionDiagnostics = result.suppressionDiagnostics;
     coverage.oversizedExcluded = result.oversized;
     coverage.binaryExcluded = result.binary;
     // scanFileList visits every enumerated file and reports each skip, so this
@@ -1001,11 +1051,27 @@ async function main(): Promise<void> {
     coverage.archives = archives;
   }
 
+  // An annotation the parser had to argue with, said once per distinct
+  // complaint. On stderr because it is advice about the source, not part of the
+  // report a pipeline reads off stdout.
+  for (const diagnostic of suppressionDiagnostics) {
+    process.stderr.write(`secretloop: ${diagnostic}\n`);
+  }
+
   if (args.baseline) {
     const loaded = loadBaseline(args.baseline);
     // An outdated baseline matches nothing. Saying so is the difference between
     // "the tool broke" and "regenerate this file".
     if (loaded.outdated) process.stderr.write(`secretloop: ${loaded.notice}\n`);
+    // A baseline entry nobody can read is an accepted finding that quietly
+    // stopped being accepted. Named by position, one per line, never fatal, and
+    // carrying nothing out of the file: the diagnostic says which entry, and the
+    // reader has the file open in front of them. The path the caller typed is
+    // dropped for the same reason -- it is the one line of this that a CI log
+    // does not need.
+    for (const diagnostic of loaded.diagnostics) {
+      process.stderr.write(`secretloop: ${diagnostic}\n`);
+    }
   }
 
   const triaged = triageFindings(findings, args);
@@ -1080,6 +1146,7 @@ async function main(): Promise<void> {
         allowValuesCount: config.allowValues.length,
         baselineApplied: Boolean(args.baseline),
         inlineSuppressed,
+        ...(inlineSuppressedWithReason !== undefined ? { inlineSuppressedWithReason } : {}),
         unidentified: suppression.unidentified,
       },
     },
