@@ -13,6 +13,7 @@ Applies to **published 0.5.1**.
 | `scan` | Scan the working tree (the default when no command is given). |
 | `staged` | Scan staged changes only. This is what the pre-commit hook runs. |
 | `history` | Scan git history for secrets committed at any point, including ones deleted later. |
+| `compare` | Compare two saved JSON reports (older first). Reads files only — never rescans, verifies or contacts a provider. |
 | `mask` | Read stdin, write it back with every secret replaced by `[REDACTED:<rule-id>]`. |
 | `approve <fingerprint>` | Authorize one credential verification that an MCP client requested. Interactive only. |
 | `help` / `version` | Print the help text or the version. |
@@ -50,6 +51,11 @@ baseline; see [Configuration](configuration.md#precedence).
 | `0` | Nothing met the `--fail-on` gate. |
 | `1` | Something did. stderr says how many findings met the threshold, which threshold, and where the report went. |
 | any other | A real failure: an unreadable configuration, a bad flag, a scan that could not run, an unsupported Node version. |
+
+`compare` uses its own codes: `0` compared with nothing new, `1` compared with
+new findings, `2` unusable input, and `3` **the pair is not comparable** and no
+difference was computed. `3` is separate so a contract refusal can never be
+mistaken for a clean comparison. See [The JSON report](reports.md#the-comparator).
 
 The count on exit `1` is the number that **met the threshold**, not the number
 found: a scan with forty medium findings and one critical reports one finding
