@@ -1165,6 +1165,22 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   let commitsScanned = 0;
   let generatedExcluded = 0;
+  /**
+   * What the scan hid, for the sentence below.
+   *
+   * This tool used to ask for neither, so a history scan that dropped findings
+   * to an inline directive read exactly like one that had nothing to drop --
+   * the single thing the scope sentence exists to prevent, and the CLI has
+   * disclosed it for as long as the sentence has existed.
+   *
+   * `suppressedWithReason` stays UNDEFINED until the producer reports it, and
+   * undefined if the producer could not establish it. It is never defaulted to
+   * 0: a zero here is the claim that nothing was explained, and only a producer
+   * that counted may make it.
+   */
+  let suppressed = 0;
+  let suppressedWithReason: number | undefined;
+  let fixtureSuppressed = 0;
   let findings: Finding[];
   try {
     findings = await scanHistory({
@@ -1174,6 +1190,14 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
       revRange: input.revRange,
       onProgress: (commits) => (commitsScanned = commits),
       onGeneratedExcluded: (count) => (generatedExcluded = count),
+      // Totals, assigned -- the shape scanHistory reports and the shape cli.ts
+      // consumes. The accounting is the producer's own; nothing here recounts
+      // it from the findings that survived.
+      onSuppressed: (count, accounting) => {
+        suppressed = count;
+        suppressedWithReason = accounting?.withReason;
+      },
+      onFixtureSuppressed: (count) => (fixtureSuppressed = count),
       // scanHistory kills the git process on abort and resolves with what it
       // read. Merely stopping consumption would leave git reading pack files
       // after the client has been answered.
@@ -1200,7 +1224,14 @@ export async function toolHistoryScan(input: HistoryInput): Promise<ToolResult> 
   // shaped payload, and the only thing standing between them and being read
   // alike is this sentence.
   const statement = complete
-    ? `Scanned ${describeScope(commitsScanned, "commit", { generatedExcluded })}.`
+    ? `Scanned ${describeScope(commitsScanned, "commit", {
+        generatedExcluded,
+        suppressed,
+        // Spread, so an accounting the producer could not establish adds no
+        // clause rather than a clause claiming zero.
+        ...(suppressedWithReason !== undefined ? { suppressedWithReason } : {}),
+        fixtureSuppressed,
+      })}.`
     : `Stopped after ${commitsScanned} commit(s) — ${
         stopReason === "timeout"
           ? `the ${timeoutMs}ms limit was reached`
