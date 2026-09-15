@@ -138,10 +138,53 @@ reassessment.
   bundled into all three artifacts; that was assessed offline rather than under
   §5, and the changed passive-refresh code is unreachable from both callers,
   each of which passes explicit static credentials.
+- `53b5750..403352ef` (the 0.6.0 candidate source): re-reviewed against all nine
+  invariants. The settling command reports two changed surface files,
+  `src/mcp-core.ts` and `src/workspace.ts`. All nine established; **no
+  release-blocking defect found**. Every invariant-bearing function is
+  byte-identical to the endpoint — `resolveRoot`, `withinAllowedRoots`,
+  `safeReal`, `setAllowedRoots`, `wrapUntrusted`, `quoteUntrusted`,
+  `projectFinding`, `redactValue`, `toolVerify`, `toolGetFinding`,
+  `isInsideRoot` and `validateRoot` — and `src/consent.ts` and `src/verify.ts`
+  have **no diff at all** in the range. The full record is
+  `secretloop-benchmark/release-0.6.0-security-review/`.
+
+  **The endpoint is `403352ef`, the reviewed commit — not the release commit.**
+  The 0.6.0 release-preparation commit that follows it changes the version,
+  `CHANGELOG.md`, `README.md`, `SECURITY.md` and this file, and touches no file
+  the settling command names. It was not itself reviewed under §5 and must not
+  be described as the endpoint.
+
+  **Limitations of that review, carried forward:** no actual MCP-client
+  execution and no wire-level protocol probe were performed — protocol purity
+  was assessed from the manifest and source only; the review predates the
+  release artifacts, so every §3 artifact gate was outside it.
 
 ## Open items
 
-Accurate as of the 0.5.1 release (2026-09-11):
+Accurate as of the 0.6.0 release preparation (2026-09-16), except where an entry
+names an earlier release:
+
+- **F-1: `src/walk.ts` resolves the file name twice.** OPEN, **pre-existing**,
+  **not a demonstrated exploit**. `readTextFileResult` and `readBinaryCandidate`
+  call `isInsideRoot`, which realpaths the path and then *discards* the resolved
+  result; `readFileSync` resolves the name again. Two consequences follow by
+  source reasoning: a symlink replaced between the two would be followed by the
+  read, and the size cap describes the file `statSync` saw rather than the bytes
+  read. Found during the 0.6.0 §5 review and byte-identical at `v0.5.1`, so it is
+  **not introduced by this release**; it is recorded rather than dismissed
+  because it is reachable.
+
+  **No timing harness was built and no exploitation was observed.** It needs an
+  actor with concurrent write access to the scanned tree, who can already place
+  content where the scanner will read it.
+
+  On the fix: `src/compare.ts` shows the one-descriptor pattern that closes the
+  **size-cap** half. **A single descriptor alone does not establish root
+  containment against path replacement** — `openSync` still resolves the name and
+  follows symlinks, so closing that half needs the containment decision to be
+  made about the opened object (or the open not to follow links). Scoping and
+  implementing that is a separate task and is **not** part of the 0.6.0 release.
 
 - **0.5.1 is published.** npm, Open VSX and the VS Code Marketplace all serve
   0.5.1, released from commit `88d2197` and tagged `v0.5.1`. The published npm

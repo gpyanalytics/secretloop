@@ -2,8 +2,17 @@
 
 ## Unreleased
 
-**Not in any published package.** Published 0.5.1 behaves as described under that
-heading below.
+Nothing yet.
+
+## 0.6.0 — not yet published
+
+**Prepared, not released.** The dated heading is applied at publication; until
+then the latest published version is 0.5.1, described under that heading below.
+
+Additive throughout. **No rule, threshold, severity or fingerprint changed**, so
+the same tree reports the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION`
+is 4, `BINARY_CONTRACT_VERSION` is 2 and `SCOPE_CONTRACT_VERSION` is 1; schemas 1-3
+and binary contract 1 existed only during development and were never published.
 
 ### MCP
 
@@ -24,6 +33,22 @@ heading below.
   writes nothing to the session cache, so it can neither restamp nor contribute
   to what `list_findings` returns, and the refusal when no scan has run is
   unchanged — a completed zero-finding scan still answers with its scope.
+
+
+- **A history scan over MCP now says what it suppressed.**
+  `secretloop_history_scan` asked the scanner for neither the inline-suppression
+  count nor the reasoned count, so its scope sentence read exactly like a scan
+  with nothing to suppress — the one thing that sentence exists to prevent, and
+  a gap that predates the suppression work rather than coming from it. It now
+  passes the same accounting the CLI consumes into the same shared formatter,
+  producing the same sentence for the same selection.
+- **Aggregate only, and unknown is not zero.** Counts and nothing else: no
+  reason text, suppressed value, fingerprint, path or source line, no suppressed
+  finding as a result row, no new hash and no suppression identity. The reason
+  clause is omitted when the producer could not establish the count, exactly as
+  it is when the count is a measured zero — the sentence cannot distinguish
+  them, and the CLI's JSON report is where that difference shows. A stopped scan
+  keeps its existing partial sentence and claims no counts.
 
 ### Report comparison
 
@@ -67,23 +92,6 @@ heading below.
 - **It does not repair reports already written.** Two version-1 reports still
   compare with each other and still carry the collapsed identity. Nothing can
   reach back into a report that was already emitted.
-
-### MCP
-
-- **A history scan over MCP now says what it suppressed.**
-  `secretloop_history_scan` asked the scanner for neither the inline-suppression
-  count nor the reasoned count, so its scope sentence read exactly like a scan
-  with nothing to suppress — the one thing that sentence exists to prevent, and
-  a gap that predates the suppression work rather than coming from it. It now
-  passes the same accounting the CLI consumes into the same shared formatter,
-  producing the same sentence for the same selection.
-- **Aggregate only, and unknown is not zero.** Counts and nothing else: no
-  reason text, suppressed value, fingerprint, path or source line, no suppressed
-  finding as a result row, no new hash and no suppression identity. The reason
-  clause is omitted when the producer could not establish the count, exactly as
-  it is when the count is a measured zero — the sentence cannot distinguish
-  them, and the CLI's JSON report is where that difference shows. A stopped scan
-  keeps its existing partial sentence and claims no counts.
 
 ### Remediation
 
