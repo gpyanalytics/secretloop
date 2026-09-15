@@ -12,6 +12,9 @@ import {
   NO_LONGER_OBSERVED_CAVEAT,
 } from "../src/compare";
 import { REPORT_SCHEMA_VERSION, scopeIdentity } from "../src/report-metadata";
+import { rulesById } from "../src/rules";
+import { ENTROPY_RULE_ID } from "../src/scanner";
+import { PKCS12_RULE_ID } from "../src/pkcs12";
 
 /**
  * The comparator, tested through the SHIPPED CODE.
@@ -79,7 +82,7 @@ const finding = (fp: string, over: Record<string, unknown> = {}) => ({
 });
 
 const FP1 = `app.js:github-token:${hex("1")}`;
-const FP2 = `lib/x.js:aws-key:${hex("2")}`;
+const FP2 = `lib/x.js:aws-access-key:${hex("2")}`;
 
 /** Compare two in-memory report objects through the shipped comparator. */
 function cmp(a: any, b: any) {
@@ -433,6 +436,89 @@ test("an over-long findings array is refused rather than processed", () => {
     const res = loadReport(p, "before");
     assert.ok("reasons" in res && res.reasons[0].code === "malformed-findings");
   });
+});
+
+// ---------------------------------------------------------------------------
+suite("\ncompare — a rule id must be SUPPORTED, not merely grammatical");
+
+/** A runtime marker that is grammar-valid and not a rule this build emits. */
+function unknownRuleId(): string {
+  const a = "abcdefghijklmnopqrstuvwxyz0123456789";
+  let out = "zz";
+  for (let i = 0; i < 24; i++) out += a[Math.floor(Math.random() * a.length)];
+  return out;
+}
+
+test("an unknown but grammar-valid rule id refuses the comparison, on either side", () => {
+  for (const side of ["before", "after"] as const) {
+    const mark = unknownRuleId();
+    const bad = report({}, [finding(`app.js:${mark}:${hex("2")}`)]);
+    const r = side === "after" ? cmp(report(), bad) : cmp(bad, report());
+    assert.strictEqual(r.comparable, false, `unsupported rule id on the ${side} side must refuse`);
+    assert.ok(codes(r).includes("malformed-finding-identity"));
+    const out = renderText(r) + renderJson(r);
+    assert.ok(!out.includes(mark), "the rejected id must never be echoed");
+  }
+});
+
+test("the SAME unsupported id on both sides is still refused", () => {
+  const mark = unknownRuleId();
+  const f = finding(`app.js:${mark}:${hex("2")}`);
+  const r = cmp(report({}, [f]), report({}, [f]));
+  assert.strictEqual(r.comparable, false, "agreement is not support");
+  // The existing invalid-finding policy returns on the first failing side
+  // rather than collecting both; the refusal is what matters here.
+  assert.ok(codes(r).includes("malformed-finding-identity"));
+  assert.ok(!(renderText(r) + renderJson(r)).includes(mark));
+});
+
+test("mixed supported and unsupported findings refuse the WHOLE comparison", () => {
+  const mark = unknownRuleId();
+  const bad = finding(`app.js:${mark}:${hex("9")}`);
+  const goodA = finding(FP1);
+  const goodB = finding(FP2);
+  // Unsupported first, and unsupported last: position must not matter.
+  for (const findings of [[bad, goodA, goodB], [goodA, goodB, bad], [goodA, bad, goodB]]) {
+    const r = cmp(report({}, [goodA]), report({}, findings));
+    assert.strictEqual(r.comparable, false, "one unsupported finding refuses everything");
+    // The valid findings WOULD have produced a difference; none may leak.
+    assert.deepStrictEqual(r.added, []);
+    assert.deepStrictEqual(r.persisting, []);
+    assert.deepStrictEqual(r.noLongerObserved, []);
+    assert.deepStrictEqual(r.ambiguousIdentity, []);
+    const parsed = JSON.parse(renderJson(r));
+    assert.deepStrictEqual(Object.keys(parsed).sort(), ["comparable", "reasons", "tool"],
+      "no partial results and no difference keys");
+    assert.ok(!(renderText(r) + renderJson(r)).includes(mark));
+  }
+  // And on the before side too.
+  const rev = cmp(report({}, [goodA, bad]), report({}, [goodA, goodB]));
+  assert.strictEqual(rev.comparable, false);
+  assert.deepStrictEqual(rev.added, []);
+});
+
+test("EVERY rule id this build emits is accepted", () => {
+  // Derived from the same authorities the comparator uses, so a new rule cannot
+  // be admitted by one and refused by the other.
+  const ids = [...rulesById.keys(), ENTROPY_RULE_ID, PKCS12_RULE_ID];
+  assert.ok(ids.length > 100, `expected the full rule set, got ${ids.length}`);
+  for (const id of ids) {
+    const r = cmp(report(), report({}, [finding(`app.js:${id}:${hex("2")}`)]));
+    assert.strictEqual(r.comparable, true, `supported rule id refused: ${id}`);
+    assert.strictEqual(r.added[0].ruleId, id);
+  }
+});
+
+test("exact raw-fingerprint matching is unchanged by the membership check", () => {
+  // Two findings sharing a rule and digest but differing in path stay distinct.
+  const a = report({}, [finding(`one.js:github-token:${hex("2")}`)]);
+  const b = report({}, [finding(`two.js:github-token:${hex("2")}`)]);
+  const r = cmp(a, b);
+  assert.strictEqual(r.comparable, true);
+  assert.strictEqual(r.added.length, 1, "presentation must not merge distinct identities");
+  assert.strictEqual(r.noLongerObserved.length, 1);
+  // Identical paths still pair.
+  assert.strictEqual(cmp(a, a).persisting.length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -834,6 +920,42 @@ test("DUPLICATES: ambiguous multiplicity invents no match and no disappearance",
   const text = renderText(r);
   assert.match(text, /Occurrence-level/);
   assert.match(text, /NOT tracked/);
+});
+
+test("CLI: an unsupported rule id is refused, and never appears on stdout or stderr", () => {
+  withDir((dir) => {
+    const mark = unknownRuleId();
+    const A = path.join(dir, "A.json"), B = path.join(dir, "B.json");
+    writeFileSync(A, JSON.stringify(report({}, [finding(FP1)])));
+    // A valid finding that WOULD differ, alongside the unsupported one.
+    writeFileSync(B, JSON.stringify(report({}, [finding(FP2), finding(`app.js:${mark}:${hex("9")}`)])));
+
+    for (const args of [["compare", A, B], ["compare", A, B, "--format", "json"]]) {
+      const out = cli(args);
+      assert.strictEqual(out.status, 3, `${args.join(" ")} must refuse the whole comparison`);
+      const both = out.stdout + out.stderr;
+      assert.ok(!both.includes(mark), "the rejected rule id must not reach stdout or stderr");
+      assert.ok(!both.includes(hex("2")), "nor may a difference from the valid findings leak");
+    }
+    const d = JSON.parse(cli(["compare", A, B, "--format", "json"]).stdout);
+    assert.deepStrictEqual(Object.keys(d).sort(), ["comparable", "reasons", "tool"]);
+  });
+});
+
+test("CLI: a credential-shaped path is accepted internally and absent from output", () => {
+  withDir((dir) => {
+    const secret = token();
+    const A = path.join(dir, "A.json"), B = path.join(dir, "B.json");
+    writeFileSync(A, JSON.stringify(report()));
+    writeFileSync(B, JSON.stringify(report({}, [finding(`src/${secret}/a.js:github-token:${hex("2")}`)])));
+    for (const args of [["compare", A, B], ["compare", A, B, "--format", "json"]]) {
+      const out = cli(args);
+      // Accepted internally: this is a normal, comparable pair with one new
+      // finding. The path is not detected or rejected -- it is simply not shown.
+      assert.strictEqual(out.status, 1, "the pair must still compare");
+      assert.ok(!(out.stdout + out.stderr).includes(secret), "the path must not reach output");
+    }
+  });
 });
 
 test("help documents the command, the exit codes and the wording limit", () => {

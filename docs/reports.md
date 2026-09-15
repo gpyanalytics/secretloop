@@ -475,7 +475,7 @@ so the comparator builds its output from fields of fixed, closed shape only:
 
 | shown | why it is safe to show |
 |---|---|
-| `ruleId` | taken from the fingerprint and checked against the rule-id grammar, a closed vocabulary |
+| `ruleId` | taken from the fingerprint and required to be **one of the rule ids this build emits** — membership, not merely grammar |
 | `digest` | the 16-hex tail of the fingerprint — fixed shape, and a verbatim substring of the identity already in the report |
 | `line` | a number |
 | `severity` | admitted only from the scanner's own set |
@@ -484,7 +484,21 @@ so the comparator builds its output from fields of fixed, closed shape only:
 fingerprint.** A path is arbitrary text, and **no format check can establish
 that arbitrary text contains no secret** — a credential-shaped path passes every
 pattern a display filter could apply. Rather than claim otherwise, the
-comparator does not print it. `value` and `redactedValue` are never emitted
+comparator does not print it. Such a path is **accepted internally**: it matches
+normally, is never rejected for its contents, and simply never reaches output.
+It is not detected, and nothing here claims it was.
+
+**A rule id must be a member of the supported set, not merely grammatical.** The
+set is derived from the existing authorities — every rule in `src/rules.ts`, plus
+the generic entropy tier and the structural keystore detector — so there is no
+second list to drift. A grammar check alone accepts any lowercase alphanumeric
+run and is not a vocabulary; relying on one let an arbitrary string in a
+fingerprint's rule segment be printed. A finding naming an unsupported rule now
+**rejects the whole comparison**, under the same policy as any other unusable
+identity: no partial results, and the id itself is never echoed.
+
+Constraining these fields bounds **what can be echoed**. It is not a proof about
+content, and validating metadata does not authenticate a report. `value` and `redactedValue` are never emitted
 either; a field named "redacted" is a claim by the input, not a fact, and the
 report's own `file` and `ruleId` fields are ignored entirely in favour of the
 identity that was actually matched on.

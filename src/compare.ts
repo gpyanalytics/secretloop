@@ -1,5 +1,8 @@
 import { openSync, fstatSync, readSync, closeSync, statSync } from "fs";
 import { REPORT_SCHEMA_VERSION, scopeIdentity } from "./report-metadata";
+import { rulesById } from "./rules";
+import { ENTROPY_RULE_ID } from "./scanner";
+import { PKCS12_RULE_ID } from "./pkcs12";
 
 /**
  * Comparison of two saved JSON reports.
@@ -62,6 +65,30 @@ export const MAX_FINDINGS = 200_000;
  * this grammar, and the same identity shape is what the baseline file stores.
  */
 const RULE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The rule ids this build can actually emit -- MEMBERSHIP, not merely grammar.
+ *
+ * The grammar above accepts any lowercase alphanumeric run, so an arbitrary
+ * string smuggled into the rule segment of a fingerprint passed it and was then
+ * printed. Reproduced through the CLI in both formats before this check
+ * existed: an unknown 26-character marker appeared verbatim in the text output
+ * and in the JSON `ruleId` field.
+ *
+ * Derived from the EXISTING AUTHORITIES rather than copied, so there is no
+ * second list to drift:
+ *   - `rulesById`        every rule in src/rules.ts
+ *   - `ENTROPY_RULE_ID`  the generic entropy tier, defined in src/scanner.ts
+ *   - `PKCS12_RULE_ID`   the structural keystore detector, in src/pkcs12.ts
+ *
+ * These are module constants. Reading them starts no scan, opens no network
+ * connection and verifies nothing with a provider.
+ */
+const SUPPORTED_RULE_IDS: ReadonlySet<string> = new Set<string>([
+  ...rulesById.keys(),
+  ENTROPY_RULE_ID,
+  PKCS12_RULE_ID,
+]);
 const FINGERPRINT_DIGEST = /^[0-9a-f]{16}$/;
 const MAX_FINGERPRINT_CHARS = 4096;
 
@@ -162,10 +189,38 @@ export interface Reason {
  * finding is still there, and a field named "redacted" is a claim by the input,
  * not a fact.
  */
+/**
+ * THE PRESENTATION BOUNDARY.
+ *
+ * A report is UNTRUSTED INPUT. It may have been produced by another tool, edited
+ * by hand, or travelled through CI logs and artifact stores before arriving
+ * here. Echoing a report-supplied path or any other arbitrary string can carry a
+ * credential straight into a terminal, a CI log or an exported JSON artifact,
+ * where it outlives the comparison.
+ *
+ * So INTERNAL MATCHING AND EXTERNAL PRESENTATION DELIBERATELY USE DIFFERENT
+ * REPRESENTATIONS. Matching uses the full raw fingerprint, byte for byte,
+ * because changing it would change which findings pair up. Presentation uses
+ * only the constrained fields below, and DISCARDS the rest rather than
+ * rewriting it.
+ *
+ * A credential-shaped path is therefore ACCEPTED INTERNALLY -- it matches
+ * normally and is never rejected for its contents -- and simply never appears
+ * in output. It is not detected, and no claim is made that it was.
+ *
+ * WHAT THIS DOES AND DOES NOT ESTABLISH. Constraining the output fields limits
+ * WHAT CAN BE ECHOED: a rule id must be one this build emits, a severity one of
+ * four words, a digest 16 hex characters, a line a number. That is a bound on
+ * the channel, NOT a proof about content -- no check here, and no check
+ * anywhere, can establish that arbitrary text contains no secret, and none is
+ * claimed to. Nor does validating this metadata AUTHENTICATE the report: every
+ * value was written by whoever produced the file.
+ */
 export interface FindingRef {
   /**
-   * The rule that matched, taken from the fingerprint and checked against the
-   * rule-id grammar. A closed vocabulary, so it is safe to display.
+   * The rule that matched, taken from the fingerprint. Required to be a member
+   * of `SUPPORTED_RULE_IDS` -- the grammar alone accepts any lowercase
+   * alphanumeric run and is NOT a vocabulary.
    */
   ruleId: string;
   /**
@@ -242,6 +297,14 @@ function parseFingerprint(
   const pathPart = fingerprint.slice(0, ruleColon);
   if (pathPart.length === 0) return null;
   return { pathPart, ruleId, digest };
+}
+
+/** Structure parsed and the rule is one this build emits. */
+function supportedIdentity(fingerprint: string): { ruleId: string; digest: string } | null {
+  const parts = parseFingerprint(fingerprint);
+  if (!parts) return null;
+  if (!SUPPORTED_RULE_IDS.has(parts.ruleId)) return null;
+  return { ruleId: parts.ruleId, digest: parts.digest };
 }
 
 /** Strip anything that could break a terminal or forge structure in output. */
@@ -473,7 +536,7 @@ function refOf(raw: unknown): { key: string; ref: FindingRef } | null {
   // Location comes from the fingerprint, not from the report's own fields --
   // see locationOf. `severity` is admitted only from the scanner's own set, so
   // an arbitrary string cannot ride out through it either.
-  const parts = parseFingerprint(fp);
+  const parts = supportedIdentity(fp);
   if (!parts) return null;
   const severity = typeof f.severity === "string" && SEVERITIES.has(f.severity) ? f.severity : null;
   // The PATH IS DELIBERATELY NOT CARRIED. See the note on FindingRef above and

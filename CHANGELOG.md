@@ -52,7 +52,9 @@ heading below.
     rather than copied from the input, and no `value` or `redactedValue` is ever
     emitted — a field named "redacted" is a claim by the input, not a fact.
     **No report-supplied free text is printed at all.** Results carry only
-    `ruleId` (checked against the rule-id grammar, a closed vocabulary), the
+    `ruleId` (required to be one of the rule ids this build emits — membership,
+    derived from `rulesById` plus the entropy and keystore detectors, not merely
+    a grammar check), the
     16-hex `digest` tail of the fingerprint, `line` and `severity` (admitted
     only from the scanner's own set). The scanned path and the raw fingerprint
     are **not** shown: a path is arbitrary text, and no format check can
@@ -66,6 +68,13 @@ heading below.
     against the full `<path>:<ruleId>:<16 hex>` structure rejects the whole
     comparison instead of being dropped. Validation errors name the field at
     fault and never quote its value. Nothing in a report is fetched or executed.
+  - **An unsupported rule id rejects the whole comparison.** The rule segment of
+    a fingerprint was previously checked against a grammar only, which accepts
+    any lowercase alphanumeric run — so an arbitrary string could pass and be
+    printed. Membership in the set this build actually emits is now required,
+    the set is derived from the existing authorities rather than copied, and a
+    finding naming an unsupported rule refuses the comparison outright with no
+    partial results and without echoing the id.
   - **The read is bounded by the descriptor, not the name.** Each report is
     opened once, inspected with `fstat` on the opened object, and read from that
     same descriptor with the cap enforced **during** the read — at most one
