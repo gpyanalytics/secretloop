@@ -138,6 +138,11 @@ durable, human-approved, single-use record for transmitting a credential.
 number it already printed — *2 finding(s) suppressed by inline directives, 1
 with a recorded reason* — and prints nothing new when no reason was recorded.
 `reportCoverage.suppression` gains a matching `inlineSuppressedWithReason`.
+`secretloop scan`, `staged` and `history` all measure it.
+
+That field is **absent** when a producer cannot establish it, which is not the
+same as zero: a present `0` means something counted and found none. Every
+producer in tree establishes it, so reports carry it.
 
 **The reason text itself is never published.** Not in the text report, not in
 JSON, not in SARIF, not over MCP, and not in a log line. A reason describes the

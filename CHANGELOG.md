@@ -50,6 +50,22 @@ heading below.
   new when no reason was recorded, byte for byte. The CLI, the MCP scope object
   and the editor summary all print the same sentence, and `reportCoverage` gains
   an additive `inlineSuppressedWithReason` count.
+- **History scans count explained suppressions too.** `secretloop history` now
+  carries the same accounting the working-tree scan does, through
+  `LogPatchParser` and the `onSuppressed` callback, so its scope sentence gains
+  the same clause and `reportCoverage` the same count. **Correction to this
+  unreleased candidate**: history mode published
+  `inlineSuppressedWithReason: 0` while suppressing findings whose directives
+  carried reasons — a figure it had never computed. The field is now **absent**
+  rather than zero when a producer cannot establish it, the distinction this
+  report already draws for `binaryExclusions`; every producer in tree
+  establishes it, so reports still carry it. A cancelled history scan reports
+  what it read, as its other counts do, and the run is already marked
+  incomplete.
+- **A refused directive in history is reported too.** The same fixed diagnostics
+  the file path prints, deduplicated across the whole parse and capped, on
+  stderr. Advisory: they change no exit code, and they quote no line, path,
+  reason or rejected text.
 - **The reason text is never published** — not in text, JSON or SARIF output,
   not over MCP, and not in a log line. It describes the credential it was
   written beside, and may contain one, so beside a count of what was hidden it

@@ -895,7 +895,13 @@ async function main(): Promise<void> {
   // so its zeroes are true rather than unfilled.
   const coverage: CoverageFacts = {};
   let inlineSuppressed = 0;
-  let inlineSuppressedWithReason = 0;
+  /**
+   * How many suppressions carried a reason, or undefined when the producer that
+   * ran could not establish it. Absent from the report rather than zero: a zero
+   * here is a claim that nothing was explained, and only a producer that counted
+   * may make it.
+   */
+  let inlineSuppressedWithReason: number | undefined;
   /**
    * Annotations the directive parser had to argue with. Surfaced as notices on
    * stderr beside the baseline's, never folded into the report: they are about
@@ -922,6 +928,12 @@ async function main(): Promise<void> {
     let commitsScanned = 0;
     let generatedExcluded = 0;
     let suppressed = 0;
+    /**
+     * Undefined until the history producer reports it, and undefined afterwards
+     * if that producer could not establish it. Never defaulted to 0: this field
+     * published a zero it had not counted, which is the defect this fixes.
+     */
+    let suppressedWithReason: number | undefined;
     let fixtureSuppressed = 0;
     try {
       findings = await scanHistory({
@@ -931,7 +943,16 @@ async function main(): Promise<void> {
         revRange: args.revRange,
         onProgress: (commits) => (commitsScanned = commits),
         onGeneratedExcluded: (count) => (generatedExcluded = count),
-        onSuppressed: (count) => (suppressed = count),
+        onSuppressed: (count, accounting) => {
+          // Totals, assigned -- the shape this callback has always had.
+          suppressed = count;
+          suppressedWithReason = accounting?.withReason;
+        },
+        onSuppressionDiagnostic: (messages) => {
+          for (const m of messages) {
+            if (!suppressionDiagnostics.includes(m)) suppressionDiagnostics.push(m);
+          }
+        },
         onFixtureSuppressed: (count) => (fixtureSuppressed = count),
         // The selection as the parser executed it, never reconstructed here
         // from the range string this code happens to have passed in.
@@ -961,10 +982,18 @@ async function main(): Promise<void> {
     // is left undefined, which omits the field and makes history reports
     // ineligible under this contract -- the honest answer rather than metadata
     // invented for a mode that never produced it.
-    scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed, fixtureSuppressed });
+    scope = describeScope(commitsScanned, "commit", {
+      generatedExcluded,
+      suppressed,
+      // Spread, so an unestablished accounting adds no clause rather than a
+      // clause saying zero.
+      ...(suppressedWithReason !== undefined ? { suppressedWithReason } : {}),
+      fixtureSuppressed,
+    });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
     inlineSuppressed = suppressed;
+    inlineSuppressedWithReason = suppressedWithReason;
   } else {
     let listed;
     if (args.command === "staged") {
@@ -1117,7 +1146,7 @@ async function main(): Promise<void> {
         allowValuesCount: config.allowValues.length,
         baselineApplied: Boolean(args.baseline),
         inlineSuppressed,
-        inlineSuppressedWithReason,
+        ...(inlineSuppressedWithReason !== undefined ? { inlineSuppressedWithReason } : {}),
         unidentified: suppression.unidentified,
       },
     },

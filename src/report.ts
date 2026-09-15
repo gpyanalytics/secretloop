@@ -103,8 +103,15 @@ export interface ReportCoverage {
      * reasons themselves are not published here -- they are a comment someone
      * wrote next to a credential, and a machine-readable report is the wrong
      * place to republish them beside the count of what they hid.
+     *
+     * ABSENT when the producer that ran could not establish it, which is not
+     * the same as zero -- the distinction this file already draws for
+     * `binaryExclusions`. A present 0 means a producer counted and found none.
+     * It shipped required, and a history scan therefore published a zero it had
+     * never counted; every producer in tree establishes it today, so a report
+     * from any of them still carries the field.
      */
-    inlineSuppressedWithReason: number;
+    inlineSuppressedWithReason?: number;
     /** Empty when every active suppression mechanism is identified by a digest. */
     unidentified: string[];
   };

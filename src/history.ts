@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "child_process";
-import { Finding, scanText } from "./scanner";
+import { Finding, scanText, SuppressionAccounting } from "./scanner";
 import { SecretLoopConfig, classifyPath } from "./config";
 
 /**
@@ -10,6 +10,15 @@ import { SecretLoopConfig, classifyPath } from "./config";
  * scanner reports "clean" on a repo whose entire credential set is one
  * `git log -p` away.
  */
+
+/**
+ * How many distinct directive complaints one history scan will repeat.
+ *
+ * There are only a handful of distinct messages, so this is a ceiling against a
+ * pathological repository rather than an expected limit; the set is keyed on the
+ * message, so a thousand identical bad annotations are still one line.
+ */
+const MAX_SUPPRESSION_DIAGNOSTICS = 20;
 
 export interface HistoryScanOptions {
   config: SecretLoopConfig;
@@ -25,8 +34,27 @@ export interface HistoryScanOptions {
    * way a working-tree scan does.
    */
   onGeneratedExcluded?: (count: number) => void;
-  /** Findings the diff dropped to an inline directive, for the disclosure. */
-  onSuppressed?: (count: number) => void;
+  /**
+   * Findings the diff dropped to an inline directive, for the disclosure.
+   *
+   * The same shape scanText uses, carrying the same accounting: the count, and
+   * how many of those suppressions came from a directive that recorded a
+   * reason. Both are TOTALS for the parse so far, not increments -- the callers
+   * of this option assign rather than accumulate, which is how the count has
+   * always been reported here.
+   *
+   * `accounting` is absent when this producer could not establish it, and that
+   * is NOT the same as zero. A history scan that reports no accounting has not
+   * claimed that nothing was explained; it has declined to say.
+   */
+  onSuppressed?: (count: number, accounting?: SuppressionAccounting) => void;
+  /**
+   * What the directive parser had to argue with, deduplicated across the whole
+   * parse: fixed strings with stable codes, never a line, a path, a reason or
+   * the rejected text. Advisory only -- it changes no exit code, exactly as on
+   * the file path.
+   */
+  onSuppressionDiagnostic?: (messages: string[]) => void;
   /** Generic findings dropped because the diff's file is test/fixture material. */
   onFixtureSuppressed?: (count: number) => void;
   /**
@@ -171,6 +199,20 @@ export function validateRevRange(value: unknown): string | null {
   return null;
 }
 
+/**
+ * Forward the parse's directive complaints, once, if there are any.
+ *
+ * Both close paths report them: a cancelled scan read part of the history, and
+ * an annotation it did read is just as wrong as one it never reached.
+ */
+function reportSuppressionDiagnostics(
+  parser: LogPatchParser,
+  options: HistoryScanOptions
+): void {
+  const messages = parser.suppressionDiagnosticMessages();
+  if (messages.length > 0) options.onSuppressionDiagnostic?.(messages);
+}
+
 export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
   const { config, repoRoot } = options;
 
@@ -289,7 +331,13 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
         if (cancelled) {
           const partial = parser.finish();
           options.onGeneratedExcluded?.(parser.generatedExcludedCount());
-          options.onSuppressed?.(parser.suppressedCount());
+          // Partial, like every other count on this path: the scan stopped, so
+          // this is what it had read, and onIncompleteSelection below is what
+          // says the coverage is incomplete. Reported rather than withheld for
+          // the same reason the suppression count is -- a partial disclosure of
+          // what was hidden beats no disclosure at all.
+          options.onSuppressed?.(parser.suppressedCount(), parser.suppressionAccounting());
+          reportSuppressionDiagnostics(parser, options);
           options.onFixtureSuppressed?.(parser.fixtureSuppressedCount());
           // Deliberately NOT onSelectedCommits: see onIncompleteSelection.
           options.onIncompleteSelection?.();
@@ -299,7 +347,8 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
         if (carry.length > 0) parser.push(carry);
         const all = parser.finish();
         options.onGeneratedExcluded?.(parser.generatedExcludedCount());
-        options.onSuppressed?.(parser.suppressedCount());
+        options.onSuppressed?.(parser.suppressedCount(), parser.suppressionAccounting());
+        reportSuppressionDiagnostics(parser, options);
         options.onFixtureSuppressed?.(parser.fixtureSuppressedCount());
         options.onSelectedCommits?.(parser.selectedCommitShas());
         resolve(all);
@@ -366,6 +415,22 @@ export class LogPatchParser {
   /** Distinct paths the generated group kept out, for the scope disclosure. */
   private readonly generatedSkipped = new Set<string>();
   private suppressed = 0;
+  /**
+   * Suppressions whose directive recorded a reason, accumulated in the same
+   * units as `suppressed`: one per suppressed finding, added as each flush
+   * reports, so a hunk parsed in two chunks is not counted twice and a patch
+   * that touches the same line in two commits counts both occurrences -- the
+   * way `suppressed` already counts them.
+   */
+  private suppressedWithReason = 0;
+  /**
+   * False once any suppression arrived without accounting beside it. Then the
+   * count above is a floor rather than a measurement, and this parser reports
+   * nothing rather than a zero it did not establish.
+   */
+  private suppressionAccountingComplete = true;
+  /** Distinct directive diagnostics, bounded so one bad file cannot flood. */
+  private readonly suppressionDiagnostics = new Set<string>();
   private fixtureSuppressed = 0;
 
   // Buffers consecutive added lines per hunk so multi-line secrets like PEM
@@ -390,7 +455,17 @@ export class LogPatchParser {
       config: { ...this.config, includeApiDocumentEntropy: true },
       filePath: this.currentFile,
       commit: this.commit.sha,
-      onSuppressed: (n: number) => (this.suppressed += n),
+      onSuppressed: (n: number, accounting?: SuppressionAccounting) => {
+        this.suppressed += n;
+        if (accounting === undefined) this.suppressionAccountingComplete = false;
+        else this.suppressedWithReason += accounting.withReason;
+      },
+      onSuppressionDiagnostic: (messages: string[]) => {
+        for (const m of messages) {
+          if (this.suppressionDiagnostics.size >= MAX_SUPPRESSION_DIAGNOSTICS) break;
+          this.suppressionDiagnostics.add(m);
+        }
+      },
       onFixtureSuppressed: (n: number) => (this.fixtureSuppressed += n),
     });
     for (const f of local) {
@@ -503,6 +578,21 @@ export class LogPatchParser {
   /** Findings dropped by an inline directive while parsing the diff. */
   suppressedCount(): number {
     return this.suppressed;
+  }
+
+  /**
+   * The accounting beside that count, or undefined when this parse could not
+   * establish it. Undefined is a refusal to claim, never a zero.
+   */
+  suppressionAccounting(): SuppressionAccounting | undefined {
+    return this.suppressionAccountingComplete
+      ? { withReason: this.suppressedWithReason }
+      : undefined;
+  }
+
+  /** Distinct directive diagnostics seen, in insertion order. */
+  suppressionDiagnosticMessages(): string[] {
+    return [...this.suppressionDiagnostics];
   }
 
   /** Generic findings dropped for sitting in a test or fixture path. */
