@@ -5,6 +5,26 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### MCP
+
+- **`secretloop_list_findings` now says what was inspected to produce its rows.**
+  The scan computed a `scope` and the session cache dropped it, so listing the
+  findings afterwards returned them with no account of their origin — the `scope`
+  key was **absent**, not null. The cache now stores the scope in the same object
+  literal as the findings it describes, and `list_findings` returns it.
+- **Additive, and response-level by design.** No existing field changed type or
+  meaning and nothing was removed; one key was added to one payload. The cache
+  has exactly one writer, so each entry describes exactly one working-tree scan
+  of one root — a per-finding provenance field would repeat that on every row and
+  could drift from it, so none was added.
+- **What it does not claim.** Not freshness: `source` and `scannedAt` already say
+  the findings are an earlier observation. Not the comparator's `scopeDigest`:
+  nothing is hashed and no eligibility decision reads it. Filters do not move it,
+  because a filter narrows returned rows and not what was scanned. A history scan
+  writes nothing to the session cache, so it can neither restamp nor contribute
+  to what `list_findings` returns, and the refusal when no scan has run is
+  unchanged — a completed zero-finding scan still answers with its scope.
+
 ### Report comparison
 
 - **`binaryDigest` no longer collapses a literal backslash onto a directory

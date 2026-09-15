@@ -570,6 +570,22 @@ export function wrapUntrusted(
 // ---------------------------------------------------------------------------
 
 /**
+ * WHAT A SCAN INSPECTED, as `secretloop_scan` reported it.
+ *
+ * Counts and one sentence. No path, no source text, no digest, and nothing
+ * derived from a credential. It is the same object the scan payload carries,
+ * kept so a later `secretloop_list_findings` can say what was looked at instead
+ * of handing back rows with no account of their origin.
+ */
+export interface ScanScope {
+  filesScanned: number;
+  outsideExcluded: number;
+  apiDocumentsScoped: number;
+  archives?: ArchiveAccounting;
+  statement: string;
+}
+
+/**
  * The most recent working-tree scan per repository root, for this process only.
  *
  * In memory and nowhere else: a scan result is derived from credentials, and
@@ -585,6 +601,19 @@ export interface CachedScan {
   root: string;
   scannedAt: string;
   filesScanned: number;
+  /**
+   * PROVENANCE, STORED WITH THE FINDINGS IT DESCRIBES.
+   *
+   * Written in the same object literal as `findings`, by the only writer this
+   * cache has, so the two cannot drift apart: there is no code path that
+   * replaces one without the other. Every entry therefore describes exactly one
+   * working-tree scan of one root.
+   *
+   * This is NOT the report comparator's `scopeDigest`. Nothing here is hashed,
+   * nothing identifies a selection for comparison, and no eligibility decision
+   * reads it.
+   */
+  scope: ScanScope;
   findings: Finding[];
   textByFile: Map<string, string>;
 }
@@ -778,10 +807,56 @@ export function toolScan(input: ScanInput): ToolResult {
   }
   const archiveNotes = hasArchiveActivity(archives) ? archives : undefined;
 
+  // Built once, then BOTH stored and returned, so the payload a caller sees and
+  // the provenance a later list_findings reports are the same object rather
+  // than two constructions that could drift.
+  const scope: ScanScope = {
+    filesScanned: scanned.length,
+    outsideExcluded: walkerOutsideExcluded + outsideExcluded,
+    // Documents the entropy tier was not run over, as a number beside the
+    // sentence that also says it -- the count is metadata, never a path.
+    apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
+    // Present only when a container was met, so a scan of a tree without
+    // archives serializes exactly as it did before. Counts only, no paths.
+    ...(archiveNotes ? { archives: archiveNotes } : {}),
+    // The one sentence that keeps an empty enumeration from reading as a
+    // pass. Word-for-word the CLI's, and pinned to it by test rather than
+    // by import — see the note on describeScope above.
+    // The generated-file clause is describeScope's, word for word, and is
+    // pinned against the CLI by test. This clause is appended after it
+    // rather than folded in: the CLI has no workspace boundary and so has
+    // nothing to say here, and widening describeScope to carry an
+    // MCP-only sentence would break the parity pin to make room for it.
+    statement: `Scanned ${describeScope(scanned.length, "file", {
+      generatedExcluded,
+      suppressed: scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0),
+      // The count of explained suppressions, and only the count. The
+      // reasons themselves are not sent. The untrusted-content wrapper this
+      // file puts around repository text marks where text came from; it is
+      // not an authorization boundary and does not make disclosing a reason
+      // safe, and a reason may describe -- or contain -- the credential it
+      // was written beside.
+      suppressedWithReason: scanned.reduce((n, f) => n + (f.suppressedWithReason ?? 0), 0),
+      // The read enforces containment too, and can disagree with the walk
+      // if a link is retargeted between them. Summed the way the CLI sums
+      // it, so the same tree yields the same sentence.
+      outsideExcluded: walkerOutsideExcluded + outsideExcluded + readOutside,
+      fixtureSuppressed: scanned.reduce((n, f) => n + (f.fixtureSuppressed ?? 0), 0),
+      apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
+      oversizedExcluded: readOversized,
+      binaryExcluded: readBinary,
+      unreadableExcluded: readUnreadable,
+      notAFileExcluded: readNotAFile,
+      vanishedExcluded: readVanished,
+      archives: archiveNotes,
+    })}.`,
+  };
+
   sessions.set(root, {
     root,
     scannedAt: new Date().toISOString(),
     filesScanned: scanned.length,
+    scope,
     findings,
     textByFile,
   });
@@ -791,47 +866,7 @@ export function toolScan(input: ScanInput): ToolResult {
     payload: {
       tool: "secretloop_scan",
       root,
-      scope: {
-        filesScanned: scanned.length,
-        outsideExcluded: walkerOutsideExcluded + outsideExcluded,
-        // Documents the entropy tier was not run over, as a number beside the
-        // sentence that also says it -- the count is metadata, never a path.
-        apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
-        // Present only when a container was met, so a scan of a tree without
-        // archives serializes exactly as it did before. Counts only, no paths.
-        ...(archiveNotes ? { archives: archiveNotes } : {}),
-        // The one sentence that keeps an empty enumeration from reading as a
-        // pass. Word-for-word the CLI's, and pinned to it by test rather than
-        // by import — see the note on describeScope above.
-        // The generated-file clause is describeScope's, word for word, and is
-        // pinned against the CLI by test. This clause is appended after it
-        // rather than folded in: the CLI has no workspace boundary and so has
-        // nothing to say here, and widening describeScope to carry an
-        // MCP-only sentence would break the parity pin to make room for it.
-        statement: `Scanned ${describeScope(scanned.length, "file", {
-          generatedExcluded,
-          suppressed: scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0),
-          // The count of explained suppressions, and only the count. The
-          // reasons themselves are not sent. The untrusted-content wrapper this
-          // file puts around repository text marks where text came from; it is
-          // not an authorization boundary and does not make disclosing a reason
-          // safe, and a reason may describe -- or contain -- the credential it
-          // was written beside.
-          suppressedWithReason: scanned.reduce((n, f) => n + (f.suppressedWithReason ?? 0), 0),
-          // The read enforces containment too, and can disagree with the walk
-          // if a link is retargeted between them. Summed the way the CLI sums
-          // it, so the same tree yields the same sentence.
-          outsideExcluded: walkerOutsideExcluded + outsideExcluded + readOutside,
-          fixtureSuppressed: scanned.reduce((n, f) => n + (f.fixtureSuppressed ?? 0), 0),
-          apiDocumentsScoped: scanned.reduce((n, f) => n + (f.apiDocumentsScoped ?? 0), 0),
-          oversizedExcluded: readOversized,
-          binaryExcluded: readBinary,
-          unreadableExcluded: readUnreadable,
-          notAFileExcluded: readNotAFile,
-          vanishedExcluded: readVanished,
-          archives: archiveNotes,
-        })}.`,
-      },
+      scope,
       config: describeConfig(root, config),
       summary: summarize(findings),
       findings: findings.map(projectFinding),
@@ -885,6 +920,23 @@ export function toolListFindings(input: ListInput): ToolResult {
       root,
       source: "session-cache",
       scannedAt: cached.scannedAt,
+      /**
+       * WHAT THE SCAN BEHIND THESE ROWS INSPECTED.
+       *
+       * The scope of the working-tree scan identified by `scannedAt`, carried
+       * through from the operation that produced the findings -- never inferred
+       * from the rows, their paths, their fingerprints or any later scan.
+       *
+       * IT DESCRIBES THE SCAN, NOT THIS RESPONSE. Filters change which rows come
+       * back, and `matched`, `totalInScan` and `filteredOut` are what say so; a
+       * narrowing filter does not narrow what was looked at, so this is
+       * unchanged by filtering.
+       *
+       * IT IS NOT FRESHNESS. `source: "session-cache"` and `scannedAt` already
+       * say these findings describe an earlier observation; nothing here claims
+       * a scan just ran.
+       */
+      scope: cached.scope,
       filtersApplied: {
         severity: input.severity ?? null,
         ruleId: input.ruleId ?? null,
