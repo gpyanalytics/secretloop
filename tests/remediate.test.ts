@@ -10,7 +10,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
-import { setWorkspaceFolder, setApplyEditResult } from "./stubs/vscode";
+import { setWorkspaceFolder, setApplyEditResult, createDocument } from "./stubs/vscode";
 
 function finding(): Finding {
   return {
@@ -37,13 +37,17 @@ const SOURCE = `const token ="${TOKEN}";`;
  * produced it, and the only way to know they still mean anything is to look at
  * the document they will be applied to.
  */
+/**
+ * A document the stub will actually edit.
+ *
+ * It used to be a plain object whose getText returned a fixed string, which was
+ * enough while every assertion was about the edit that was REQUESTED. It is not
+ * enough now that redaction reads the document back afterwards: an unedited
+ * buffer still holds the credential, so the confirmation would correctly report
+ * it still observed and the messages under test would never appear.
+ */
 function document(text: string = SOURCE): any {
-  return {
-    uri: { fsPath: "/repo/src/app.ts", scheme: "file" },
-    languageId: "typescript",
-    getText: () => text,
-    positionAt: (offset: number) => ({ line: 0, character: offset }),
-  };
+  return createDocument(text);
 }
 
 suite("remediate.ts — redaction and the clipboard");

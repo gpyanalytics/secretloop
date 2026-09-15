@@ -42,6 +42,58 @@ No rotation and no `.env` extraction is offered for an
 archive-member finding: there is no document to rewrite and archives are never
 rewritten.
 
+### After a redaction: what was checked
+
+Both redaction quick-fixes check, once, whether the value they removed is still
+in the document they edited, and say so in the same notification. Rotation uses
+the same redaction path, so it gets the same single check.
+
+The check looks for the **exact value** the fix removed, in the **complete text
+of that editor document**, and it does this instead of re-reading the scanner's
+findings on purpose: an inline `secretloop:allow`, an `excludeRules` entry, an
+`allowValues` pattern or a fixture path all make a credential vanish from a scan
+while it is still sitting in the buffer. Absence from a filtered detector run is
+a statement about what the detector reports under a configuration, not about
+whether the value is there.
+
+| you see | it means |
+|---|---|
+| *Checked this editor document: the value is no longer in its text.* | the exact value occurs nowhere in that document's text |
+| *The same value is STILL in this editor document (N more occurrences).* | a warning: at least one copy survived the edit |
+| *Could not check this editor document: …* | nothing could be established, and no absence is claimed |
+
+Occurrences are counted **non-overlapping**, left to right, so a degenerate
+value that overlaps itself counts one run rather than two.
+
+**Scope, precisely.** The check reads the editor buffer, which is what the fix
+edited. Nothing is saved for it. It says nothing about the file on disk — an
+unsaved buffer can differ — and nothing about other files, the working tree, git
+history, archives, other branches, or the provider. It is never a claim that the
+credential was revoked, rotated, or is invalid, and never that the repository is
+clean.
+
+It is an observation of the text at the moment it was read, not a promise about
+the future: an edit landing afterwards can put the value back.
+
+It also claims no causation. *This document no longer contains the value* is not
+*the edit removed it*: another change can land between the edit and the read,
+and VS Code's `applyEdit` reports success without a version check. The two facts
+are reported side by side and joined by nothing. What the check does catch — and
+a plain "Secret redacted." could not — is the opposite: an edit that landed on
+the wrong text, or a copy the fix never touched.
+
+**When it is unavailable.** A refused or stale edit (nothing was edited), a
+document that could not be read, no usable value to look for, text containing a
+NUL byte — which is text this product declines to read, so an absence claim over
+it would say more than was established — and encoded findings, whose recorded
+value is the encoded spelling and so cannot speak for a decoded copy. A positive
+observation is never withheld: finding the value is a fact regardless of what
+else the text contains.
+
+**`.env` extraction has no check yet.** It deliberately moves the value into
+another file, so "absent from the source" and "gone" are different statements
+and it needs its own wording. It is not covered by this slice.
+
 ## Commands
 
 All under **SecretLoop** in the Command Palette:
