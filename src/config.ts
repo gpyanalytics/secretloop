@@ -31,6 +31,21 @@ export interface SecretLoopConfig {
   includePaths: string[];
   /** Rule IDs disabled for this project. */
   excludeRules: string[];
+  /**
+   * Why a rule or path is excluded, keyed by the entry it belongs to, for the
+   * entries whose author wrote a reason. Populated only from the object form
+   * below; a config of plain strings leaves both maps empty.
+   *
+   * Deliberately NOT part of the configuration's identity -- `configDigest`
+   * drops it, exactly as it drops `allowValues` content. Two projects that
+   * exclude the same rules are running the same scan whether or not one of
+   * them wrote down why, and a digest that disagreed would make a comment
+   * look like a change in what was scanned.
+   *
+   * Not published either: like every other suppression reason, it stays in the
+   * file its author wrote it in.
+   */
+  excludeReasons?: { rules: Record<string, string>; paths: Record<string, string> };
   /** Regex source strings; any finding whose value matches is dropped. */
   allowValues: string[];
   /** Files larger than this are skipped (generated blobs, fixtures, bundles). */
@@ -223,16 +238,25 @@ export function loadConfig(repoRoot: string): SecretLoopConfig {
 
 
 export function mergeConfig(raw: Partial<SecretLoopConfig>): SecretLoopConfig {
+  // Read before the object literal so both forms of an exclusion entry are
+  // resolved in one place. An object entry used to be read as a glob, match
+  // nothing, and exclude nothing -- silently, which is the worst way for a
+  // configuration file to be wrong.
+  const paths = readExclusionEntries(raw.excludePaths, "pattern");
+  const rules = readExclusionEntries(raw.excludeRules, "rule");
   return {
     entropyThreshold: raw.entropyThreshold ?? defaultConfig.entropyThreshold,
     // User excludes ADD to the built-in generated/vendored list rather than
     // replacing it — nobody wants to re-list node_modules to add one path.
-    excludePaths: [...defaultConfig.excludePaths, ...(raw.excludePaths ?? [])],
+    excludePaths: [...defaultConfig.excludePaths, ...paths.values],
     // Not user-extensible: this group exists so one flag can switch it off, and
     // a user pattern mixed into it would be switched off with it.
     generatedExcludePaths: [...defaultConfig.generatedExcludePaths],
     includePaths: raw.includePaths ?? [],
-    excludeRules: raw.excludeRules ?? [],
+    excludeRules: rules.values,
+    ...(Object.keys(rules.reasons).length > 0 || Object.keys(paths.reasons).length > 0
+      ? { excludeReasons: { rules: rules.reasons, paths: paths.reasons } }
+      : {}),
     allowValues: checkAllowValues(raw.allowValues ?? []),
     maxFileSizeBytes: raw.maxFileSizeBytes ?? defaultConfig.maxFileSizeBytes,
     entropyPassEnabled: raw.entropyPassEnabled ?? defaultConfig.entropyPassEnabled,
@@ -371,6 +395,52 @@ export interface FingerprintInput {
   source?: { kind: "archive-member"; container: string; containerKind: string; member: string };
 }
 
+/**
+ * The most a suppression reason may say.
+ *
+ * A reason is a comment someone wrote next to a credential, not a field with a
+ * schema. Two hundred characters is enough for "vendor sample, rotated 2026-03"
+ * and short of enough to paste a stack trace into every downstream surface.
+ */
+export const MAX_REASON_LENGTH = 200;
+
+/**
+ * Validate and neutralise a suppression reason, once, at parse time.
+ *
+ * Every surface that shows a reason -- the CLI, the MCP wrapper, SARIF, the
+ * editor hover -- receives text that has already been through here, so none of
+ * them has to remember to escape it. Sanitising at each surface instead is how
+ * one of them ends up forgetting.
+ *
+ * `<` and `>` go because the MCP surface wraps untrusted content in a tag pair
+ * a reason must not be able to close. Control characters go because a terminal
+ * reads them as instructions rather than text. Oversize is TRUNCATED with a
+ * diagnostic rather than rejected: dropping the reason entirely would leave the
+ * suppression looking unexplained, which is the one outcome this whole feature
+ * exists to prevent.
+ */
+export function sanitizeReason(raw: unknown): { reason?: string; diagnostic?: string } {
+  if (typeof raw !== "string") return {};
+  const trimmed = raw.trim();
+  if (trimmed === "") return {};
+  const oversized = trimmed.length > MAX_REASON_LENGTH;
+  const clipped = trimmed.slice(0, MAX_REASON_LENGTH);
+  let cleaned = "";
+  for (const ch of clipped) {
+    const code = ch.codePointAt(0) ?? 0;
+    const control = code < 0x20 || (code >= 0x7f && code <= 0x9f);
+    cleaned += control || ch === "<" || ch === ">" ? " " : ch;
+  }
+  cleaned = cleaned.replace(/\s+/g, " ").trim();
+  if (cleaned === "") return {};
+  return {
+    reason: cleaned,
+    ...(oversized
+      ? { diagnostic: `reason truncated to ${MAX_REASON_LENGTH} characters` }
+      : {}),
+  };
+}
+
 /** Baseline schema version. Bumped to 2 because fingerprint semantics changed. */
 export const BASELINE_VERSION = 2;
 
@@ -434,6 +504,26 @@ export function createFingerprint(input: FingerprintInput): string {
  */
 export interface LoadedBaseline {
   fingerprints: Set<string>;
+  /**
+   * Fingerprint -> the reason recorded beside it, for the entries that carry
+   * one. Empty for a file written in any released format, which stores bare
+   * strings; an entry without a reason is absent rather than mapped to null,
+   * so "has a reason" is one lookup and not a null check.
+   *
+   * The parsed form of the caller's own file, and nothing prints it. No report,
+   * log line or tool payload publishes a suppression reason: the text describes
+   * the credential it was written beside, so beside a count of what was hidden
+   * it is a lead on a secret the scan withheld on purpose.
+   */
+  reasons: Map<string, string>;
+  /**
+   * Entries that could not be read, named one per line. An entry the loader
+   * cannot make sense of is skipped and reported -- never fatal. A baseline
+   * that refuses to load because one line is wrong un-accepts every finding in
+   * it at once, which turns a typo into a red build and a pile of resurfaced
+   * findings nobody triaged today.
+   */
+  diagnostics: string[];
   /** Declared schema version. 1 for the pre-v2 format, and 1 for a bare array. */
   version: number;
   /** True when the file predates the current fingerprint semantics. */
@@ -444,7 +534,13 @@ export interface LoadedBaseline {
 
 export function loadBaseline(file: string): LoadedBaseline {
   if (!existsSync(file)) {
-    return { fingerprints: new Set(), version: BASELINE_VERSION, outdated: false };
+    return {
+      fingerprints: new Set(),
+      reasons: new Map(),
+      diagnostics: [],
+      version: BASELINE_VERSION,
+      outdated: false,
+    };
   }
   // Named like loadConfig's, so a corrupt baseline says which file and why
   // instead of surfacing a bare token error from somewhere in the call stack.
@@ -454,11 +550,12 @@ export function loadBaseline(file: string): LoadedBaseline {
   } catch (err) {
     throw new Error(`Could not parse ${path.basename(file)}: ${(err as Error).message}`);
   }
-  const list: string[] = Array.isArray(parsed) ? parsed : (parsed.fingerprints ?? []);
+  const raw: unknown[] = Array.isArray(parsed) ? parsed : (parsed.fingerprints ?? []);
   const version: number = Array.isArray(parsed) ? 1 : (parsed.version ?? 1);
+  const { fingerprints, reasons, diagnostics } = readBaselineEntries(raw);
 
   if (version >= BASELINE_VERSION) {
-    return { fingerprints: new Set(list), version, outdated: false };
+    return { fingerprints, reasons, diagnostics, version, outdated: false };
   }
 
   // A v1 fingerprint hashed the captured value; a v2 one hashes secret-free
@@ -468,7 +565,9 @@ export function loadBaseline(file: string): LoadedBaseline {
   // caller is told plainly. Loudly, but not fatally: refusing to scan would
   // block CI on a format migration, which is worse than a noisy run.
   return {
-    fingerprints: new Set(list),
+    fingerprints,
+    reasons,
+    diagnostics,
     version,
     outdated: true,
     notice:
@@ -477,4 +576,87 @@ export function loadBaseline(file: string): LoadedBaseline {
       `entries cannot match and every finding will be reported again. Regenerate it with ` +
       `--write-baseline once you have reviewed them.`,
   };
+}
+
+
+/**
+ * Read baseline entries in either shape.
+ *
+ * A bare string is every released baseline and stays exactly what it was. An
+ * object entry is the same fingerprint with a reason beside it, which is the
+ * only way a baseline can say *why* a finding was accepted rather than just
+ * that it was.
+ *
+ * Reading both costs nothing and requires no migration: this loader never
+ * rewrites a file, and `--write-baseline` still writes strings, so a v2
+ * baseline stays a v2 baseline until someone deliberately changes it.
+ */
+function readBaselineEntries(raw: unknown[]): {
+  fingerprints: Set<string>;
+  reasons: Map<string, string>;
+  diagnostics: string[];
+} {
+  const fingerprints = new Set<string>();
+  const reasons = new Map<string, string>();
+  const diagnostics: string[] = [];
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      fingerprints.add(entry);
+      continue;
+    }
+    const fp = (entry as { fingerprint?: unknown } | null)?.fingerprint;
+    if (entry !== null && typeof entry === "object" && typeof fp === "string") {
+      fingerprints.add(fp);
+      const { reason, diagnostic } = sanitizeReason((entry as { reason?: unknown }).reason);
+      if (reason !== undefined) reasons.set(fp, reason);
+      if (diagnostic !== undefined) diagnostics.push(`${fp}: ${diagnostic}`);
+      continue;
+    }
+    // Named, but never echoed: a malformed entry is attacker-influenceable
+    // text like any other file content, and its *shape* is what the reader
+    // needs, not its bytes.
+    diagnostics.push(`ignored a malformed baseline entry (${describeEntry(entry)})`);
+  }
+  return { fingerprints, reasons, diagnostics };
+}
+
+/** The shape of a rejected entry, with none of its content. */
+function describeEntry(entry: unknown): string {
+  if (entry === null) return "null";
+  if (Array.isArray(entry)) return "array";
+  if (typeof entry === "object") return "object without a string fingerprint";
+  return typeof entry;
+}
+
+/**
+ * Read `excludePaths` / `excludeRules` in either shape.
+ *
+ *     "src/vendor/**"                                   today, unchanged
+ *     { "pattern": "src/vendor/**", "reason": "third-party" }
+ *     { "rule": "generic-api-key-assignment", "reason": "false positives in docs" }
+ *
+ * The value is what excludes; the reason is a comment about it. An entry that
+ * is neither is dropped rather than coerced -- `String({})` is "[object
+ * Object]", and a glob by that name silently excludes nothing.
+ */
+function readExclusionEntries(
+  raw: unknown,
+  key: "pattern" | "rule"
+): { values: string[]; reasons: Record<string, string> } {
+  const values: string[] = [];
+  const reasons: Record<string, string> = {};
+  if (!Array.isArray(raw)) return { values, reasons };
+  for (const entry of raw) {
+    if (typeof entry === "string") {
+      values.push(entry);
+      continue;
+    }
+    if (entry === null || typeof entry !== "object") continue;
+    const value = (entry as Record<string, unknown>)[key];
+    if (typeof value !== "string") continue;
+    values.push(value);
+    const { reason } = sanitizeReason((entry as Record<string, unknown>).reason);
+    if (reason !== undefined) reasons[value] = reason;
+  }
+  return { values, reasons };
 }

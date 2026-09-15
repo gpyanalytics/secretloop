@@ -179,7 +179,13 @@ function canonical(value: unknown): string {
  * all while any allowValues entry is in play.
  */
 export function configDigest(config: SecretLoopConfig): string {
-  const { allowValues, ...rest } = config;
+  // `excludeReasons` leaves with `allowValues`, and for a stricter reason than
+  // privacy: a reason is a comment about an exclusion, not the exclusion. A
+  // digest that moved when somebody documented why a rule is off would report a
+  // configuration change where none happened, and two scans of the identical
+  // configuration would stop comparing equal over an edit to a sentence.
+  const { allowValues, excludeReasons, ...rest } = config;
+  void excludeReasons;
   return digest(canonical({ ...rest, allowValuesCount: allowValues.length }));
 }
 

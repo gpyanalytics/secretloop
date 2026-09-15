@@ -68,6 +68,64 @@ first-class and every suppression is disclosed in the scope sentence.
   findings fail. See the [CLI reference](cli.md#baselines).
 - **Project file.** `allowValues` for a specific published sample,
   `excludeRules` to turn a rule off, `excludePaths` for a directory.
+
+### Recording why
+
+Every mechanism above can say *why*, and none of them has to. An annotation
+written before this existed keeps working unchanged, and a suppression with no
+reason is still a suppression — a required reason would invalidate every
+annotation already in the tree and turn adoption into a migration.
+
+```
+secretloop:allow                                    every rule on the line
+secretloop:allow(aws-access-key)                    only that rule
+secretloop:allow -- vendor sample, rotated 2026-03  the reason, recorded
+secretloop:allow(aws-access-key) -- vendor sample   both
+```
+
+- **Scope narrows, never widens.** Naming rules suppresses only those; a second
+  finding on the same line from a rule you did not name is still reported. A
+  bare directive means every rule, exactly as it always has, and so does
+  `secretloop:allow()` — a typo must not silently un-suppress a finding someone
+  believed was handled.
+- **`gitleaks:allow` takes neither.** It is another tool's directive with
+  another tool's meaning; it keeps suppressing everything on its line, and text
+  written after it produces a diagnostic instead of a reason.
+- **Reasons are capped at 200 characters**, truncated with a diagnostic rather
+  than rejected, with control characters and `<`/`>` replaced by spaces at parse
+  time.
+- **The baseline** accepts `{"fingerprint": "...", "reason": "..."}` beside the
+  plain strings it has always held. Reading both needs no migration and writes
+  nothing back: `--write-baseline` still writes strings. An entry the loader
+  cannot read is skipped and named — never fatal, because a baseline that
+  refuses to load un-accepts every finding in it at once.
+- **The project file** accepts `{"rule": "...", "reason": "..."}` in
+  `excludeRules` and `{"pattern": "...", "reason": "..."}` in `excludePaths`.
+  Before this, an object written there was read as a glob, matched nothing and
+  excluded nothing, silently.
+
+What this is **not**: a reason is user-editable metadata, not an approval.
+Nothing checks it, nothing expires it, and it carries no authority — it is a
+comment, and it stands entirely apart from verification consent, which is a
+durable, human-approved, single-use record for transmitting a credential.
+
+**Disclosure is a count, and only a count.** The scope sentence qualifies the
+number it already printed — *2 finding(s) suppressed by inline directives, 1
+with a recorded reason* — and prints nothing new when no reason was recorded.
+`reportCoverage.suppression` gains a matching `inlineSuppressedWithReason`.
+
+**The reason text itself is never published.** Not in the text report, not in
+JSON, not in SARIF, not over MCP, and not in a log line. A reason describes the
+credential it was written beside — *"old staging key, rotate after the
+migration"* — so printed next to a count of what was hidden it is a lead on a
+secret the scan deliberately withheld. Escaping it does not help: an
+untrusted-content wrapper stops an agent acting on the sentence, and does
+nothing about the sentence describing a secret. The reason stays where its
+author put it, on the line, for the reviewer who reads that line.
+
+Recording why also changes **no identity**: `configDigest` drops
+`excludeReasons` the way it drops `allowValues` content, so documenting an
+exclusion never makes two scans of the same configuration compare unequal.
 - **Fixture paths.** With the entropy tier on, `generic-high-entropy` findings under `test`,
   `tests`, `__test__`, `__tests__`, `__mocks__`, `__snapshots__`, `__fixtures__`,
   `fixtures`, `snapshots` and `examples` segments are held back and counted unless

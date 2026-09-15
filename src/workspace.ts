@@ -47,6 +47,13 @@ export interface ScannedFile {
    * about it; absent means none were counted, not that none occurred.
    */
   suppressed?: number;
+  /**
+   * How many of `suppressed` came from a directive that recorded a reason.
+   * Never greater than `suppressed`; absent means none were counted.
+   */
+  suppressedWithReason?: number;
+  /** What the directive parser had to argue with in this file, if anything. */
+  suppressionDiagnostics?: string[];
   /** Generic findings dropped because this file is test/fixture material. */
   fixtureSuppressed?: number;
   /**
@@ -170,12 +177,22 @@ export function scanFiles(
       text = read.text;
     }
     let suppressed = 0;
+    let suppressedWithReason = 0;
+    const suppressionDiagnostics: string[] = [];
     let fixtureSuppressed = 0;
     let apiDocumentsScoped = 0;
     const findings = scanText(text, {
       config,
       filePath: relPath,
-      onSuppressed: (n) => (suppressed += n),
+      onSuppressed: (n, accounting) => {
+        suppressed += n;
+        suppressedWithReason += accounting?.withReason ?? 0;
+      },
+      onSuppressionDiagnostic: (messages) => {
+        for (const m of messages) {
+          if (!suppressionDiagnostics.includes(m)) suppressionDiagnostics.push(m);
+        }
+      },
       onFixtureSuppressed: (n) => (fixtureSuppressed += n),
       onApiDocumentScoped: () => apiDocumentsScoped++,
     });
@@ -184,6 +201,8 @@ export function scanFiles(
       text,
       findings: binary ? [binary, ...findings] : findings,
       suppressed,
+      suppressedWithReason,
+      suppressionDiagnostics,
       fixtureSuppressed,
       apiDocumentsScoped,
     });
@@ -271,6 +290,8 @@ function scanArchive(
 
   const findings: Finding[] = [];
   let suppressed = 0;
+  let suppressedWithReason = 0;
+  const suppressionDiagnostics: string[] = [];
   let fixtureSuppressed = 0;
   let apiDocumentsScoped = 0;
   for (const entry of listing.members) {
@@ -299,7 +320,15 @@ function scanArchive(
         config,
         filePath,
         source,
-        onSuppressed: (n) => (suppressed += n),
+        onSuppressed: (n, accounting) => {
+          suppressed += n;
+          suppressedWithReason += accounting?.withReason ?? 0;
+        },
+        onSuppressionDiagnostic: (messages) => {
+          for (const m of messages) {
+            if (!suppressionDiagnostics.includes(m)) suppressionDiagnostics.push(m);
+          }
+        },
         onFixtureSuppressed: (n) => (fixtureSuppressed += n),
         // Classified on the member's own path and text (scanText reads
         // `source.member`), never on the container's name.
@@ -307,7 +336,17 @@ function scanArchive(
       })
     );
   }
-  return { path: relPath, text: "", findings, suppressed, fixtureSuppressed, apiDocumentsScoped, archive: account };
+  return {
+    path: relPath,
+    text: "",
+    findings,
+    suppressed,
+    suppressedWithReason,
+    suppressionDiagnostics,
+    fixtureSuppressed,
+    apiDocumentsScoped,
+    archive: account,
+  };
 }
 
 /** Scans everything in scope for the project, per its own configuration. */

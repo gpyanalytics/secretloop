@@ -623,6 +623,10 @@ interface ScannedList {
   findings: Finding[];
   texts: Map<string, string>;
   suppressed: number;
+  /** How many of `suppressed` came from a directive that recorded a reason. */
+  suppressedWithReason: number;
+  /** What the directive parser had to argue with, deduplicated across files. */
+  suppressionDiagnostics: string[];
   fixtureSuppressed: number;
   /** Enumerated but never read: over the size cap, or outside the root. */
   oversized: number;
@@ -687,6 +691,13 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
     findings: scanned.flatMap((s) => s.findings),
     texts: new Map(scanned.map((s) => [s.path, s.text])),
     suppressed: scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0),
+    suppressedWithReason: scanned.reduce((n, s) => n + (s.suppressedWithReason ?? 0), 0),
+    // Deduplicated across files: one mistyped directive repeated in forty files
+    // is one thing to fix, and forty copies of the same line is a wall of text
+    // that gets scrolled past.
+    suppressionDiagnostics: [
+      ...new Set(scanned.flatMap((s) => s.suppressionDiagnostics ?? [])),
+    ],
     fixtureSuppressed: scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0),
     apiDocumentsScoped: scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0),
     archives,
@@ -884,6 +895,13 @@ async function main(): Promise<void> {
   // so its zeroes are true rather than unfilled.
   const coverage: CoverageFacts = {};
   let inlineSuppressed = 0;
+  let inlineSuppressedWithReason = 0;
+  /**
+   * Annotations the directive parser had to argue with. Surfaced as notices on
+   * stderr beside the baseline's, never folded into the report: they are about
+   * how an annotation was WRITTEN, not about what the scan found.
+   */
+  let suppressionDiagnostics: string[] = [];
   // What this scan selected, filled by whichever branch runs. Left undefined if
   // a branch cannot establish it, which omits scopeDigest rather than guessing.
   let selection: ScopeSelection | undefined;
@@ -973,6 +991,7 @@ async function main(): Promise<void> {
     scope = describeScope(result.texts.size, scopeNoun, {
       generatedExcluded: listed.generatedExcluded,
       suppressed: result.suppressed,
+      suppressedWithReason: result.suppressedWithReason,
       // The read enforces containment too, and it can disagree with the walk
       // if a link is retargeted between the two. Added to the walk's count
       // rather than given a clause of its own: it is the same fact, and the
@@ -989,6 +1008,8 @@ async function main(): Promise<void> {
     });
     selection = { mode: args.command === "staged" ? "staged" : "worktree" };
     inlineSuppressed = result.suppressed;
+    inlineSuppressedWithReason = result.suppressedWithReason;
+    suppressionDiagnostics = result.suppressionDiagnostics;
     coverage.oversizedExcluded = result.oversized;
     coverage.binaryExcluded = result.binary;
     // scanFileList visits every enumerated file and reports each skip, so this
@@ -1001,11 +1022,23 @@ async function main(): Promise<void> {
     coverage.archives = archives;
   }
 
+  // An annotation the parser had to argue with, said once per distinct
+  // complaint. On stderr because it is advice about the source, not part of the
+  // report a pipeline reads off stdout.
+  for (const diagnostic of suppressionDiagnostics) {
+    process.stderr.write(`secretloop: ${diagnostic}\n`);
+  }
+
   if (args.baseline) {
     const loaded = loadBaseline(args.baseline);
     // An outdated baseline matches nothing. Saying so is the difference between
     // "the tool broke" and "regenerate this file".
     if (loaded.outdated) process.stderr.write(`secretloop: ${loaded.notice}\n`);
+    // A baseline entry nobody can read is an accepted finding that quietly
+    // stopped being accepted. Named, one per line, and never fatal.
+    for (const diagnostic of loaded.diagnostics) {
+      process.stderr.write(`secretloop: ${args.baseline}: ${diagnostic}\n`);
+    }
   }
 
   const triaged = triageFindings(findings, args);
@@ -1080,6 +1113,7 @@ async function main(): Promise<void> {
         allowValuesCount: config.allowValues.length,
         baselineApplied: Boolean(args.baseline),
         inlineSuppressed,
+        inlineSuppressedWithReason,
         unidentified: suppression.unidentified,
       },
     },

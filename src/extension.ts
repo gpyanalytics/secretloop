@@ -606,6 +606,7 @@ async function scanWorkspace() {
   const archives = hasArchiveActivity(archiveTotals) ? archiveTotals : undefined;
   const apiDocumentsScoped = scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0);
   const suppressed = scanned.reduce((n, s) => n + (s.suppressed ?? 0), 0);
+  const suppressedWithReason = scanned.reduce((n, s) => n + (s.suppressedWithReason ?? 0), 0);
   const fixtureSuppressed = scanned.reduce((n, s) => n + (s.fixtureSuppressed ?? 0), 0);
   log(
     `SecretLoop: workspace scan covered ${scanned.length} file(s) under ${root}` +
@@ -631,7 +632,8 @@ async function scanWorkspace() {
       apiDocumentsScoped,
       archives,
       suppressed,
-      fixtureSuppressed
+      fixtureSuppressed,
+      suppressedWithReason
     )
   );
 }
@@ -663,7 +665,13 @@ export function workspaceScanSummary(
   apiDocumentsScoped = 0,
   archives?: ArchiveAccounting,
   suppressed = 0,
-  fixtureSuppressed = 0
+  fixtureSuppressed = 0,
+  /**
+   * How many of `suppressed` recorded a reason. Last and defaulted, like every
+   * disclosure added to this signature before it, so existing calls are
+   * unchanged and produce the sentence they always produced.
+   */
+  suppressedWithReason = 0
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
   // scan differently — the same reason workspace.ts exists at all. The two
@@ -678,6 +686,7 @@ export function workspaceScanSummary(
     apiDocumentsScoped,
     archives,
     suppressed,
+    suppressedWithReason,
     fixtureSuppressed,
   });
   return findings.length > 0

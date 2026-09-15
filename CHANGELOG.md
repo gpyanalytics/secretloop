@@ -5,6 +5,46 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### Suppression
+
+- **A suppression can now say why, and none of them has to.**
+  `secretloop:allow(rule-id)` scopes a directive to named rules, and
+  `secretloop:allow -- reason` records why. Both parts are optional: a bare
+  directive suppresses every rule on its line exactly as before, so every
+  annotation already written keeps working and no migration exists. Scope
+  narrows and never widens, `secretloop:allow()` is read as the bare form rather
+  than as suppressing nothing, and `gitleaks:allow` takes neither — it is
+  another tool's directive, and text after it produces a diagnostic instead.
+- **Reasons are sanitised once, at parse time**: capped at 200 characters with a
+  diagnostic rather than a rejection, and with control characters and `<`/`>`
+  replaced by spaces, so a caller that reads one out of a baseline or a config
+  file receives text that is already safe to show.
+- **The baseline reads `{"fingerprint", "reason"}` beside plain strings**, and
+  the project file reads `{"rule", "reason"}` / `{"pattern", "reason"}` in
+  `excludeRules` and `excludePaths` — where an object entry previously read as a
+  glob, matched nothing and excluded nothing, silently. No file is rewritten and
+  no version is bumped: `--write-baseline` still writes strings. A baseline
+  entry that cannot be read is skipped and named on stderr rather than failing
+  the load, because a baseline that refuses to load un-accepts every finding in
+  it at once.
+- **Disclosure qualifies the count that was already there** — *N finding(s)
+  suppressed by inline directives, M with a recorded reason* — and says nothing
+  new when no reason was recorded, byte for byte. The CLI, the MCP scope object
+  and the editor summary all print the same sentence, and `reportCoverage` gains
+  an additive `inlineSuppressedWithReason` count.
+- **The reason text is never published** — not in text, JSON or SARIF output,
+  not over MCP, and not in a log line. It describes the credential it was
+  written beside, so beside a count of what was hidden it is a lead on a secret
+  the scan withheld on purpose; an untrusted-content wrapper stops an agent
+  acting on the sentence and does nothing about the sentence describing a
+  secret. No `suppressionReason` field is emitted on any result, and no
+  suppressed finding becomes one. The inline reason never leaves the parser:
+  `onSuppressed` receives a count of explained suppressions and no text.
+- **Recording why changes no identity.** `configDigest` drops `excludeReasons`
+  the way it drops `allowValues` content: documenting an exclusion is a comment
+  about it, not a change to what was scanned, and two scans of the same
+  configuration still compare equal after someone writes down the reason.
+
 ### Comparison
 
 - **A shared displayed reference is now explained.** Several *distinct* findings
