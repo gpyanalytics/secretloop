@@ -325,7 +325,12 @@ COMPARE
   NOT printed: a path is arbitrary text and no format check can prove it holds
   no secret. Look the digest up in either report to find the file -- the digest
   covers the value, not the path, so one credential in several files shares a
-  digest and the lookup may return more than one row.
+  digest and the lookup may return more than one row. When that happens the
+  output says so under SHARED DISPLAY REFERENCE, separately from the repeated
+  occurrences of one identity reported under AMBIGUOUS IDENTITY.
+
+  A refused comparison lists invalid findings from BOTH reports by side and
+  array index, within a per-report limit, and says how many were not listed.
 
   Both reports must be working-tree scans carrying all nine schema-4 comparison
   fields, with matching tool, repository, configuration, rule set, suppression,

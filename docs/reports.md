@@ -527,6 +527,62 @@ comparison, which is reported as `malformed-finding-identity`.
 
 Validation errors name the field at fault and never quote its value.
 
+**Two different kinds of ambiguity, reported separately.**
+
+- **A shared displayed reference** is several *distinct* findings that print the
+  same `ruleId` and `digest`. They were told apart correctly and counted
+  separately; only the printed pair collides. The output says so explicitly —
+  that more than one distinct finding is shown under that reference, that
+  scanned paths are omitted on purpose, and that looking the pair up in the
+  original report may return more than one match. In JSON this is the additive
+  `sharedDisplayReferences` array, each entry carrying `ruleId`, `digest` and
+  `distinctIdentities` — a count, never an identifier, with no path, no
+  fingerprint and nothing newly hashed.
+- **An ambiguous identity** is *one* finding seen several times, reported in
+  `ambiguousIdentity` with its before and after counts.
+
+They are never merged: the first is a display collision over findings the
+comparator has already distinguished, the second a count it refuses to
+interpret.
+
+`sharedDisplayReferences` is **additive**. No existing field changed meaning,
+and it is unrelated to `schemaVersion`, which versions the input scan reports
+rather than this tool's own output.
+
+**Invalid findings are collected from both reports, within a bound.** A refusal
+lists every invalid finding it can, from **both** sides, identified by side and
+array index with a stable reason code and a cause — "has no usable fingerprint"
+or "names a rule this build does not support". The rejected value, path,
+fingerprint and rule id are never quoted.
+
+Each side has its **own** diagnostic budget, so a report full of errors cannot
+fill the allowance and hide every error in the other. Every finding is still
+inspected, so a stated total is exact; when more errors exist than are listed, a
+`diagnostics-truncated` reason says how many in total and how many were omitted.
+The comparison is still refused as a whole, with **no partial differences**,
+exit 3, and the same top-level keys `tool`, `comparable` and `reasons`.
+
+The budget is **10 detailed diagnostics per report**, and **each** side that
+exceeds it gets its own `diagnostics-truncated` note. The cap bounds how much
+detail is *printed*, not how much is *examined*: every finding within the
+existing input limits — the report byte cap and the findings-array cap — is
+inspected, which is why a stated total is exact rather than a lower bound.
+
+The trade-off is deliberate rather than measured: a larger number would describe
+more errors per run, a smaller one would keep refusals terser, and 10 is a
+judgement about what stays readable while still showing a useful batch. Nothing
+here claims it is an optimal value.
+
+**A diagnostic's array index is a position, not an identity.** `findings[3]`
+means the fourth element of *that* input array, zero-based. It is not a stable
+identifier: the same index in the other report, or in the same report after an
+edit, is a different finding.
+
+**Metadata rejection can stop inspection before any finding is read.**
+Eligibility is decided first, so a pair refused on its metadata carries no
+finding diagnostics at all — not because its findings are valid, but because
+they were never examined.
+
 **Duplicate identities are reported, not resolved.** A fingerprint covers
 (path, rule, value) and deliberately not the line, so one credential repeated in
 a file is several findings under one identity. The comparator counts occurrences

@@ -7,6 +7,27 @@ heading below.
 
 ### Comparison
 
+- **A shared displayed reference is now explained.** Several *distinct* findings
+  can print the same `ruleId` and `digest`, because the digest covers the
+  matched value and not the path. They were always counted separately; now the
+  output says why they look alike — that more than one distinct finding is shown
+  under that reference, that paths are omitted on purpose, and that looking the
+  pair up in the original report may return more than one match. JSON gains an
+  **additive** `sharedDisplayReferences` array (`ruleId`, `digest`,
+  `distinctIdentities`); no existing field changed meaning, nothing new is
+  hashed, and no path, fingerprint or positional identifier is published. It is
+  kept separate from `ambiguousIdentity`, which is one identity seen several
+  times.
+- **Invalid findings are collected from both reports instead of only the
+  first.** A refusal now lists every invalid finding it can from **both** sides,
+  identified by side and array index with a stable reason code and its cause,
+  never quoting the rejected value, path, fingerprint or rule id. Each side has
+  its own diagnostic budget, so one flooded report cannot hide the other's
+  errors; every finding is still inspected, so stated totals are exact, and a
+  `diagnostics-truncated` reason says how many were omitted. Whole-comparison
+  refusal, the absence of partial differences, exit 3 and the top-level
+  `tool`/`comparable`/`reasons` keys are unchanged.
+
 - **`secretloop compare <before.json> <after.json>` compares two saved reports.**
   The comparison metadata has existed since schema 2 so a later tool could decide
   whether two reports may be compared at all; until now nothing enforced those
