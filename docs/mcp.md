@@ -53,6 +53,22 @@ has no input of its own for the tier. The current count is in
   with every known secret masked, and any attempt to close the block from
   inside neutralised. Error messages quote caller-supplied and repository-chosen
   fragments — paths, fingerprints, revision ranges — inside the same wrapper.
+- **A history scan discloses what it suppressed, as a count.** The scope
+  sentence `secretloop_history_scan` returns now carries the inline-suppression
+  counts the CLI's has always carried — *N finding(s) suppressed by inline
+  directives, M with a recorded reason* — so a scan that dropped findings to a
+  `secretloop:allow` no longer reads like one that had nothing to drop. It is
+  **aggregate only**: no reason text, no suppressed value, no fingerprint, no
+  path, no source line, and no suppressed finding as a result row. Nothing new
+  is hashed and no suppression identity is created.
+  The reason clause appears only when a reason was actually recorded. It is
+  absent both when a scan recorded none and when the producer could not
+  establish the count at all — the sentence cannot distinguish those two, and
+  the CLI's sentence never could either; the CLI's JSON report is where the
+  difference is visible, as an omitted field rather than a zero.
+  A scan that stopped early keeps its existing partial sentence, which makes no
+  coverage claim at all: counts describe only what was inspected, and
+  incompleteness stays disclosed through `complete` and `stopReason`.
 - **The scanner's verdicts are authoritative.** Every payload says so. The
   assistant may group, sort and explain findings; it may not reclassify or
   suppress one, and `unverified` means *no liveness check ran*, never clean. A

@@ -120,6 +120,12 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   CLI and MCP both report; it now
   totals them from the same per-file counters and passes them to the shared
   formatter.
+- **MCP history suppression disclosure** — implemented on a branch, not merged
+  and not published. `secretloop_history_scan` omitted the inline-suppression
+  counts its scope sentence exists to carry, while the CLI reported them for the
+  same selection; the tool now asks `scanHistory` for the accounting it already
+  produces and passes it to the shared formatter. Aggregate only: counts, never
+  reason text or a suppressed finding. The gap predated the suppression work.
 - **VS Code `excludePaths`** — **shipped in 0.5.1** (PR #55). The setting was
   declared and never read; the editor configuration builder now resolves it and
   adds it to the exclusions already in force.

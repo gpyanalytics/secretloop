@@ -5,6 +5,23 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### MCP
+
+- **A history scan over MCP now says what it suppressed.**
+  `secretloop_history_scan` asked the scanner for neither the inline-suppression
+  count nor the reasoned count, so its scope sentence read exactly like a scan
+  with nothing to suppress — the one thing that sentence exists to prevent, and
+  a gap that predates the suppression work rather than coming from it. It now
+  passes the same accounting the CLI consumes into the same shared formatter,
+  producing the same sentence for the same selection.
+- **Aggregate only, and unknown is not zero.** Counts and nothing else: no
+  reason text, suppressed value, fingerprint, path or source line, no suppressed
+  finding as a result row, no new hash and no suppression identity. The reason
+  clause is omitted when the producer could not establish the count, exactly as
+  it is when the count is a measured zero — the sentence cannot distinguish
+  them, and the CLI's JSON report is where that difference shows. A stopped scan
+  keeps its existing partial sentence and claims no counts.
+
 ### Remediation
 
 - **A redaction now checks whether the value it removed is still there.** Both
