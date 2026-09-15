@@ -216,8 +216,12 @@ export function loadConfigWithSource(repoRoot: string): LoadedConfig {
   let raw: Partial<SecretLoopConfig>;
   try {
     raw = JSON.parse(readFileSync(found.path, "utf8")) as Partial<SecretLoopConfig>;
-  } catch (err) {
-    throw new Error(`Could not parse ${name}: ${(err as Error).message}`);
+  } catch {
+    // The parser's own message quotes the bytes around the error, and this file
+    // can now carry suppression reasons. A message that says where the file is
+    // and what is wrong with it does the reader's job without reprinting their
+    // content into a terminal or a CI log.
+    throw new Error(`Could not parse ${name}: it is not valid JSON.`);
   }
 
   // Separated from the parse above so the message fits the fault. A file that
@@ -407,17 +411,18 @@ export const MAX_REASON_LENGTH = 200;
 /**
  * Validate and neutralise a suppression reason, once, at parse time.
  *
- * Every surface that shows a reason -- the CLI, the MCP wrapper, SARIF, the
- * editor hover -- receives text that has already been through here, so none of
- * them has to remember to escape it. Sanitising at each surface instead is how
- * one of them ends up forgetting.
+ * This bounds FORMAT, and nothing else. It caps the length, drops control
+ * characters a terminal would act on, and drops `<` and `>` so the text cannot
+ * be mistaken for markup by something that later renders it. It is **not**
+ * evidence that a reason contains no credential: nobody validates what a person
+ * types after `--`, and no amount of escaping could establish that. That is why
+ * no surface publishes a reason -- see SuppressionAccounting in scanner.ts.
  *
- * `<` and `>` go because the MCP surface wraps untrusted content in a tag pair
- * a reason must not be able to close. Control characters go because a terminal
- * reads them as instructions rather than text. Oversize is TRUNCATED with a
- * diagnostic rather than rejected: dropping the reason entirely would leave the
- * suppression looking unexplained, which is the one outcome this whole feature
- * exists to prevent.
+ * Applied once, here, so a caller that chooses to read a reason out of its own
+ * baseline or project file gets predictable text rather than raw bytes. Oversize
+ * is TRUNCATED with a diagnostic rather than rejected: dropping the reason
+ * entirely would leave the suppression looking unexplained, which is the one
+ * outcome this whole feature exists to prevent.
  */
 export function sanitizeReason(raw: unknown): { reason?: string; diagnostic?: string } {
   if (typeof raw !== "string") return {};
@@ -436,7 +441,10 @@ export function sanitizeReason(raw: unknown): { reason?: string; diagnostic?: st
   return {
     reason: cleaned,
     ...(oversized
-      ? { diagnostic: `reason truncated to ${MAX_REASON_LENGTH} characters` }
+      ? {
+          diagnostic:
+            `reason truncated to ${MAX_REASON_LENGTH} characters [reason-truncated]`,
+        }
       : {}),
   };
 }
@@ -547,8 +555,10 @@ export function loadBaseline(file: string): LoadedBaseline {
   let parsed: any;
   try {
     parsed = JSON.parse(readFileSync(file, "utf8"));
-  } catch (err) {
-    throw new Error(`Could not parse ${path.basename(file)}: ${(err as Error).message}`);
+  } catch {
+    // Same reason as loadConfigWithSource: a baseline entry can carry a reason,
+    // and V8's parse errors quote the surrounding bytes.
+    throw new Error(`Could not parse ${path.basename(file)}: it is not valid JSON.`);
   }
   const raw: unknown[] = Array.isArray(parsed) ? parsed : (parsed.fingerprints ?? []);
   const version: number = Array.isArray(parsed) ? 1 : (parsed.version ?? 1);
@@ -599,7 +609,7 @@ function readBaselineEntries(raw: unknown[]): {
   const fingerprints = new Set<string>();
   const reasons = new Map<string, string>();
   const diagnostics: string[] = [];
-  for (const entry of raw) {
+  for (const [index, entry] of raw.entries()) {
     if (typeof entry === "string") {
       fingerprints.add(entry);
       continue;
@@ -609,23 +619,31 @@ function readBaselineEntries(raw: unknown[]): {
       fingerprints.add(fp);
       const { reason, diagnostic } = sanitizeReason((entry as { reason?: unknown }).reason);
       if (reason !== undefined) reasons.set(fp, reason);
-      if (diagnostic !== undefined) diagnostics.push(`${fp}: ${diagnostic}`);
+      if (diagnostic !== undefined) diagnostics.push(entryDiagnostic(index, diagnostic));
       continue;
     }
-    // Named, but never echoed: a malformed entry is attacker-influenceable
-    // text like any other file content, and its *shape* is what the reader
-    // needs, not its bytes.
-    diagnostics.push(`ignored a malformed baseline entry (${describeEntry(entry)})`);
+    diagnostics.push(
+      entryDiagnostic(index, "could not be read and was ignored [baseline-entry-malformed]")
+    );
   }
   return { fingerprints, reasons, diagnostics };
 }
 
-/** The shape of a rejected entry, with none of its content. */
-function describeEntry(entry: unknown): string {
-  if (entry === null) return "null";
-  if (Array.isArray(entry)) return "array";
-  if (typeof entry === "object") return "object without a string fingerprint";
-  return typeof entry;
+/**
+ * Name the entry by POSITION, and say nothing else about it.
+ *
+ * The first cut prefixed these with the entry's fingerprint, and the CLI prints
+ * them to stderr -- into CI logs, terminal scrollback and anything that captures
+ * them. A fingerprint carries the finding's path, which is content out of
+ * somebody's repository and is exactly the sort of thing this whole feature
+ * declines to publish elsewhere. The same goes for the reason, the rejected
+ * value and the shape of the object that was rejected: the reader needs to know
+ * WHICH line of their own file to look at, and they have the file.
+ *
+ * Zero-based, and it says so, because the array it indexes is.
+ */
+function entryDiagnostic(index: number, detail: string): string {
+  return `baseline entry ${index} (zero-based): ${detail}`;
 }
 
 /**

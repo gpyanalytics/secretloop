@@ -2,7 +2,13 @@ import { mkdtempSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
-import { scanText, parseInlineDirective, SuppressionAccounting } from "../src/scanner";
+import {
+  scanText,
+  parseInlineDirective,
+  SuppressionAccounting,
+  ENTROPY_RULE_ID,
+} from "../src/scanner";
+import { rules } from "../src/rules";
 import { loadBaseline, mergeConfig, sanitizeReason, MAX_REASON_LENGTH } from "../src/config";
 import { describeScope } from "../src/report";
 import {
@@ -35,6 +41,15 @@ const bothOnOneLine = (annotation: string) =>
  * every scan of this repository -- noise from a test describing the noise.
  */
 const GITLEAKS = "gitleaks" + ":allow";
+
+/**
+ * The directive token, assembled, for the fixtures that are meant to be
+ * refused. Written whole they would be live annotations in this file, and the
+ * repository's own scan would raise their diagnostics on every run — noise from
+ * a test describing the noise. The valid fixtures below stay readable: they
+ * raise nothing and suppress only on their own line.
+ */
+const SL = "secretloop" + ":allow";
 
 /** Scan and hand back what the directives accounted for, not just the findings. */
 function scan(text: string): {
@@ -96,9 +111,83 @@ test("a scope naming several rules suppresses each of them", () => {
   assert.strictEqual(r.suppressed, 2);
 });
 
-test("an empty scope is read as the bare form, never as suppressing nothing", () => {
-  // A typo must not silently un-suppress a finding someone believed handled.
-  assert.deepStrictEqual(scan(bothOnOneLine("secretloop:allow()")).ruleIds, []);
+// --- an attempted scope that does not parse fails closed ---------------------
+//
+// Every case here suppressed EVERYTHING on the line before the correction: the
+// scope group was optional, so a scope that did not match left the bare prefix
+// matching, and a typo in new syntax widened suppression to every rule.
+
+const SCOPE_REFUSALS: [string, string, string][] = [
+  ["empty scope", `${SL}()`, "directive-scope-empty"],
+  ["whitespace-only scope", `${SL}(   )`, "directive-scope-empty"],
+  ["missing closing bracket", `${SL}(aws-access-key`, "directive-scope-malformed"],
+  ["illegal scope character", `${SL}(aws-access-key!)`, "directive-scope-malformed"],
+  ["empty item in the list", `${SL}(aws-access-key,)`, "directive-scope-malformed"],
+  ["unknown rule id", `${SL}(not-a-rule)`, "directive-scope-unsupported-rule"],
+  [
+    "one known and one unknown id",
+    `${SL}(aws-access-key,not-a-rule)`,
+    "directive-scope-unsupported-rule",
+  ],
+];
+
+for (const [name, annotation, code] of SCOPE_REFUSALS) {
+  test(`${name}: refused whole, suppresses nothing`, () => {
+    const r = scan(bothOnOneLine(annotation));
+    assert.deepStrictEqual(
+      r.ruleIds,
+      ["aws-access-key", "github-token"],
+      "both findings must be reported: a malformed scope may not widen suppression"
+    );
+    assert.strictEqual(r.suppressed, 0);
+    assert.strictEqual(r.diagnostics.length, 1);
+    assert.ok(r.diagnostics[0].includes(`[${code}]`), r.diagnostics[0]);
+  });
+}
+
+test("a refused directive on the line above hides nothing either", () => {
+  const text = [`// ${SL}(aws-access-key!)`, bothOnOneLine("")].join("\n");
+  const r = scan(text);
+  assert.deepStrictEqual(r.ruleIds, ["aws-access-key", "github-token"]);
+  assert.strictEqual(r.suppressed, 0);
+});
+
+test("a refused directive does not disable a valid one covering the same line", () => {
+  // Combination semantics are unchanged: the directives that apply are the ones
+  // that parse, and a refusal simply is not one of them.
+  const text = [`// ${SL}(bad!`, bothOnOneLine("secretloop:allow")].join("\n");
+  const r = scan(text);
+  assert.deepStrictEqual(r.ruleIds, [], "the bare directive on the line still applies");
+  assert.strictEqual(r.suppressed, 2);
+});
+
+test("a refusal diagnostic quotes nothing from the line that caused it", () => {
+  const marker = `zzscope${Date.now().toString(36)}zz`;
+  const r = scan(bothOnOneLine(`${SL}(${marker}!)`));
+  assert.strictEqual(r.suppressed, 0);
+  assert.ok(!r.diagnostics[0].includes(marker), r.diagnostics[0]);
+});
+
+test("the bracket must be attached: prose after a bare directive still suppresses", () => {
+  // `// secretloop:allow (see TICKET-12)` predates the scope syntax.
+  const r = scan(bothOnOneLine("secretloop:allow (see TICKET-12)"));
+  assert.deepStrictEqual(r.ruleIds, [], "a detached bracket is prose, not an attempted scope");
+  assert.strictEqual(r.suppressed, 2);
+});
+
+test("a well-formed scope followed by junk stays scoped and never widens", () => {
+  const r = scan(bothOnOneLine("secretloop:allow(aws-access-key))"));
+  assert.deepStrictEqual(r.ruleIds, ["github-token"]);
+});
+
+test("scope membership comes from the producers, not a copied list", () => {
+  // Every shipped rule id, plus the entropy pass's synthesised one, is accepted;
+  // a plausible-looking id that no rule defines is not.
+  for (const id of [...rules.map((r) => r.id), ENTROPY_RULE_ID]) {
+    const parsed = parseInlineDirective(`x // ${SL}(${id})`);
+    assert.deepStrictEqual(parsed, { rules: [id] }, id);
+  }
+  assert.strictEqual(parseInlineDirective(`x // ${SL}(github-tokens)`)?.refused, true);
 });
 
 test("multiplicity is preserved across lines", () => {
@@ -115,7 +204,9 @@ test("multiplicity is preserved across lines", () => {
 
 test("a 500-character reason is truncated to 200 with a diagnostic", () => {
   const r = scan(bothOnOneLine(`secretloop:allow -- ${"A".repeat(500)}`));
-  assert.deepStrictEqual(r.diagnostics, [`reason truncated to ${MAX_REASON_LENGTH} characters`]);
+  assert.deepStrictEqual(r.diagnostics, [
+    `reason truncated to ${MAX_REASON_LENGTH} characters [reason-truncated]`,
+  ]);
   assert.strictEqual(
     r.suppressed,
     2,
@@ -174,11 +265,15 @@ test("a diagnostic is reported for an annotation that suppressed nothing", () =>
 });
 
 test("parseInlineDirective reads both optional parts independently", () => {
+  // A real rule id, because a scope is now checked against the rules this build
+  // ships: the placeholder this test used to pass is refused, which is the point.
   assert.deepStrictEqual(parseInlineDirective("x // secretloop:allow"), {});
-  assert.deepStrictEqual(parseInlineDirective("x // secretloop:allow(r1)"), { rules: ["r1"] });
+  assert.deepStrictEqual(parseInlineDirective("x // secretloop:allow(github-token)"), {
+    rules: ["github-token"],
+  });
   assert.deepStrictEqual(parseInlineDirective("x // secretloop:allow -- why"), { reason: "why" });
-  assert.deepStrictEqual(parseInlineDirective("x // secretloop:allow(r1) -- why"), {
-    rules: ["r1"],
+  assert.deepStrictEqual(parseInlineDirective("x // secretloop:allow(github-token) -- why"), {
+    rules: ["github-token"],
     reason: "why",
   });
   assert.strictEqual(parseInlineDirective("x // nothing here"), undefined);
@@ -228,6 +323,52 @@ test("an object entry carries a reason beside the fingerprint", () => {
   assert.strictEqual(loaded.reasons.has("a.py:rule:abc"), false, "absent, not null");
 });
 
+test("diagnostics name the entry by position and carry nothing out of the file", () => {
+  // Before the correction the diagnostic was prefixed with the raw fingerprint,
+  // and the CLI prints these to stderr — so a path out of somebody's repository
+  // went into their CI log.
+  const marker = `zzfp${Date.now().toString(36)}zz`;
+  const reasonMarker = `zzreason${Date.now().toString(36)}zz`;
+  const loaded = loadBaseline(
+    baselineFile({
+      version: 2,
+      fingerprints: [
+        "keep.ts:github-token:aaaabbbbccccdddd",
+        { fingerprint: `src/${marker}/c.ts:github-token:0123456789abcdef`, reason: reasonMarker + "A".repeat(400) },
+        { nope: true, reason: reasonMarker },
+      ],
+    })
+  );
+  const joined = loaded.diagnostics.join("\n");
+  assert.ok(!joined.includes(marker), joined);
+  assert.ok(!joined.includes(reasonMarker), joined);
+  assert.ok(!joined.includes("github-token"), "no rule id, no fingerprint, no path");
+  assert.deepStrictEqual(loaded.diagnostics, [
+    "baseline entry 1 (zero-based): reason truncated to 200 characters [reason-truncated]",
+    "baseline entry 2 (zero-based): could not be read and was ignored [baseline-entry-malformed]",
+  ]);
+  // and the valid entries are still accepted, identities intact
+  assert.strictEqual(loaded.fingerprints.size, 2);
+  assert.ok(loaded.fingerprints.has("keep.ts:github-token:aaaabbbbccccdddd"));
+});
+
+test("a file that is not valid JSON is refused without echoing its bytes", () => {
+  // V8's parse errors quote the text around the failure, and this file can now
+  // carry reasons.
+  const marker = `zzjson${Date.now().toString(36)}zz`;
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-baseline-bad-"));
+  const file = path.join(dir, "baseline.json");
+  writeFileSync(file, `{"version":2,"fingerprints":[{"reason":"${marker}"},]}`, "utf8");
+  try {
+    loadBaseline(file);
+    assert.fail("expected a refusal");
+  } catch (err) {
+    const message = (err as Error).message;
+    assert.strictEqual(message, "Could not parse baseline.json: it is not valid JSON.");
+    assert.ok(!message.includes(marker.slice(2)), message);
+  }
+});
+
 test("a malformed entry is diagnosed and the rest of the file still loads", () => {
   const loaded = loadBaseline(
     baselineFile({
@@ -237,15 +378,21 @@ test("a malformed entry is diagnosed and the rest of the file still loads", () =
   );
   assert.deepStrictEqual([...loaded.fingerprints].sort(), ["b:r:2", "ok:r:1"]);
   assert.strictEqual(loaded.diagnostics.length, 1, "one entry rejected, two kept");
-  assert.match(loaded.diagnostics[0], /malformed baseline entry/);
+  assert.match(loaded.diagnostics[0], /^baseline entry 2 \(zero-based\): /);
+  assert.match(loaded.diagnostics[0], /\[baseline-entry-malformed\]$/);
 });
 
-test("a rejected entry is described by shape and never echoed", () => {
+test("a rejected entry is named by position and never echoed", () => {
+  const marker = `zzentry${Date.now().toString(36)}zz`;
   const loaded = loadBaseline(
-    baselineFile({ version: 2, fingerprints: [{ fingerprint: 1, note: "ghp_notprinted" }] })
+    baselineFile({ version: 2, fingerprints: [{ fingerprint: 1, note: marker }] })
   );
   assert.strictEqual(loaded.fingerprints.size, 0);
-  assert.ok(!loaded.diagnostics[0].includes("ghp_notprinted"), loaded.diagnostics[0]);
+  assert.ok(!loaded.diagnostics[0].includes(marker), loaded.diagnostics[0]);
+  assert.strictEqual(
+    loaded.diagnostics[0],
+    "baseline entry 0 (zero-based): could not be read and was ignored [baseline-entry-malformed]"
+  );
 });
 
 test("an oversized baseline reason is truncated and named", () => {
@@ -257,7 +404,10 @@ test("an oversized baseline reason is truncated and named", () => {
   );
   assert.strictEqual(loaded.reasons.get("a:r:1")?.length, MAX_REASON_LENGTH);
   assert.strictEqual(loaded.diagnostics.length, 1);
-  assert.match(loaded.diagnostics[0], /^a:r:1: reason truncated/);
+  assert.strictEqual(
+    loaded.diagnostics[0],
+    "baseline entry 0 (zero-based): reason truncated to 200 characters [reason-truncated]"
+  );
 });
 
 suite("\nsuppression accountability — configuration entries");
@@ -339,6 +489,22 @@ test("the fixture clause is untouched", () => {
       "4 generic finding(s) suppressed in test/fixture paths (--include-fixtures to report them)"
     )
   );
+});
+
+test("the reasoned count never exceeds the suppression count", () => {
+  for (const annotation of [
+    "secretloop:allow",
+    "secretloop:allow -- why",
+    "secretloop:allow(aws-access-key)",
+    "secretloop:allow(aws-access-key,github-token) -- why",
+    `${SL}()`,
+    GITLEAKS,
+  ]) {
+    const r = scan(bothOnOneLine(annotation));
+    const withReason = r.accounting?.withReason ?? 0;
+    assert.ok(withReason <= r.suppressed, `${annotation}: ${withReason} > ${r.suppressed}`);
+    assert.ok(withReason >= 0 && r.suppressed + r.ruleIds.length === 2, annotation);
+  }
 });
 
 test("the CLI and MCP sentences stay word for word identical", () => {

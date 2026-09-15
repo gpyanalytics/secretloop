@@ -12,13 +12,23 @@ heading below.
   `secretloop:allow -- reason` records why. Both parts are optional: a bare
   directive suppresses every rule on its line exactly as before, so every
   annotation already written keeps working and no migration exists. Scope
-  narrows and never widens, `secretloop:allow()` is read as the bare form rather
-  than as suppressing nothing, and `gitleaks:allow` takes neither — it is
-  another tool's directive, and text after it produces a diagnostic instead.
+  narrows and never widens, and `gitleaks:allow` takes neither — it is another
+  tool's directive, and text after it produces a diagnostic instead.
+- **An attempted scope that does not parse is refused whole and suppresses
+  nothing**, with a stable diagnostic code on stderr: an empty `allow()`, a
+  missing closing bracket, an illegal character, or any rule id this build does
+  not ship. A scope is all-or-nothing — `allow(aws-access-key,not-a-rule)`
+  suppresses neither — and ids are checked against the rule table and the
+  entropy pass rather than a copied list. Only a *genuinely* bare directive,
+  with no bracket attached, keeps the legacy suppress-everything behaviour;
+  `secretloop:allow (see TICKET-12)` is still prose after a bare directive.
+  **Correction to this unreleased candidate**: an earlier draft of this entry
+  read an empty or malformed scope as the bare form, so a typo in the new syntax
+  silently widened suppression to every rule on the line. It now fails closed.
 - **Reasons are sanitised once, at parse time**: capped at 200 characters with a
   diagnostic rather than a rejection, and with control characters and `<`/`>`
-  replaced by spaces, so a caller that reads one out of a baseline or a config
-  file receives text that is already safe to show.
+  replaced by spaces. That bounds the *format* only — it is not evidence that a
+  reason contains no credential, which is why no surface publishes one.
 - **The baseline reads `{"fingerprint", "reason"}` beside plain strings**, and
   the project file reads `{"rule", "reason"}` / `{"pattern", "reason"}` in
   `excludeRules` and `excludePaths` — where an object entry previously read as a
@@ -27,6 +37,14 @@ heading below.
   entry that cannot be read is skipped and named on stderr rather than failing
   the load, because a baseline that refuses to load un-accepts every finding in
   it at once.
+- **Baseline diagnostics name the entry by position and nothing else.** They
+  carry a zero-based index and a stable code (`[baseline-entry-malformed]`,
+  `[reason-truncated]`), and never the fingerprint, the path inside it, the
+  reason or the rejected value. **Correction to this unreleased candidate**: an
+  earlier draft prefixed them with the raw fingerprint, which the CLI prints to
+  stderr and therefore into CI logs. A baseline or project file that is not
+  valid JSON is now reported as such without the parser's own message, which
+  quotes the bytes around the error and could echo a reason.
 - **Disclosure qualifies the count that was already there** — *N finding(s)
   suppressed by inline directives, M with a recorded reason* — and says nothing
   new when no reason was recorded, byte for byte. The CLI, the MCP scope object
@@ -34,12 +52,13 @@ heading below.
   an additive `inlineSuppressedWithReason` count.
 - **The reason text is never published** — not in text, JSON or SARIF output,
   not over MCP, and not in a log line. It describes the credential it was
-  written beside, so beside a count of what was hidden it is a lead on a secret
-  the scan withheld on purpose; an untrusted-content wrapper stops an agent
-  acting on the sentence and does nothing about the sentence describing a
-  secret. No `suppressionReason` field is emitted on any result, and no
-  suppressed finding becomes one. The inline reason never leaves the parser:
-  `onSuppressed` receives a count of explained suppressions and no text.
+  written beside, and may contain one, so beside a count of what was hidden it
+  is a lead on a secret the scan withheld on purpose. An untrusted-content
+  wrapper marks provenance; it is not an authorization boundary and does not
+  prevent disclosure, so it is not treated as one here. No `suppressionReason`
+  field is emitted on any result, and no suppressed finding becomes one. The
+  inline reason never leaves the parser: `onSuppressed` receives a count of
+  explained suppressions and no text.
 - **Recording why changes no identity.** `configDigest` drops `excludeReasons`
   the way it drops `allowValues` content: documenting an exclusion is a comment
   about it, not a change to what was scanned, and two scans of the same

@@ -1035,9 +1035,13 @@ async function main(): Promise<void> {
     // "the tool broke" and "regenerate this file".
     if (loaded.outdated) process.stderr.write(`secretloop: ${loaded.notice}\n`);
     // A baseline entry nobody can read is an accepted finding that quietly
-    // stopped being accepted. Named, one per line, and never fatal.
+    // stopped being accepted. Named by position, one per line, never fatal, and
+    // carrying nothing out of the file: the diagnostic says which entry, and the
+    // reader has the file open in front of them. The path the caller typed is
+    // dropped for the same reason -- it is the one line of this that a CI log
+    // does not need.
     for (const diagnostic of loaded.diagnostics) {
-      process.stderr.write(`secretloop: ${args.baseline}: ${diagnostic}\n`);
+      process.stderr.write(`secretloop: ${diagnostic}\n`);
     }
   }
 

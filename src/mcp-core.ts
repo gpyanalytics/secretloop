@@ -812,9 +812,11 @@ export function toolScan(input: ScanInput): ToolResult {
           generatedExcluded,
           suppressed: scanned.reduce((n, f) => n + (f.suppressed ?? 0), 0),
           // The count of explained suppressions, and only the count. The
-          // reasons themselves are not sent: wrapping them would stop an agent
-          // reading them as instructions, and would do nothing about a
-          // sentence that describes the credential it was written beside.
+          // reasons themselves are not sent. The untrusted-content wrapper this
+          // file puts around repository text marks where text came from; it is
+          // not an authorization boundary and does not make disclosing a reason
+          // safe, and a reason may describe -- or contain -- the credential it
+          // was written beside.
           suppressedWithReason: scanned.reduce((n, f) => n + (f.suppressedWithReason ?? 0), 0),
           // The read enforces containment too, and can disagree with the walk
           // if a link is retargeted between them. Summed the way the CLI sums
