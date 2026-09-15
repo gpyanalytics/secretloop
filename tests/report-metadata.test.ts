@@ -264,7 +264,7 @@ test("a scan with nothing skipped reports no limitation", () => {
 test("cancellation, size, readability and containment each register", () => {
   assert.match(coverageLimitations({ cancelled: true })[0], /stopped before it finished/);
   assert.match(coverageLimitations({ oversizedExcluded: 3 })[0], /maxFileSizeBytes/);
-  assert.match(coverageLimitations({ unreadableExcluded: 2 })[0], /binary or unreadable/);
+  assert.match(coverageLimitations({ unreadableExcluded: 2 })[0], /could not be read/);
   assert.match(coverageLimitations({ outsideExcluded: 1 })[0], /outside the scan root/);
 });
 
@@ -361,13 +361,13 @@ test("supplied identities are serialized at the top level, where the design puts
 test("coverage detail is descriptive and sits under summary, not beside the identities", () => {
   const d = json({
     reportCoverage: {
-      limitations: ["1 file(s) not scanned — binary or unreadable"],
+      limitations: ["1 file(s) not scanned — could not be read"],
       suppression: { allowValuesCount: 0, baselineApplied: false, inlineSuppressed: 2, unidentified: ["x"] },
     },
   });
   assert.ok(!("coverage" in d), "coverage must not be a comparison-bearing top-level field");
   assert.strictEqual(d.summary.coverage.suppression.inlineSuppressed, 2);
-  assert.deepStrictEqual(d.summary.coverage.limitations, ["1 file(s) not scanned — binary or unreadable"]);
+  assert.deepStrictEqual(d.summary.coverage.limitations, ["1 file(s) not scanned — could not be read"]);
 });
 
 test("the serialized report carries no secret, no absolute root and no allowValue", () => {
@@ -508,7 +508,7 @@ test("no emitted metadata field is ever null, empty or the wrong type", () => wi
   // and nothing is ever emitted as an explicit null
   assert.ok(!/"(schemaVersion|toolVersion|root|configDigest|ruleSetDigest|suppressionDigest|scopeDigest|incomplete)"\s*:\s*null/
     .test(JSON.stringify(d)), "a metadata field was emitted as null");
-  assert.strictEqual(d.schemaVersion, 2, "the contract gained a required field, so the version must be 2");
+  assert.strictEqual(d.schemaVersion, 3, "the contract narrowed what `incomplete` counts, so the version must be 3");
   assert.match(d.scopeDigest, /^scope:[0-9a-f]{16}$/);
 }));
 

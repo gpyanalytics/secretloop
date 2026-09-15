@@ -103,7 +103,10 @@ sentence and the JSON `summary` carry:
 | `N generic finding(s) suppressed in test/fixture paths` | entropy-tier findings held back |
 | `N API description document(s) scanned without generic entropy` | documents the entropy tier skipped |
 | `N file(s) not scanned — larger than maxFileSizeBytes` | oversized files |
-| `N file(s) not scanned — binary or unreadable` | binary, unreadable, or a container that also failed the text path |
+| `N file(s) not scanned — binary` | a NUL byte in the first 8,000 bytes — intentionally out of scope, so it **does not** make the report incomplete. Catches UTF-16/UTF-32 text too, and does not establish the file is secret-free |
+| `N file(s) not scanned — could not be read` | the scan intended to read them and could not — permission, I/O, or a supported binary format it could not conclusively inspect |
+| `N path(s) not scanned — not a regular file` | a directory, fifo, socket or device where a file was expected |
+| `N file(s) not scanned — gone before they could be read` | enumerated, then absent by the time the read reached them |
 | `N archive(s) opened — M member(s) scanned` | containers opened, members offered to the scanner |
 | `N archive member(s) not scanned` | members refused; reasons in `summary.archives.members.refused` |
 | `N archive member(s) excluded by configuration` | members matching `excludePaths` |

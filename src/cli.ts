@@ -580,9 +580,17 @@ interface ScannedList {
   texts: Map<string, string>;
   suppressed: number;
   fixtureSuppressed: number;
-  /** Enumerated but never read: over the size cap, binary, or outside the root. */
+  /** Enumerated but never read: over the size cap, or outside the root. */
   oversized: number;
+  /**
+   * Classified binary, intentionally excluded. Disclosed, but NOT a coverage
+   * limitation -- see coverageLimitations.
+   */
+  binary: number;
+  /** The scan intended to read these and could not. Each is a limitation. */
   unreadable: number;
+  notAFile: number;
+  vanished: number;
   outside: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped: number;
@@ -592,16 +600,31 @@ interface ScannedList {
 
 function scanFileList(root: string, files: string[], config: SecretLoopConfig): ScannedList {
   let oversized = 0;
+  let binaryExcluded = 0;
   let unreadable = 0;
+  let notAFile = 0;
+  let vanished = 0;
   let outside = 0;
   const archives = emptyArchiveAccounting();
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
   const scanned = scanFiles(root, files, config, {
+    // Exhaustive on purpose. The previous `else unreadable++` meant a new skip
+    // reason silently became "binary or unreadable"; the compiler now refuses a
+    // reason nobody decided how to disclose.
     onSkipped: (reason) => {
-      if (reason === "oversized") oversized++;
-      else if (reason === "outside") outside++;
-      else unreadable++;
+      switch (reason) {
+        case "oversized": oversized++; break;
+        case "binary": binaryExcluded++; break;
+        case "not-a-file": notAFile++; break;
+        case "vanished": vanished++; break;
+        case "unreadable": unreadable++; break;
+        case "outside": outside++; break;
+        default: {
+          const never: never = reason;
+          void never;
+        }
+      }
     },
     onContainerNotOpened: (reason) => {
       archives.containersNotOpened[reason] = (archives.containersNotOpened[reason] ?? 0) + 1;
@@ -616,7 +639,10 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
     apiDocumentsScoped: scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0),
     archives,
     oversized,
+    binary: binaryExcluded,
     unreadable,
+    notAFile,
+    vanished,
     outside,
   };
 }
@@ -817,13 +843,19 @@ async function main(): Promise<void> {
       fixtureSuppressed: result.fixtureSuppressed,
       apiDocumentsScoped: result.apiDocumentsScoped,
       oversizedExcluded: result.oversized,
+      binaryExcluded: result.binary,
       unreadableExcluded: result.unreadable,
+      notAFileExcluded: result.notAFile,
+      vanishedExcluded: result.vanished,
       archives,
     });
     selection = { mode: args.command === "staged" ? "staged" : "worktree" };
     inlineSuppressed = result.suppressed;
     coverage.oversizedExcluded = result.oversized;
+    coverage.binaryExcluded = result.binary;
     coverage.unreadableExcluded = result.unreadable;
+    coverage.notAFileExcluded = result.notAFile;
+    coverage.vanishedExcluded = result.vanished;
     coverage.outsideExcluded = listed.outsideExcluded + result.outside;
     coverage.archives = archives;
   }

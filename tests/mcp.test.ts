@@ -284,7 +284,10 @@ test("a scan that could not read a file discloses it, exactly as the CLI does", 
     p.scope.statement,
     `Scanned ${cliDescribeScope(2, "file", {
       oversizedExcluded: 1,
-      unreadableExcluded: 1,
+      // bin.js carries NUL bytes, so it is a CONFIRMED binary skip, not a failed
+      // read. The parity being pinned is that both surfaces say the same thing
+      // about the same tree -- and both now say which of the two it was.
+      binaryExcluded: 1,
     })}.`,
     `MCP scope statement drifted from the CLI's: ${p.scope.statement}`
   );

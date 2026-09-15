@@ -132,8 +132,14 @@ export interface ScopeNotes {
   fixtureSuppressed?: number;
   /** Files enumerated but skipped for exceeding maxFileSizeBytes. */
   oversizedExcluded?: number;
-  /** Files enumerated but skipped as binary, or unreadable at the read. */
+  /** Files classified binary and intentionally not scanned. Disclosed, not a limitation. */
+  binaryExcluded?: number;
+  /** Files the scan intended to read and could not. */
   unreadableExcluded?: number;
+  /** Paths that were not regular files. */
+  notAFileExcluded?: number;
+  /** Files that were gone before they could be read. */
+  vanishedExcluded?: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped?: number;
   /** What the scan met in the way of archives, counts only; omitted when none. */
@@ -147,7 +153,10 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     outsideExcluded = 0,
     fixtureSuppressed = 0,
     oversizedExcluded = 0,
+    binaryExcluded = 0,
     unreadableExcluded = 0,
+    notAFileExcluded = 0,
+    vanishedExcluded = 0,
     apiDocumentsScoped = 0,
     archives,
   } = notes;
@@ -201,8 +210,20 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
       `; ${oversizedExcluded} file(s) not scanned — larger than maxFileSizeBytes ` +
       `(raise it in .secretloop.json to cover them)`;
   }
+  // Binary first, and never merged with the failures below. An intentional
+  // exclusion is still disclosed -- the reader must know the scan did not look
+  // -- but it is worded as a decision, not as an inability.
+  if (binaryExcluded > 0) {
+    out += `; ${binaryExcluded} file(s) not scanned — binary`;
+  }
   if (unreadableExcluded > 0) {
-    out += `; ${unreadableExcluded} file(s) not scanned — binary or unreadable`;
+    out += `; ${unreadableExcluded} file(s) not scanned — could not be read`;
+  }
+  if (notAFileExcluded > 0) {
+    out += `; ${notAFileExcluded} path(s) not scanned — not a regular file`;
+  }
+  if (vanishedExcluded > 0) {
+    out += `; ${vanishedExcluded} file(s) not scanned — gone before they could be read`;
   }
   // Archives, after every file clause and never folded into one: a member is
   // not a file, a stopped walk is not a refused member, and a container that
