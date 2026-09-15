@@ -19,19 +19,34 @@ heading below.
   trailing separators) are refused for the same reason. A refusal withholds the
   **entire** digest: the offending path is never dropped so the rest can be
   hashed, and the empty-set digest is never substituted.
-- **Reachability, stated accurately.** The git-backed enumeration never fed such
-  a path in — git quotes it, the containment guard refuses the quoted path, and
-  that refusal already marked the report incomplete. The **fallback directory
-  walk**, used when `git ls-files` cannot answer, did admit it, and there two
-  genuinely different trees produced one `binaryDigest` with `incomplete: false`
-  on both sides. No shipped release is affected: `binaryDigest` and schema 4 do
-  not exist in 0.5.1.
-- **No contract or schema bump, deliberately.** Every path a legitimate producer
-  emits hashes to exactly the value it did before — pinned by literal assertions
-  that pass against both the old and the new implementation — so what an
-  exclusion set *means* is unchanged and `BINARY_CONTRACT_VERSION` stays 1,
-  `REPORT_SCHEMA_VERSION` stays 4. Only previously-wrong identities for
-  ambiguous input change, and they change to *withheld*.
+- **A literal backslash is a legitimate producer output, not an impossible one.**
+  Windows separators are converted at the enumeration
+  (`path.relative(...).split(path.sep).join("/")`), so none arrives here as `\`.
+  But on POSIX `path.sep` is `/`, so that same conversion correctly leaves a
+  backslash that is part of a *name* alone, and the fallback directory walk does
+  emit `dir\file.png` for a file called that. The filename is valid; the
+  identity representation simply cannot express it, so the digest is withheld.
+- **Reachability, stated accurately.** `git ls-files` C-quotes such a name
+  whatever `core.quotePath` is set to, so the git-backed enumeration forwards a
+  path that does not exist and the containment guard refuses it, already marking
+  the report incomplete — **a formatting behaviour of one producer, not a
+  containment guarantee.** The **fallback directory walk** has no such behaviour,
+  and there two genuinely different trees produced one `binaryDigest` with
+  `incomplete: false` on both sides. Demonstrated end to end through the real
+  comparator, which admitted the pair and reported no difference.
+- **`BINARY_CONTRACT_VERSION` moves 1 → 2.** The representation changed, so
+  every `binaryDigest` changes. Without the bump a version-1 report and a
+  version-2 report of *different* trees carry the same digest and compare
+  silently — measured, not supposed. The cost is deliberate and documented: a
+  report written before this change is incomparable with one written after even
+  for an unchanged tree, and the comparator says `identity-mismatch
+  (binaryDigest)`. `REPORT_SCHEMA_VERSION` stays **4**: `binaryDigest` is still
+  required, still `binary:<16 hex>`, and still identifies the binary-excluded
+  set — what changed is the representation the digest is computed over, which is
+  precisely what the contract version versions.
+- **It does not repair reports already written.** Two version-1 reports still
+  compare with each other and still carry the collapsed identity. Nothing can
+  reach back into a report that was already emitted.
 
 ### MCP
 

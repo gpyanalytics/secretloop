@@ -134,9 +134,13 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   withholding the whole digest rather than dropping a path or claiming the empty
   set; separator conversion for Windows producers stays at the enumeration. The
   original follow-up recorded this as unreachable through the shipped scanner —
-  true of the git-backed enumeration, but the fallback directory walk did admit
-  such a path, so it was reachable there. No published release carries a
-  `binaryDigest`, and no contract or schema version needed to move.
+  true of the git-backed enumeration, whose refusal comes from git's own
+  quoting rather than from a containment guarantee, but the fallback directory
+  walk admits such a path and it was reachable there, end to end through the
+  real comparator. `BINARY_CONTRACT_VERSION` moves 1 → 2 because the
+  representation changed and version-1 and version-2 reports would otherwise
+  compare silently; `REPORT_SCHEMA_VERSION` stays 4. Reports already written by
+  a version-1 build are not repaired by this.
 - **VS Code `excludePaths`** — **shipped in 0.5.1** (PR #55). The setting was
   declared and never read; the editor configuration builder now resolves it and
   adds it to the exclusions already in force.

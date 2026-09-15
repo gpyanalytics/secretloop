@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
-import { binaryIdentity } from "../src/report-metadata";
+import { binaryIdentity, BINARY_CONTRACT_VERSION } from "../src/report-metadata";
 
 /**
  * THE INPUT CONTRACT OF `binaryIdentity`, AND THE TWO PRODUCTION GUARDS AROUND IT.
@@ -83,14 +83,26 @@ test("HELPER: refusal withholds the WHOLE set, and is not the empty set", () => 
   );
 });
 
-test("HELPER: ordinary relative paths keep their exact existing identities", () => {
-  // Pinned as literals. If any of these moves, the change is NOT what it claims
-  // to be -- it would alter digests for legitimate producer input and would
-  // need a BINARY_CONTRACT_VERSION decision.
-  assert.strictEqual(binaryIdentity(["a.png"]), "binary:3e511fbf408be70d");
-  assert.strictEqual(binaryIdentity(["./a.png"]), "binary:3e511fbf408be70d", "a leading ./ is stripped");
-  assert.strictEqual(binaryIdentity(["dir/file.png"]), "binary:113e0402775c6ac2");
-  assert.strictEqual(binaryIdentity([]), "binary:4895676a188e8330", "the empty set is a real identity");
+test("HELPER: canonical paths hash to their documented version-2 identities", () => {
+  // Pinned as literals so the representation cannot drift unnoticed. These are
+  // BINARY_CONTRACT_VERSION 2 values.
+  assert.strictEqual(binaryIdentity(["a.png"]), "binary:bed5ee7ee2f7ca04");
+  assert.strictEqual(binaryIdentity(["./a.png"]), "binary:bed5ee7ee2f7ca04", "a leading ./ is stripped");
+  assert.strictEqual(binaryIdentity(["dir/file.png"]), "binary:740fbb683ea4351d");
+  assert.strictEqual(binaryIdentity([]), "binary:61b74cdb9db4e86c", "the empty set is a real identity");
+});
+
+test("HELPER: the contract version moved, so no version-1 digest can be reproduced", () => {
+  // The bump is the whole point: a version-1 report and a version-2 report must
+  // not compare silently. Under version 1 these were the values below, and
+  // binary:113e0402775c6ac2 was ALSO what {"dir\\file.png"} collapsed onto --
+  // which is why a version-1 digest must never be reachable from this build.
+  assert.strictEqual(BINARY_CONTRACT_VERSION, 2, "the representation version");
+  for (const stale of ["binary:3e511fbf408be70d", "binary:113e0402775c6ac2", "binary:4895676a188e8330"]) {
+    for (const input of [["a.png"], ["./a.png"], ["dir/file.png"], [], ["b.png"], ["a/one.gif", "b/two.png"]]) {
+      assert.notStrictEqual(binaryIdentity(input), stale, `version-1 digest ${stale} must be unreachable`);
+    }
+  }
 });
 
 test("HELPER: order independence and duplicate collapsing", () => {
@@ -205,7 +217,7 @@ test("SCANNER: git enumeration refuses a backslash-named file and reports incomp
     );
     assert.notStrictEqual(
       d.binaryDigest,
-      "binary:113e0402775c6ac2",
+      "binary:740fbb683ea4351d",
       "it must never carry the identity of dir/file.png"
     );
   });
@@ -243,7 +255,7 @@ test("SCANNER: THE GUARD REGRESSION — the fallback enumeration admits it, and 
     );
     assert.notStrictEqual(a.binaryDigest, b.binaryDigest, "two different trees, never one identity");
     // Withheld, not replaced: the empty-set digest would claim nothing was excluded.
-    assert.notStrictEqual(b.binaryDigest, "binary:4895676a188e8330");
+    assert.notStrictEqual(b.binaryDigest, "binary:61b74cdb9db4e86c");
   });
 });
 
