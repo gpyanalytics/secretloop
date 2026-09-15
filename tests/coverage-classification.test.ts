@@ -522,10 +522,16 @@ test("exclusion order does not matter: the digest is over a set", () => {
     "duplicates collapse and order is irrelevant"
   );
   assert.strictEqual(
-    binaryIdentity(["./a/one.gif", "a\\two.png"]),
+    binaryIdentity(["./a/one.gif", "./a/two.png"]),
     binaryIdentity(["a/one.gif", "a/two.png"]),
-    "a leading ./ is stripped and separators are normalized"
+    "a leading ./ is stripped"
   );
+  // This assertion used to pair "./a/one.gif" with "a\\two.png" and require the
+  // backslash to normalize onto "a/two.png". That rewrite is what collapsed a
+  // real POSIX file named `dir\file.png` onto the unrelated path `dir/file.png`,
+  // so an ambiguous path now withholds the whole digest instead. The contract
+  // and its reachability live in tests/binary-identity-paths.test.ts.
+  assert.strictEqual(binaryIdentity(["./a/one.gif", "a\\two.png"]), undefined);
   assert.notStrictEqual(binaryIdentity(["a.png"]), binaryIdentity(["b.png"]));
 });
 

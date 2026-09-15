@@ -5,6 +5,34 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### Report comparison
+
+- **`binaryDigest` no longer collapses a literal backslash onto a directory
+  separator.** `binaryIdentity` rewrote `\` to `/`, so on POSIX — where a
+  backslash is a legal filename character — a real file named `dir\file.png`
+  produced the same exclusion identity as the unrelated real path
+  `dir/file.png`. Two different exclusion sets read as one. The function now
+  takes canonical, repository-relative, `/`-separated paths and **refuses**
+  anything ambiguous instead of reinterpreting it; separator conversion for
+  Windows producers stays at the enumeration, where the originating semantics
+  are known. Non-canonical spellings (`.` and `..` segments, repeated and
+  trailing separators) are refused for the same reason. A refusal withholds the
+  **entire** digest: the offending path is never dropped so the rest can be
+  hashed, and the empty-set digest is never substituted.
+- **Reachability, stated accurately.** The git-backed enumeration never fed such
+  a path in — git quotes it, the containment guard refuses the quoted path, and
+  that refusal already marked the report incomplete. The **fallback directory
+  walk**, used when `git ls-files` cannot answer, did admit it, and there two
+  genuinely different trees produced one `binaryDigest` with `incomplete: false`
+  on both sides. No shipped release is affected: `binaryDigest` and schema 4 do
+  not exist in 0.5.1.
+- **No contract or schema bump, deliberately.** Every path a legitimate producer
+  emits hashes to exactly the value it did before — pinned by literal assertions
+  that pass against both the old and the new implementation — so what an
+  exclusion set *means* is unchanged and `BINARY_CONTRACT_VERSION` stays 1,
+  `REPORT_SCHEMA_VERSION` stays 4. Only previously-wrong identities for
+  ambiguous input change, and they change to *withheld*.
+
 ### MCP
 
 - **A history scan over MCP now says what it suppressed.**

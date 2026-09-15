@@ -399,6 +399,42 @@ the two reports share**. Specifically:
   file-level exclusion events, so it cannot establish the set. Claiming the
   empty set there would be metadata invented for a mode that never produced it.
 
+**The paths `binaryDigest` accepts.** A canonical, repository-relative,
+`/`-separated path, exactly as the enumeration produces it. A leading `./` is
+stripped and duplicates collapse; nothing else is rewritten.
+
+- **Where native paths are converted.** At the enumeration, not here. The
+  directory walk emits `path.relative(root, file).split(path.sep).join("/")`, so
+  a Windows producer's `\` separators become `/` at the one place where the
+  originating path semantics are known, and `git ls-files` emits `/` on every
+  platform. By the time a path reaches the digest it is already `/`-separated.
+- **A backslash is refused, never reinterpreted.** On POSIX `\` is a legal
+  filename character, so rewriting it to `/` maps a real file named
+  `dir\file.png` onto the unrelated real path `dir/file.png` and gives two
+  different exclusion sets one identity. Arriving at the digest, a backslash is
+  either a literal name or a path that skipped the conversion above, and the two
+  cannot be told apart — so the input is refused rather than guessed at.
+- **Non-canonical spellings are refused** — a `.` or `..` segment, a repeated
+  separator, a trailing separator — because one file would otherwise get two
+  identities depending on how it was spelled. Absolute, drive (`C:/…`) and UNC
+  paths are refused as before.
+- **Case and Unicode are left alone.** Distinct case-sensitive filenames stay
+  distinct, and NFC and NFD spellings are different names: normalizing either
+  would decide a filesystem question this contract cannot answer.
+- **Refusal withholds the WHOLE digest.** One unrepresentable path means no
+  `binaryDigest` at all. The path is never dropped so the rest can be hashed,
+  and the empty-set digest is never substituted — the first would publish a
+  confident identity for a subset, the second would claim nothing was excluded.
+  A withheld digest makes the pair ineligible, which is the safe direction.
+
+**Two production guards sit in front of this, and they are unchanged.** `git
+ls-files` quotes a path containing a backslash (`"dir\\file.png"`) whatever
+`core.quotePath` is set to, so the git-backed enumeration is handed a path that
+does not exist, the containment guard refuses it, and that refusal is already a
+coverage limitation making the report `incomplete`. Only the fallback directory
+walk, used when `git ls-files` cannot answer, admits such a name — and that is
+the route where the identity had to stop collapsing.
+
 **`binaryDigest` is not anonymisation.** It hashes a set of repository-relative
 paths, and repository paths are often predictable — `docs/icon.png`,
 `assets/logo.gif`. Anyone holding a candidate list can test guesses against the

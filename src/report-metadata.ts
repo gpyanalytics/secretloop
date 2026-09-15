@@ -414,14 +414,49 @@ export function scopeIdentity(selection: ScopeSelection | undefined): string | u
  * WHAT IT COVERS. A canonical, sorted, deduplicated set of REPOSITORY-RELATIVE
  * paths, carried with `BINARY_CONTRACT_VERSION` inside the digest input.
  *
+ * THE INPUT CONTRACT: CANONICAL, REPOSITORY-RELATIVE, `/`-SEPARATED.
+ *
+ * Callers pass paths as the enumeration produced them, and the enumeration is
+ * where the originating path semantics are known. `walkDirectory` in walk.ts
+ * already converts the platform separator at that boundary
+ * (`path.relative(...).split(path.sep).join("/")`), so a Windows run hands this
+ * function `/` exactly as a POSIX run does, and `git ls-files` emits `/` on
+ * every platform. Nothing legitimate reaches here with a backslash in it.
+ *
+ * WHICH IS WHY A BACKSLASH IS REFUSED RATHER THAN REWRITTEN. This function used
+ * to replace `\` with `/`. On POSIX a backslash is a legal FILENAME character,
+ * so that rewrite mapped a real file named `dir\file.png` onto the unrelated
+ * real path `dir/file.png` and handed both the same identity -- two genuinely
+ * different exclusion sets reading as one. It cannot be repaired by guessing:
+ * arriving here, a backslash is either a literal name or a path that skipped
+ * the boundary conversion, and the two are indistinguishable. Silently
+ * reinterpreting a literal POSIX filename as a separator is the one thing this
+ * function must never do, so the whole set is refused instead.
+ *
  * NORMALIZATION, so two runs of the same tree agree:
- *   - separators are normalized to `/`, so a Windows and a POSIX run of one
- *     tree produce one identity;
  *   - a leading `./` is stripped;
  *   - duplicates collapse (a Set), and order is irrelevant -- the caller may
  *     report exclusions in any order, including a different order per run;
- *   - an ABSOLUTE path is refused outright, returning undefined rather than
- *     publishing a local directory layout into a report that travels.
+ *   - NOTHING ELSE is rewritten. Case is preserved, because distinct
+ *     case-sensitive filenames are distinct files; Unicode is not normalized,
+ *     because NFC and NFD are different names and deciding they are one is a
+ *     filesystem question this function cannot answer.
+ *
+ * REFUSED OUTRIGHT, returning undefined for the WHOLE set:
+ *   - any path containing a backslash (above);
+ *   - an ABSOLUTE path, a drive path (`C:/...`) or a UNC path, rather than
+ *     publishing a local directory layout into a report that travels;
+ *   - a NON-CANONICAL spelling -- a `.` or `..` segment, a repeated separator,
+ *     a trailing separator -- because one file would otherwise have two
+ *     identities depending on how the producer spelled it;
+ *   - an empty string, or anything that is not a string.
+ *
+ * REFUSAL IS ALL-OR-NOTHING, AND THAT IS THE POINT. One unrepresentable path
+ * withholds the entire digest. The problematic path is never dropped so the
+ * rest can be hashed -- that would publish a confident identity for a SUBSET
+ * while claiming to describe the set -- and the empty-set digest is never
+ * substituted, which would claim nothing was excluded. Withholding makes the
+ * pair ineligible, which is the safe direction.
  *
  * WHAT IT DOES NOT COVER. No file CONTENT is hashed, no credential, and no
  * absolute path. It is a set of names and nothing else.
@@ -445,12 +480,23 @@ export function binaryIdentity(paths: readonly string[] | undefined): string | u
   const normalized = new Set<string>();
   for (const raw of paths) {
     if (typeof raw !== "string" || raw === "") return undefined;
-    const slashed = raw.replace(/\\/g, "/").replace(/^\.\//, "");
-    // An absolute path means the caller handed us something that is not
-    // repository-relative. Withholding is the honest answer; publishing it
-    // would put a local layout into the report.
-    if (slashed.startsWith("/") || /^[A-Za-z]:\//.test(slashed)) return undefined;
-    normalized.add(slashed);
+    // AMBIGUOUS, so refused before anything else is decided. See the contract
+    // above: this is a literal filename character on POSIX and a separator the
+    // enumeration has already converted on Windows, and nothing here can tell
+    // which one arrived. It also covers `C:\x` and `\\server\share\x`.
+    if (raw.includes("\\")) return undefined;
+    const rel = raw.startsWith("./") ? raw.slice(2) : raw;
+    if (rel === "") return undefined;
+    // An absolute, drive or UNC path means the caller handed us something that
+    // is not repository-relative. Withholding is the honest answer; publishing
+    // it would put a local layout into the report. (`//server/share` starts
+    // with `/`, so the first test covers UNC in its slash spelling too.)
+    if (rel.startsWith("/") || /^[A-Za-z]:\//.test(rel)) return undefined;
+    // Non-canonical spellings of one path would otherwise get two identities,
+    // and `..` could name something outside the root the producer was given.
+    if (rel.includes("//") || rel.endsWith("/")) return undefined;
+    if (rel.split("/").some((segment) => segment === "." || segment === "..")) return undefined;
+    normalized.add(rel);
   }
   const sorted = [...normalized].sort();
   return `binary:${digest(canonical({ v: BINARY_CONTRACT_VERSION, paths: sorted }))}`;
