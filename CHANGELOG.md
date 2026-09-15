@@ -5,6 +5,87 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### Comparison
+
+- **`secretloop compare <before.json> <after.json>` compares two saved reports.**
+  The comparison metadata has existed since schema 2 so a later tool could decide
+  whether two reports may be compared at all; until now nothing enforced those
+  rules. This is that enforcement, scoped to **working-tree reports only**.
+  - **Working-tree scope is enforced, not inferred.** Each report's
+    `scopeDigest` must equal `scopeIdentity({ mode: "worktree" })`, taken from
+    the same shared function the producer uses rather than a copied constant —
+    so the check tracks `SCOPE_CONTRACT_VERSION` automatically and cannot drift.
+    Presence of the nine fields is not sufficient, and neither is the two
+    reports agreeing with each other: two history scans over the same commits
+    carry equal, well-formed scope digests. A history report therefore cannot be
+    made eligible by supplying the one field it lacks, and a staged report given
+    a plausible scope identity is refused the same way.
+  - **Validating metadata is not authentication.** Reports carry no signature or
+    provenance, so every identity checked is a value the producer wrote. Passing
+    means the two reports are internally consistent and declare compatible
+    scans — never that those scans happened or covered what they claim.
+  - **Eligibility is decided first and completely.** All nine schema-4 fields are
+    validated with field-specific rules — `root` must match `git:<16 hex>`,
+    `scopeDigest` must match `scope:<16 hex>`, and so on — and absent, null,
+    wrong-typed, empty and malformed values are each refused. A shared absence
+    never qualifies. `incomplete` must be `false` in **both** reports. Schemas 1,
+    2 and 3, unknown future versions, and mixed-version pairs are all rejected.
+    Tool, repository, configuration, rule-set, suppression, scope and
+    binary-exclusion identities must match.
+  - **No difference is computed for an ineligible pair**, and the JSON output
+    carries no difference keys at all — an empty `new` array beside
+    `comparable: false` is exactly what a careless consumer reads as "nothing
+    changed".
+  - **Exit codes:** `0` compared with nothing new, `1` compared with new
+    findings, `2` unusable input, `3` **not comparable**. `3` exists so a refusal
+    cannot be mistaken for a clean comparison.
+  - **"No longer observed" means absent from the later report** — never fixed,
+    removed, rotated or revoked, and it makes no claim about files either scan
+    excluded or about renamed findings. The caveat ships in the output.
+  - **Duplicate fingerprints are counted, not collapsed.** A fingerprint covers
+    (path, rule, value) and not the line, so one credential repeated in a file
+    shares one identity. Occurrence-level changes are reported as an explicit
+    ambiguity rather than guessed at, and a finding with no usable fingerprint
+    refuses the comparison instead of being silently dropped.
+  - **Both reports are treated as untrusted.** Size is bounded before reading,
+    structure is validated before processing, output fields are built explicitly
+    rather than copied from the input, and no `value` or `redactedValue` is ever
+    emitted — a field named "redacted" is a claim by the input, not a fact.
+    **No report-supplied free text is printed at all.** Results carry only
+    `ruleId` (required to be one of the rule ids this build emits — membership,
+    derived from `rulesById` plus the entropy and keystore detectors, not merely
+    a grammar check), the
+    16-hex `digest` tail of the fingerprint, `line` and `severity` (admitted
+    only from the scanner's own set). The scanned path and the raw fingerprint
+    are **not** shown: a path is arbitrary text, and no format check can
+    establish that arbitrary text contains no secret, so the comparator declines
+    to print it rather than claim otherwise. `value` and `redactedValue` are
+    never emitted, and the report's own `file` and `ruleId` fields are ignored
+    in favour of the identity actually matched on. No new secret-derived
+    identifier is computed — the digest is a verbatim substring of the
+    fingerprint the report already carries. Matching still uses the **full raw
+    fingerprint**, never a sanitized one, and an identity that cannot be parsed
+    against the full `<path>:<ruleId>:<16 hex>` structure rejects the whole
+    comparison instead of being dropped. Validation errors name the field at
+    fault and never quote its value. Nothing in a report is fetched or executed.
+  - **An unsupported rule id rejects the whole comparison.** The rule segment of
+    a fingerprint was previously checked against a grammar only, which accepts
+    any lowercase alphanumeric run — so an arbitrary string could pass and be
+    printed. Membership in the set this build actually emits is now required,
+    the set is derived from the existing authorities rather than copied, and a
+    finding naming an unsupported rule refuses the comparison outright with no
+    partial results and without echoing the id.
+  - **The read is bounded by the descriptor, not the name.** Each report is
+    opened once, inspected with `fstat` on the opened object, and read from that
+    same descriptor with the cap enforced **during** the read — at most one
+    chunk past the limit — and rejected before parsing. The descriptor is closed
+    on every path. A file that grows or a path replaced after inspection can no
+    longer cause an unbounded read. This is not an immutable or authenticated
+    snapshot: another process writing the same file can still change what a
+    later run sees.
+  - No rescanning, no liveness verification, no provider call, no remediation,
+    and no editor or MCP integration.
+
 ### Coverage
 
 - **A binary file no longer makes a report incomplete.** The read path

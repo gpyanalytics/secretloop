@@ -14,6 +14,12 @@ import {
   binaryIdentity,
   suppressionIdentity,
 } from "./report-metadata";
+import {
+  compareReports,
+  loadReport,
+  renderJson as renderCompareJson,
+  renderText as renderCompareText,
+} from "./compare";
 import "./node-guard";
 import { writeFileSync, statSync, readFileSync } from "fs";
 import * as path from "path";
@@ -38,9 +44,12 @@ import { verifyFindings } from "./verify";
  */
 
 export interface Args {
-  command: "scan" | "staged" | "history" | "mask" | "approve" | "help" | "version";
+  command: "scan" | "staged" | "history" | "mask" | "approve" | "compare" | "help" | "version";
   /** approve: the fingerprint to authorize. */
   approveFingerprint?: string;
+  /** compare: the two saved reports, older first. */
+  compareBefore?: string;
+  compareAfter?: string;
   format: OutputFormat;
   verify: boolean;
   redact: boolean;
@@ -90,7 +99,7 @@ const FORMATS: readonly OutputFormat[] = ["text", "json", "sarif"];
 const FAIL_ON_MODES: readonly Args["failOn"][] = ["any", "verified", "critical", "high", "never"];
 
 /** The commands the CLI answers to. */
-const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "mask", "approve", "help"];
+const COMMANDS: readonly Args["command"][] = ["scan", "staged", "history", "mask", "approve", "compare", "help"];
 
 export function parseArgs(argv: string[]): Args {
   const args: Args = {
@@ -271,8 +280,12 @@ export function parseArgs(argv: string[]): Args {
       errors.push(`unknown command ${command}. Use one of: ${COMMANDS.join(", ")}.`);
     }
   }
-  // `approve` takes one positional, which is the only command that does.
+  // `approve` takes one positional; `compare` takes two, older report first.
   if (args.command === "approve") args.approveFingerprint = loose[1];
+  if (args.command === "compare") {
+    args.compareBefore = loose[1];
+    args.compareAfter = loose[2];
+  }
   if (wantsHelp) args.command = "help";
   // After help, so `--help --version` answers the narrower question. `version`
   // is deliberately absent from COMMANDS: the flag is the whole feature, and a
@@ -295,7 +308,32 @@ COMMANDS
   history    Scan git history for secrets committed at any point
   mask       Read stdin, write it back with every secret replaced
   approve    Authorize ONE credential verification requested by an MCP client
+  compare    Compare two saved JSON reports (older first). Reads files only:
+             it never rescans, never verifies liveness and never contacts a
+             provider. Refuses any pair the report contract does not admit.
   help       Show this message
+
+COMPARE
+  secretloop compare <before.json> <after.json> [--format text|json] [-o FILE]
+
+  Reports findings that are NEW, PERSISTING or NO LONGER OBSERVED between two
+  eligible reports. "No longer observed" means absent from the later report --
+  never fixed, removed, rotated or revoked, and it says nothing about files
+  either scan excluded.
+
+  Each result names the rule and the 16-hex identity digest. Scanned paths are
+  NOT printed: a path is arbitrary text and no format check can prove it holds
+  no secret. Look the digest up in either report to find the file -- the digest
+  covers the value, not the path, so one credential in several files shares a
+  digest and the lookup may return more than one row.
+
+  Both reports must be working-tree scans carrying all nine schema-4 comparison
+  fields, with matching tool, repository, configuration, rule set, suppression,
+  scope and binary-exclusion identities, and neither marked incomplete. Staged
+  and history reports do not qualify: they omit a required field.
+
+  Exit codes: 0 compared and nothing new; 1 compared with new findings;
+  2 unusable input; 3 the pair is NOT COMPARABLE and no difference was computed.
 
 OPTIONS
   --verify                 Confirm liveness against the provider's API before reporting
@@ -678,6 +716,70 @@ function packageVersion(): string {
 }
 
 /**
+ * `compare` — the only command that reads reports instead of a repository.
+ *
+ * EXIT CODES, chosen so a script cannot confuse the three outcomes:
+ *
+ *   0  compared, and nothing is new
+ *   1  compared, and there are NEW findings -- the same "something met the
+ *      gate" meaning exit 1 already carries for a scan
+ *   2  the input was unusable: a missing argument, an unreadable file,
+ *      malformed JSON, a findings array that is not one
+ *   3  the input was fine and the CONTRACT refused: the pair is INCOMPARABLE
+ *
+ * 3 exists so an ineligible pair cannot be mistaken for a clean comparison.
+ * Folding it into 0 would make "these reports cannot be compared" and "nothing
+ * changed" the same signal, which is the failure this whole contract exists to
+ * prevent. Folding it into 2 would confuse a refusal with a broken file.
+ */
+async function runCompare(args: Args): Promise<number> {
+  if (!args.compareBefore || !args.compareAfter) {
+    process.stderr.write(
+      "secretloop: compare needs two reports: secretloop compare <before.json> <after.json>\n"
+    );
+    return 2;
+  }
+
+  const loadedBefore = loadReport(args.compareBefore, "before");
+  const loadedAfter = loadReport(args.compareAfter, "after");
+  const inputReasons = [
+    ...("reasons" in loadedBefore ? loadedBefore.reasons : []),
+    ...("reasons" in loadedAfter ? loadedAfter.reasons : []),
+  ];
+  if (inputReasons.length > 0) {
+    // An unusable FILE is not an ineligible PAIR. Reported as an input error so
+    // a broken artifact is never read as a contract refusal.
+    for (const r of inputReasons) {
+      process.stderr.write(`secretloop: the ${r.side} report ${r.detail}.\n`);
+    }
+    return 2;
+  }
+
+  const result = compareReports(
+    (loadedBefore as { report: Parameters<typeof compareReports>[0] }).report,
+    (loadedAfter as { report: Parameters<typeof compareReports>[1] }).report
+  );
+  const rendered = args.format === "json" ? renderCompareJson(result) : renderCompareText(result);
+  if (args.output) writeFileSync(args.output, rendered);
+  else process.stdout.write(rendered);
+
+  if (!result.comparable) {
+    process.stderr.write(
+      `secretloop: exit 3 — the reports are not comparable (${result.reasons.length} reason(s)); ` +
+        "no difference was computed.\n"
+    );
+    return 3;
+  }
+  if (result.added.length > 0) {
+    process.stderr.write(
+      `secretloop: exit 1 — ${result.added.length} new finding(s) since the earlier report.\n`
+    );
+    return 1;
+  }
+  return 0;
+}
+
+/**
  * Sets process.exitCode and returns rather than calling process.exit().
  *
  * On a pipe, Node's stdout is asynchronous: process.exit() ends the process
@@ -720,6 +822,13 @@ async function main(): Promise<void> {
 
   if (args.command === "approve") {
     process.exitCode = await runApprove(args.approveFingerprint);
+    return;
+  }
+
+  // Before validateArgs: compare takes no scan flags, and the scan/history
+  // combination rules have nothing to say about two files on disk.
+  if (args.command === "compare") {
+    process.exitCode = await runCompare(args);
     return;
   }
 

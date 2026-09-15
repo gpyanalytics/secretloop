@@ -407,9 +407,132 @@ credential and no absolute path, but it is a comparison identity, not
 concealment, and nothing here should be read as hiding which files were
 excluded.
 
-**No comparison command exists.** This section describes what a consumer must
-enforce; SecretLoop ships no comparator, and adding one is not part of this
-change.
+### The comparator
+
+`secretloop compare <before.json> <after.json>` enforces every rule above. It
+reads two saved reports and nothing else: it never rescans, never verifies
+liveness, never contacts a provider and never writes to a scanned file.
+
+**The read is bounded by the descriptor, not by the name.** Each report is
+opened once; the opened object is inspected with `fstat` and every byte is read
+from that same descriptor, with the byte cap enforced **while reading** rather
+than only before it. At most one chunk is ever read past the cap, which is what
+lets "exactly the limit" and "one byte over" be told apart, and an oversized
+report is rejected **before parsing**. The descriptor is closed on every path,
+including failures. An initial size check remains, but only as an optimization
+that avoids reading an already-huge file — it is not the guard.
+
+This means a file that grows, or a path that is replaced, after inspection
+cannot cause an unbounded read. It does **not** mean the comparator holds an
+immutable or authenticated snapshot: another process writing to the same file
+can still change what a *later* run sees, and nothing here proves the bytes read
+came from the scan they claim to describe.
+
+Exit codes distinguish the three outcomes that must never be confused:
+
+| code | meaning |
+|---|---|
+| `0` | compared, and nothing is new |
+| `1` | compared, and there are new findings |
+| `2` | unusable input — missing argument, unreadable file, malformed JSON |
+| `3` | **not comparable** — the input was fine and the contract refused |
+
+`3` exists because folding a refusal into `0` would make "these reports cannot
+be compared" and "nothing changed" the same signal. For an ineligible pair the
+JSON output carries **no difference keys at all**, not even empty ones.
+
+**How working-tree scope is enforced.** The comparator admits working-tree
+reports only, and it **validates that positively**: each report's `scopeDigest`
+must equal the identity the shared `scopeIdentity({ mode: "worktree" })`
+produces. Presence of the nine fields is not enough, and neither is the two
+reports agreeing with each other — two history scans over the same commits carry
+equal, well-formed scope digests, and equality alone would have admitted them.
+
+The expected value is taken from the **same function the producer uses**, never
+written out as a constant. The scope contract version is hashed inside that
+function's input, so a report written under a different `SCOPE_CONTRACT_VERSION`
+stops matching automatically rather than comparing silently, and the check
+cannot drift from the producer.
+
+Consequently a `history` report **cannot** be made eligible by supplying the one
+field it lacks: its scope digest still says history, and it is rejected as an
+unsupported scope. A `staged` report given a plausible-looking scope identity is
+rejected the same way. Nothing is inferred from a field being absent, and
+nothing is read from the prose scope sentence.
+
+**What this does not do: it is not authentication.** A report carries no
+signature and no provenance, so every identity checked here is a value its
+producer put in the file. Anyone who can write a file can write one that
+satisfies every rule above, including the supported scope digest. Passing these
+checks means "these two reports are internally consistent and declare compatible
+scans" — never "these scans really happened and really covered what they claim".
+That is the right boundary for metadata designed to prevent *accidental*
+mis-comparison, but a caller comparing reports from an untrusted source is
+trusting that source, not this contract.
+
+**No report-supplied free text is ever printed.** A report is untrusted input,
+so the comparator builds its output from fields of fixed, closed shape only:
+
+| shown | why it is safe to show |
+|---|---|
+| `ruleId` | taken from the fingerprint and required to be **one of the rule ids this build emits** — membership, not merely grammar |
+| `digest` | the 16-hex tail of the fingerprint — fixed shape, and a verbatim substring of the identity already in the report |
+| `line` | a number |
+| `severity` | admitted only from the scanner's own set |
+
+**The scanned path is deliberately not shown, and neither is the raw
+fingerprint.** A path is arbitrary text, and **no format check can establish
+that arbitrary text contains no secret** — a credential-shaped path passes every
+pattern a display filter could apply. Rather than claim otherwise, the
+comparator does not print it. Such a path is **accepted internally**: it matches
+normally, is never rejected for its contents, and simply never reaches output.
+It is not detected, and nothing here claims it was.
+
+**A rule id must be a member of the supported set, not merely grammatical.** The
+set is derived from the existing authorities — every rule in `src/rules.ts`, plus
+the generic entropy tier and the structural keystore detector — so there is no
+second list to drift. A grammar check alone accepts any lowercase alphanumeric
+run and is not a vocabulary; relying on one let an arbitrary string in a
+fingerprint's rule segment be printed. A finding naming an unsupported rule now
+**rejects the whole comparison**, under the same policy as any other unusable
+identity: no partial results, and the id itself is never echoed.
+
+Constraining these fields bounds **what can be echoed**. It is not a proof about
+content, and validating metadata does not authenticate a report. `value` and `redactedValue` are never emitted
+either; a field named "redacted" is a claim by the input, not a fact, and the
+report's own `file` and `ruleId` fields are ignored entirely in favour of the
+identity that was actually matched on.
+
+To locate a finding, look up its `ruleId` and `digest` in whichever report you
+already hold. Neither value is new — the digest is a substring of the fingerprint
+the report already carries — and **no new secret-derived identifier is
+computed**; nothing is hashed here.
+
+**The displayed pair narrows the search; it does not uniquely identify a
+finding.** The digest covers the matched *value*, not the path, so the same
+credential found by the same rule in two different files produces the **same**
+`ruleId` and `digest` while being two distinct identities. Matching is unaffected
+— it uses the full raw fingerprint, so those two remain separate results — but
+the output cannot tell you which file each one came from, and a lookup may return
+more than one row.
+
+**Matching is unaffected.** Eligibility and matching use the **full raw
+fingerprint**, exactly as it appears in the report. It is never sanitized,
+truncated or normalised before matching — that would change which findings pair
+up. Presentation is a separate step that discards rather than rewrites.
+
+A finding whose identity cannot be parsed against the full structure
+(`<path>:<ruleId>:<16 hex>`) is **never silently dropped**: it rejects the whole
+comparison, which is reported as `malformed-finding-identity`.
+
+Validation errors name the field at fault and never quote its value.
+
+**Duplicate identities are reported, not resolved.** A fingerprint covers
+(path, rule, value) and deliberately not the line, so one credential repeated in
+a file is several findings under one identity. The comparator counts occurrences
+and reports any fingerprint seen more than once as an explicit ambiguity; it
+does not claim what a count change meant, because the identity cannot support
+that distinction.
 
 The reference model shipped with the frozen design (`D/model_compare.py`)
 implements only the *present-and-equal* half over four fields, and measured
