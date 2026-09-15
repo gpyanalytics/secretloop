@@ -25,7 +25,7 @@ invocation is logged there with its arguments and result counts, never a value.
 | tool | what it does |
 |---|---|
 | `secretloop_scan` | Scans the working tree of `path`. Optional `include` globs narrow it, on top of the project's own exclusions. Read-only. |
-| `secretloop_list_findings` | Filters the last scan's findings by severity, rule id or liveness. Always reports the unfiltered total beside the filtered count. Refuses, rather than returning an empty list, when no scan has run. |
+| `secretloop_list_findings` | Filters the last scan's findings by severity, rule id or liveness. Always reports the unfiltered total beside the filtered count, and the `scope` of the scan those findings came from. Refuses, rather than returning an empty list, when no scan has run. |
 | `secretloop_get_finding` | One finding by fingerprint: rule metadata, location, and the surrounding source lines inside an untrusted-content block with every secret masked. |
 | `secretloop_history_scan` | Scans git history, bounded to 500 commits or 45 seconds by default (caps 5,000 and 120 seconds), returning at most 500 findings and saying when it stopped early. |
 | `secretloop_verify` | Asks a provider whether one *supported* credential is still live — only after a human approves it in a terminal. |
@@ -53,6 +53,42 @@ has no input of its own for the tier. The current count is in
   with every known secret masked, and any attempt to close the block from
   inside neutralised. Error messages quote caller-supplied and repository-chosen
   fragments — paths, fingerprints, revision ranges — inside the same wrapper.
+- **Listed findings say what was inspected to produce them.**
+  `secretloop_list_findings` returns the `scope` of the scan behind its rows —
+  the same object `secretloop_scan` returned, carried through the session cache
+  rather than recomputed. Before this it returned no `scope` at all: a client
+  got rows with no account of their origin.
+
+  **What it establishes:** which working-tree scan of which root produced these
+  findings, and what that scan inspected — `filesScanned`, `outsideExcluded`,
+  `apiDocumentsScoped`, any `archives` accounting, and the scope sentence.
+
+  **What it does not establish:** freshness. `source: "session-cache"` and
+  `scannedAt` already say these findings describe an *earlier* observation, and
+  `scope` makes no claim that a scan just ran. It is also **not** the report
+  comparator's `scopeDigest`: nothing is hashed, nothing identifies a selection
+  for comparison, and no eligibility decision reads it.
+
+  **Filters do not move it.** A filter narrows which rows come back, not what
+  was looked at; `matched`, `totalInScan` and `filteredOut` are what describe
+  the narrowing. `scope` is unchanged by filtering, so provenance survives it.
+
+  **Response-level, not per-finding, and deliberately.** The session cache has
+  exactly one writer — `secretloop_scan` — which stores the scope in the same
+  object literal as the findings, so an entry always describes exactly one
+  working-tree scan of one root. A per-row field would repeat that on every row
+  and could drift from it, so none was added. Provenance is therefore never
+  unknown here; it cannot be, because no other operation can write the cache.
+
+  **History never mixes in.** `secretloop_history_scan` keeps its own scope in
+  its own response and writes nothing to the session cache, so a history scan
+  can neither restamp nor contribute to what `list_findings` returns.
+
+  **No prior scan is not an empty result.** `list_findings` still refuses when
+  no scan has run for the root, and that refusal is unchanged. A completed scan
+  that found nothing answers normally, with its scope, saying what it inspected
+  while finding nothing — which is a different statement.
+
 - **A history scan discloses what it suppressed, as a count.** The scope
   sentence `secretloop_history_scan` returns now carries the inline-suppression
   counts the CLI's has always carried — *N finding(s) suppressed by inline

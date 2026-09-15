@@ -126,9 +126,17 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   same selection; the tool now asks `scanHistory` for the accounting it already
   produces and passes it to the shared formatter. Aggregate only: counts, never
   reason text or a suppressed finding. The gap predated the suppression work.
-- **binaryIdentity path normalization** — implemented on a branch, not merged
-  and not published. `binaryIdentity` rewrote `\` to `/`, so on POSIX a real
-  file named `dir\file.png` produced the same exclusion identity as the
+- **MCP finding scope** — implemented on a branch, not merged and not published.
+  `secretloop_list_findings` returned findings with no `scope` key at all (the
+  earlier note that it returned `scope: null` did not describe the source), so a
+  client got rows with no account of what had been inspected. The session cache
+  now stores the scan's scope beside the findings it describes and the tool
+  returns it. Additive and response-level: the cache has one writer, so each
+  entry is one working-tree scan of one root, and no per-finding field was added.
+  History writes nothing to that cache, so origins cannot mix.
+- **binaryIdentity path normalization** — **merged (PR #78), not published.**
+  `binaryIdentity` rewrote `\` to `/`, so on POSIX a real file named
+  `dir\file.png` produced the same exclusion identity as the
   unrelated path `dir/file.png`. It now takes canonical, repository-relative,
   `/`-separated paths and refuses ambiguous or non-canonical input outright,
   withholding the whole digest rather than dropping a path or claiming the empty
