@@ -4,7 +4,10 @@ The `secretloop` command is the same engine the extension and the MCP server run
 All three read the same `.secretloop.json`, so "passed locally, failed in CI"
 cannot come from a different rule set.
 
-Applies to **published 0.5.1**.
+Applies to **published 0.5.1**, except where a line says otherwise. Two things on
+this page are **merged on `main` and prepared as 0.6.0, not published**: the
+`compare` command with its own exit codes, and the JSON report's comparison
+metadata. Each is marked where it appears.
 
 ## Commands
 
@@ -13,7 +16,7 @@ Applies to **published 0.5.1**.
 | `scan` | Scan the working tree (the default when no command is given). |
 | `staged` | Scan staged changes only. This is what the pre-commit hook runs. |
 | `history` | Scan git history for secrets committed at any point, including ones deleted later. |
-| `compare` | Compare two saved JSON reports (older first). Reads files only — never rescans, verifies or contacts a provider. Results name the rule and identity digest; scanned paths are not echoed. |
+| `compare` | **New in 0.6.0 — not published.** Compare two saved JSON reports (older first), working-tree reports only. Reads files only — never rescans, verifies or contacts a provider. Results name the rule and identity digest; scanned paths are not echoed. |
 | `mask` | Read stdin, write it back with every secret replaced by `[REDACTED:<rule-id>]`. |
 | `approve <fingerprint>` | Authorize one credential verification that an MCP client requested. Interactive only. |
 | `help` / `version` | Print the help text or the version. |
@@ -52,10 +55,12 @@ baseline; see [Configuration](configuration.md#precedence).
 | `1` | Something did. stderr says how many findings met the threshold, which threshold, and where the report went. |
 | any other | A real failure: an unreadable configuration, a bad flag, a scan that could not run, an unsupported Node version. |
 
-`compare` uses its own codes: `0` compared with nothing new, `1` compared with
-new findings, `2` unusable input, and `3` **the pair is not comparable** and no
-difference was computed. `3` is separate so a contract refusal can never be
-mistaken for a clean comparison. See [The JSON report](reports.md#the-comparator).
+`compare` and these codes are **new in 0.6.0 and not published** — an installed
+0.5.1 has no `compare` command. It uses its own codes: `0` compared with nothing
+new, `1` compared with new findings, `2` unusable input, and `3` **the pair is
+not comparable** and no difference was computed. `3` is separate so a contract
+refusal can never be mistaken for a clean comparison. See
+[The JSON report](reports.md#the-comparator).
 
 The count on exit `1` is the number that **met the threshold**, not the number
 found: a scan with forty medium findings and one critical reports one finding
@@ -207,9 +212,10 @@ empty result.
 
 ## The JSON report
 
-The comparison metadata described here is **merged but not yet released**:
-published 0.5.1 does not emit it. Everything else on this page applies to
-published 0.5.1.
+The comparison metadata described here is **merged and prepared as 0.6.0, not
+published**: an installed 0.5.1 does not emit it. The `compare` command above is
+new in the same unpublished 0.6.0 and is marked there. **Everything else** on
+this page applies to published 0.5.1.
 
 `--format json` carries the findings plus metadata identifying the scan: which
 tool version, which repository ancestry, which effective configuration and rule

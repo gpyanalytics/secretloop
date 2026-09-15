@@ -1,7 +1,12 @@
 # Coverage
 
 What a scan reads, what it deliberately does not, and how it says so. Applies to
-**published 0.5.1**.
+**published 0.5.1**, except for four scope clauses marked below. Published 0.5.1
+prints one combined `N file(s) not scanned — binary or unreadable` clause and
+counts all of it against completeness; the separated clauses — `binary`,
+`could not be read`, `not a regular file`, `gone before they could be read` — and
+the binary skip no longer making a report incomplete are **merged on `main` and
+prepared as 0.6.0, not published**.
 
 ## What is scanned
 
@@ -103,10 +108,11 @@ sentence and the JSON `summary` carry:
 | `N generic finding(s) suppressed in test/fixture paths` | entropy-tier findings held back |
 | `N API description document(s) scanned without generic entropy` | documents the entropy tier skipped |
 | `N file(s) not scanned — larger than maxFileSizeBytes` | oversized files |
-| `N file(s) not scanned — binary` | a NUL byte in the first 8,000 bytes — intentionally out of scope, so it **does not** make the report incomplete. Catches UTF-16/UTF-32 text too, and does not establish the file is secret-free |
-| `N file(s) not scanned — could not be read` | the scan intended to read them and could not — permission, I/O, or a supported binary format it could not conclusively inspect |
-| `N path(s) not scanned — not a regular file` | a directory, fifo, socket or device where a file was expected |
-| `N file(s) not scanned — gone before they could be read` | enumerated, then absent by the time the read reached them |
+| `N file(s) not scanned — binary` | **0.6.0, not published.** A NUL byte in the first 8,000 bytes — intentionally out of scope, so it **does not** make the report incomplete. The bytes are read; the content is never scanned. Catches UTF-16/UTF-32 text too, and does not establish the file is secret-free |
+| `N file(s) not scanned — could not be read` | **0.6.0, not published.** The scan intended to read them and could not — permission, I/O, or a supported binary format it could not conclusively inspect |
+| `N path(s) not scanned — not a regular file` | **0.6.0, not published.** A directory, fifo, socket or device where a file was expected |
+| `N file(s) not scanned — gone before they could be read` | **0.6.0, not published.** Enumerated, then absent by the time the read reached them |
+| `N file(s) not scanned — binary or unreadable` | **published 0.5.1.** The single combined clause the four rows above replace. It makes the report incomplete, binary files included |
 | `N archive(s) opened — M member(s) scanned` | containers opened, members offered to the scanner |
 | `N archive member(s) not scanned` | members refused; reasons in `summary.archives.members.refused` |
 | `N archive member(s) excluded by configuration` | members matching `excludePaths` |

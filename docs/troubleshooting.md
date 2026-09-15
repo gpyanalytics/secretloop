@@ -1,7 +1,9 @@
 # Troubleshooting
 
 The messages SecretLoop prints when it refuses, cannot look, or gates a build,
-and what each one means. Applies to **published 0.5.1**.
+and what each one means. Applies to **published 0.5.1**, except for the separated
+skip clauses marked below, which are **merged on `main` and prepared as 0.6.0, not
+published**.
 
 ## Exit codes
 
@@ -47,7 +49,9 @@ corrupt. It is named so you know which file to fix.
 **`N file(s) not scanned — larger than maxFileSizeBytes`** — raise
 `maxFileSizeBytes` in `.secretloop.json` if those files matter.
 
-**`N file(s) not scanned — binary`** — a NUL byte in the first 8,000 bytes:
+**`N file(s) not scanned — binary`** — **0.6.0, not published; published 0.5.1
+prints `binary or unreadable` instead and counts it against completeness.** A NUL
+byte in the first 8,000 bytes:
 input a text scanner is not meant to read. An intentional exclusion, so it is
 disclosed but does **not** make the report incomplete. PKCS#12 keystores are
 still detected structurally, and archives are still opened — neither is counted
@@ -62,8 +66,9 @@ the top of a large source file therefore costs you the whole file. A binary file
 whose first 8,000 bytes carry no NUL is *not* caught and is scanned as text. If you keep credentials in a
 UTF-16 file, convert it to UTF-8 to bring it into scope.
 
-**`N file(s) not scanned — could not be read`** — the scan meant to read these
-and could not: a permission or I/O failure, or a binary format it supports but
+**`N file(s) not scanned — could not be read`** — **0.6.0, not published; see
+above.** The scan meant to read these and could not: a permission or I/O
+failure, or a binary format it supports but
 could not conclusively inspect. Unlike a binary skip, this **does** make the
 report incomplete, because "we could not look" is never evidence that nothing
 was there.

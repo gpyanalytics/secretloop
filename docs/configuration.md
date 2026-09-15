@@ -5,7 +5,11 @@ CLI, the VS Code extension and the MCP server. Only that filename is read; there
 is no fallback to any other name. A documented template ships in the repository
 as `.secretloop.example.json`.
 
-Applies to **published 0.5.1**.
+Applies to **published 0.5.1**, except for [Recording why](#recording-why) — rule
+scopes on a suppression directive, recorded reasons, and the reason fields in the
+baseline and project file. That whole section is **merged on `main` and prepared
+as 0.6.0, not published**: published 0.5.1 reads a bare `secretloop:allow` and
+nothing else of it.
 
 ## Keys
 
@@ -70,6 +74,12 @@ first-class and every suppression is disclosed in the scope sentence.
   `excludeRules` to turn a rule off, `excludePaths` for a directory.
 
 ### Recording why
+
+**New in 0.6.0 — merged, not published.** Everything in this section is on `main`
+and in no published package. Under an installed 0.5.1, `secretloop:allow(rule-id)`
+is not a scope and `-- reason` is not a reason: both are prose after a bare
+directive, which suppresses every rule on the line. The reason fields in the
+baseline and project file are not read there either.
 
 Every mechanism above can say *why*, and none of them has to. An annotation
 written before this existed keeps working unchanged, and a suppression with no

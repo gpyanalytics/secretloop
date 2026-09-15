@@ -1,17 +1,20 @@
 # The JSON report — schema, identities and what they do not establish
 
 `--format json` produces a machine-readable report. Alongside the findings it
-carries **comparison metadata**: identities that let a later tool decide whether
-two reports may be compared at all.
+carries **comparison metadata**: identities that let a comparing tool decide
+whether two reports may be compared at all.
 
-The comparison command does not exist yet. This page documents the metadata it
-will require, because the metadata has to be in reports **before** the tool can
-use them — a report written today is the "before" side of tomorrow's comparison.
+`secretloop compare` reads two such reports and enforces that metadata. It is
+implemented and documented under [The comparator](#the-comparator) below, and it
+admits **working-tree reports only**: a history or staged report is refused, not
+compared.
 
-**Status: merged, not yet released.** This metadata is on `main` and is **not in
-any published package** — published 0.5.1 does not emit it. The `toolVersion`
-value in the example below is illustrative, not a claim about which release
-carries these fields.
+**Status: merged on `main`, prepared as 0.6.0, and not published.** Neither this
+metadata nor the `compare` command is in any published package. npm, Open VSX and
+the VS Code Marketplace all serve **0.5.1**, which emits no comparison metadata
+and has no `compare` command, so nothing on this page describes what an installed
+0.5.1 does. Merged is not published. The `toolVersion` value in the example below
+is illustrative, not a claim about which release carries these fields.
 
 ## Shape
 
@@ -181,17 +184,23 @@ the caller passed in. That distinction is the whole point:
   demonstrably comparable before this field existed, and reported still-present
   secrets as gone.
 
-**Equivalent selections compare equal.** Because the identity is the commit *set*,
-`HEAD~1..HEAD`, an explicit SHA range naming the same commit, and
+**Equivalent selections produce equal digests.** Because the identity is the
+commit *set*, `HEAD~1..HEAD`, an explicit SHA range naming the same commit, and
 `--max-commits 1` on the same repository all produce the same `scopeDigest`. The
 rev-range string and the commit cap are deliberately **not** in the digest: they
 are the request, and two requests that read the same commits describe one scan.
 
-**Different commit sets are incomparable — in this first version.** A commit
-added since the earlier scan changes the set, so the pair is rejected rather than
-having the new commit's findings reported as new. That is conservative and
-deliberate: attributing a difference correctly across two different commit
-populations is the job of a comparison this metadata does not yet support.
+**Equal digests are not eligibility.** This section says what a history digest
+*means* — which selections would be the same selection. It does not say such a
+pair may be compared, and an earlier wording here implied it did. The shipped
+comparator refuses **every** history report as an unsupported scope, identical
+selection included — see [Known limitations](#known-limitations).
+
+Two different commit sets do also produce two different digests, but that is the
+lesser reason, and in practice it is never even reached: the scope refusal is
+raised per side first, and a field already refused is excluded from the
+cross-report equality pass, so two history `scopeDigest` values are never
+compared with each other at all.
 
 **A commit that produced no finding is still part of the selection.** The digest
 covers every commit the parser read, not only the ones that yielded something, so
@@ -383,9 +392,12 @@ the two reports share**. Specifically:
   scanned for a reason the metadata does not capture.
 - **Excluded files may still contain credentials.** An unchanged `binaryDigest`
   says the same *set of paths* was excluded from both scans. It says **nothing
-  about their contents**, which were never read by either scan and may have
-  changed completely between them. A credential can be added to an excluded file
-  and no comparison will ever see it.
+  about their contents**. Those bytes were **read but never scanned**: the
+  classifier tests a buffer the read already filled and then discards it, so no
+  rule ever sees the content. "Not read" would be wrong; "not scanned" is the
+  fact, and either way the contents may have changed completely between the two
+  scans. A credential can be added to an excluded file and no comparison will
+  ever see it.
 - **Staged reports remain ineligible.** They carry no `scopeDigest`, and that is
   unchanged here.
 - **Ambiguous archive and keystore cases remain conservative.** A container the
@@ -529,7 +541,11 @@ trusting that source, not this contract.
 **No report-supplied free text is ever printed.** A report is untrusted input,
 so the comparator builds its output from fields of fixed, closed shape only:
 
-| shown | why it is safe to show |
+Each column below says what **bounds** the field — a closed shape or a closed
+vocabulary. A bounded field is not a field proven to carry no secret; that
+distinction is the point of the paragraph after the table.
+
+| shown | what bounds it |
 |---|---|
 | `ruleId` | taken from the fingerprint and required to be **one of the rule ids this build emits** — membership, not merely grammar |
 | `digest` | the 16-hex tail of the fingerprint — fixed shape, and a verbatim substring of the identity already in the report |
@@ -686,11 +702,19 @@ this metadata does not make.
 content.** That is deliberate — see `scopeDigest` above. Two scans taken months
 apart are eligible, which is exactly what a change comparison needs.
 
-**A history comparison is all-or-nothing in this version.** Any difference in the
-selected commit set makes the pair incomparable, so the common workflow of
-"scan the last 50 commits, then scan again next week" does not compare. Reporting
-a difference correctly across two different commit populations needs attribution
-this contract does not yet carry.
+**History reports are never comparable in this version — not even for an
+identical selection.** The comparator admits working-tree reports only and
+validates that positively, so a history report is refused as an unsupported scope
+however its commit set compares. Two history scans over exactly the same commits
+carry equal, well-formed `scopeDigest` values, and **equality alone does not
+establish eligibility**: the digest says which population was examined, not that
+the population is one this contract supports. A history report also carries no
+`binaryDigest` at all, so it is refused twice over.
+
+Admitting history would need both a supported history scope and attribution
+across two commit populations, and neither exists here. So the workflow of "scan
+the last 50 commits, then scan again next week" does not compare — and neither
+does re-scanning exactly the same commits.
 
 **Staged reports are never comparable.** They carry no scope identity, for the
 reason set out under `scopeDigest` above. Making them comparable requires a
@@ -760,6 +784,10 @@ allowlisted or inline-suppressed project comparable needs a way to identify thos
 suppressions that does not publish a new secret-derived hash. No such scheme is
 adopted here; the safe half — withholding the identity — is what ships.
 
-**No comparison output exists.** Nothing here reports a finding as new,
-persisting or gone, and nothing here claims a finding was resolved. "No longer
-observed" will never mean revoked, safe, rotated or fixed.
+**A comparison output exists; a resolution claim does not.** `compare` reports
+findings as new, persisting or no longer observed — that is what it is for — and
+not one of those words is a claim about the credential. **"No longer observed"
+means the later report does not contain it**, and never that it was resolved,
+removed, revoked, rotated, fixed or made safe. Nothing in this contract can
+distinguish a deleted credential from one that moved, was renamed, or stopped
+being scanned for a reason the metadata does not capture.
