@@ -42,8 +42,17 @@ import { ArchiveAccounting, countOf } from "./archive";
  * and a version-3 report would have qualified as equivalent on a field whose
  * meaning had changed underneath them. Rejecting on the version is the only
  * thing that stops that, because the value itself still type-checks.
+ *
+ * 3 -> 4 ADDED A REQUIRED FIELD, `binaryDigest`, closing the hole that the
+ * 2 -> 3 exemption opened. Under 3 a file could cross into the binary set
+ * between two scans and its findings would vanish with every comparison field
+ * still equal -- measured: insert one NUL into a file holding a credential,
+ * without touching the credential, and the pair stays eligible while the
+ * finding disappears. Version 4 makes the excluded SET part of eligibility, so
+ * that pair is incomparable. The set of required fields changed, which is the
+ * named trigger for a bump on its own.
  */
-export const REPORT_SCHEMA_VERSION = 3;
+export const REPORT_SCHEMA_VERSION = 4;
 
 /**
  * The version of the scope representation `scopeDigest` covers.
@@ -53,6 +62,15 @@ export const REPORT_SCHEMA_VERSION = 3;
  * the report schema version because the two can move independently.
  */
 export const SCOPE_CONTRACT_VERSION = 1;
+
+/**
+ * The version of the binary-exclusion representation `binaryDigest` covers.
+ *
+ * Carried INSIDE the digest input for the same reason as the scope version: a
+ * change to what an exclusion set means must produce a different digest rather
+ * than a silently comparable one.
+ */
+export const BINARY_CONTRACT_VERSION = 1;
 
 /** The comparison-bearing fields. Every optional one means "unknown" when absent. */
 export interface ComparisonMetadata {
@@ -75,6 +93,12 @@ export interface ComparisonMetadata {
    * not be established.
    */
   scopeDigest?: string;
+  /**
+   * Covers WHICH FILES WERE EXCLUDED AS BINARY, so a file crossing into or out
+   * of that set breaks a pair instead of reading as a finding appearing or
+   * disappearing. Omitted when the scan could not establish the exclusion set.
+   */
+  binaryDigest?: string;
   /** True when the scan could not look at something it set out to look at. */
   incomplete: boolean;
 }
@@ -367,6 +391,63 @@ export function scopeIdentity(selection: ScopeSelection | undefined): string | u
     if (!Array.isArray(selection.commits)) return undefined;
   }
   return `scope:${digest(canonical({ v: SCOPE_CONTRACT_VERSION, ...selection }))}`;
+}
+
+/**
+ * The identity of the set of files EXCLUDED AS BINARY.
+ *
+ * WHY THIS EXISTS. Once a binary exclusion stopped making a report incomplete,
+ * a file could cross into the binary set between two scans and its findings
+ * would simply vanish from the second report with every comparison field still
+ * equal. Measured on the real build: a UTF-8 file holding a credential, then
+ * ONE NUL byte inserted without touching the credential -- the finding is gone,
+ * `incomplete` is still false, all eight other fields match, and a conforming
+ * consumer reads the credential as REMOVED while it sits on disk. This digest
+ * is what makes that pair incomparable, because the excluded set changed.
+ *
+ * WHAT IT COVERS. A canonical, sorted, deduplicated set of REPOSITORY-RELATIVE
+ * paths, carried with `BINARY_CONTRACT_VERSION` inside the digest input.
+ *
+ * NORMALIZATION, so two runs of the same tree agree:
+ *   - separators are normalized to `/`, so a Windows and a POSIX run of one
+ *     tree produce one identity;
+ *   - a leading `./` is stripped;
+ *   - duplicates collapse (a Set), and order is irrelevant -- the caller may
+ *     report exclusions in any order, including a different order per run;
+ *   - an ABSOLUTE path is refused outright, returning undefined rather than
+ *     publishing a local directory layout into a report that travels.
+ *
+ * WHAT IT DOES NOT COVER. No file CONTENT is hashed, no credential, and no
+ * absolute path. It is a set of names and nothing else.
+ *
+ * IT IS NOT ANONYMISATION. Paths in a repository are often predictable --
+ * `docs/icon.png`, `assets/logo.gif` -- so a reader holding a candidate list can
+ * test guesses against this digest exactly as they can against `root`. It is a
+ * comparison identity, not concealment, and nothing here should be read as
+ * hiding which files were excluded.
+ *
+ * THE EMPTY SET IS A REAL IDENTITY, not an absence: a scan that excluded
+ * nothing binary gets a digest, and two such scans compare. `undefined` means
+ * something different and stronger -- the producer could not establish the set
+ * at all -- and under the contract that makes the pair ineligible.
+ */
+export function binaryIdentity(paths: readonly string[] | undefined): string | undefined {
+  // Not "no exclusions": no ACCOUNTING. A producer that cannot observe its own
+  // exclusion events must not claim the empty set, which would compare equal to
+  // a scan that genuinely excluded nothing.
+  if (!paths) return undefined;
+  const normalized = new Set<string>();
+  for (const raw of paths) {
+    if (typeof raw !== "string" || raw === "") return undefined;
+    const slashed = raw.replace(/\\/g, "/").replace(/^\.\//, "");
+    // An absolute path means the caller handed us something that is not
+    // repository-relative. Withholding is the honest answer; publishing it
+    // would put a local layout into the report.
+    if (slashed.startsWith("/") || /^[A-Za-z]:\//.test(slashed)) return undefined;
+    normalized.add(slashed);
+  }
+  const sorted = [...normalized].sort();
+  return `binary:${digest(canonical({ v: BINARY_CONTRACT_VERSION, paths: sorted }))}`;
 }
 
 /**

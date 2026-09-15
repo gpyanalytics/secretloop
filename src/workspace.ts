@@ -81,7 +81,13 @@ export interface ScanFilesOptions {
    * list cannot reconstruct how many were dropped -- and a scan that read 20 of
    * 500 files reads exactly like one that had 20 files.
    */
-  onSkipped?: (reason: SkipReason) => void;
+  /**
+   * `relPath` is the path the skip happened to, so a caller can build an
+   * IDENTITY over the set of exclusions rather than only a count. It is passed
+   * from the scan event itself -- never reconstructed by walking the tree a
+   * second time, which could observe a different tree.
+   */
+  onSkipped?: (reason: SkipReason, relPath: string) => void;
   /**
    * Called once per file whose header the archive prefilter accepted but which
    * the parser declined (ZIP64, corrupt directory, undecodable stream). Such a
@@ -157,7 +163,7 @@ export function scanFiles(
           // as an intentionally excluded binary.
           const reason =
             read.skipped === "binary" && pkcs12Admitted ? "unreadable" : read.skipped;
-          options.onSkipped?.(reason);
+          options.onSkipped?.(reason, relPath);
         }
         continue;
       }

@@ -9,6 +9,7 @@ import { mergeConfig } from "../src/config";
 import { describeScope } from "../src/report";
 import {
   coverageLimitations,
+  binaryIdentity,
   REPORT_SCHEMA_VERSION,
 } from "../src/report-metadata";
 import { positiveSamples } from "./fixtures";
@@ -47,6 +48,16 @@ function withDir(fn: (dir: string) => void): void {
   }
 }
 
+/** A real git repo, so `root` is determinate and eligibility can be asserted. */
+function gitInit(dir: string): void {
+  spawnSync("git", ["init", "-q", dir]);
+  spawnSync("git", ["-C", dir, "config", "user.email", "t@t"]);
+  spawnSync("git", ["-C", dir, "config", "user.name", "t"]);
+  writeFileSync(path.join(dir, ".keep"), "x\n");
+  spawnSync("git", ["-C", dir, "add", "-A"]);
+  spawnSync("git", ["-C", dir, "commit", "-qm", "init"]);
+}
+
 const json = (dir: string, args: string[] = []) =>
   JSON.parse(cli(["scan", "--format", "json", ...args], dir).stdout);
 
@@ -68,6 +79,44 @@ function writeAdmittedDer(dir: string, name: string): void {
   const body = Buffer.alloc(100);
   const header = Buffer.from([0x30, 0x82, (body.length >> 8) & 0xff, body.length & 0xff]);
   writeFileSync(path.join(dir, name), Buffer.concat([header, body]));
+}
+
+/**
+ * REFERENCE MODEL -- NOT SHIPPED CODE.
+ *
+ * SecretLoop ships no comparator. This implements the nine-field eligibility
+ * contract in docs/reports.md so the tests can assert what a CONFORMING
+ * CONSUMER would decide. Every assertion using it is a statement about the
+ * CONTRACT; assertions about findings, scope sentences and emitted fields are
+ * statements about PRODUCT BEHAVIOUR. The two are labelled separately
+ * throughout, and must never be read as the same claim.
+ */
+const PATTERNS: Record<string, RegExp> = {
+  root: /^git:[0-9a-f]{16}$/,
+  configDigest: /^[0-9a-f]{16}$/,
+  ruleSetDigest: /^[0-9a-f]{16}$/,
+  suppressionDigest: /^[0-9a-f]{16}$/,
+  scopeDigest: /^scope:[0-9a-f]{16}$/,
+  binaryDigest: /^binary:[0-9a-f]{16}$/,
+};
+function eligible(a: any, b: any): { ok: boolean; why: string[] } {
+  const why: string[] = [];
+  for (const r of [a, b]) {
+    if (r?.schemaVersion !== 4) why.push(`unsupported schemaVersion ${r?.schemaVersion}`);
+    if (r?.incomplete !== false) why.push("incomplete is not false in both");
+  }
+  if (a?.toolVersion !== b?.toolVersion) why.push("toolVersion differs");
+  for (const r of [a, b]) {
+    if (typeof r?.toolVersion !== "string" || r.toolVersion.trim() === "") why.push("toolVersion invalid");
+  }
+  for (const [f, re] of Object.entries(PATTERNS)) {
+    for (const r of [a, b]) {
+      const v = r?.[f];
+      if (typeof v !== "string" || !re.test(v)) { why.push(`${f} missing or malformed`); }
+    }
+    if (a?.[f] !== b?.[f]) why.push(`${f} differs`);
+  }
+  return { ok: why.length === 0, why };
 }
 
 // ---------------------------------------------------------------------------
@@ -330,14 +379,14 @@ test("the schema version moved, so the two meanings cannot silently compare", ()
   // changes — explicitly including "what `incomplete` counts". A version-2
   // report saying `incomplete: true` may describe nothing worse than an image;
   // a version-3 report saying the same describes a real failure to look.
-  assert.strictEqual(REPORT_SCHEMA_VERSION, 3);
+  assert.strictEqual(REPORT_SCHEMA_VERSION, 4);
   withDir((dir) => {
     writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n");
-    assert.strictEqual(json(dir).schemaVersion, 3, "emitted reports must carry the new version");
+    assert.strictEqual(json(dir).schemaVersion, 4, "emitted reports must carry the new version");
   });
 });
 
-test("the same tree that was incomplete under v2 is complete under v3, and says why", () => {
+test("the same tree that was incomplete under v2 is complete under v4, and says why", () => {
   withDir((dir) => {
     writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n");
     writeBinary(dir, "logo.png");
@@ -345,7 +394,7 @@ test("the same tree that was incomplete under v2 is complete under v3, and says 
     // Under schema 2 this exact tree reported incomplete: true with
     // ["1 file(s) not scanned — binary or unreadable"]. Both changed together —
     // which is precisely why the version had to move with them.
-    assert.strictEqual(d.schemaVersion, 3);
+    assert.strictEqual(d.schemaVersion, 4);
     assert.strictEqual(d.incomplete, false);
     assert.deepStrictEqual(d.summary.coverage.limitations, []);
     assert.match(d.summary.scope, /not scanned — binary/);
@@ -381,20 +430,13 @@ test("a supported ARCHIVE whose parser declined it stays a limitation, disclosed
   });
 });
 
-test("KNOWN GAP: a NUL turns a found secret into an eligible-looking absence", () => {
-  // The boundary this exemption opens, pinned so it cannot be lost silently.
+test("CLOSED: a NUL no longer turns a found secret into an eligible absence", () => {
+  // The INVERSE of the gap this suite used to pin. Same scenario exactly; the
+  // verdict is now the opposite, and `binaryDigest` is what changes it.
   //
-  // Scan a file, find a credential. Insert ONE NUL byte and rescan WITHOUT
-  // touching the credential. The file is now classified binary, so the finding
-  // disappears and -- because binary no longer counts -- the report still says
-  // `incomplete: false`. All eight required fields match across the pair, so a
-  // consumer implementing docs/reports.md would call it ELIGIBLE and read the
-  // credential as GONE while it sits on disk, unchanged.
-  //
-  // This is PRODUCT BEHAVIOUR for the emitted fields only. SecretLoop ships no
-  // comparator, so nothing in the product reports anything as gone today. The
-  // "eligible" half is a REFERENCE-MODEL result: the documented contract
-  // applied to these two reports by hand.
+  // SCANNER OUTPUT (product behaviour): the finding still disappears and
+  // `incomplete` is still false -- that part was never the defect. What is new
+  // is that the two reports no longer carry the same excluded-set identity.
   withDir((dir) => {
     const file = path.join(dir, "app.js");
     writeFileSync(file, `const token = "${TOKEN}";\n`);
@@ -402,38 +444,222 @@ test("KNOWN GAP: a NUL turns a found secret into an eligible-looking absence", (
     assert.strictEqual(a.findings.length, 1, "the credential is found first time");
     assert.strictEqual(a.incomplete, false);
 
-    // One NUL, prepended inside a comment. The credential is untouched.
     const withNul = Buffer.concat([Buffer.from("// \u0000\n"), Buffer.from(`const token = "${TOKEN}";\n`)]);
     writeFileSync(file, withNul);
     assert.ok(withNul.includes(Buffer.from(TOKEN)), "the credential must still be on disk");
     const b = json(dir);
-
     assert.strictEqual(b.findings.length, 0, "the finding is gone from the report");
     assert.strictEqual(b.incomplete, false, "and the report still claims completeness");
 
-    // Every comparison-bearing field is equal across the pair.
+    // Everything else still matches -- which is exactly why a ninth field was
+    // needed rather than a tweak to one of the existing eight.
     for (const f of ["schemaVersion", "toolVersion", "root", "configDigest",
                      "ruleSetDigest", "suppressionDigest", "scopeDigest"] as const) {
-      assert.deepStrictEqual(a[f], b[f], `${f} differs, which would have saved the pair`);
+      assert.deepStrictEqual(a[f], b[f], `${f} differs; the pair would have failed on it anyway`);
     }
-
-    // The ONLY thing distinguishing the two reports is prose, and the binary
-    // count is not machine-readable anywhere. If a future change makes the
-    // exclusion identifiable, this assertion is the one to revisit.
-    assert.ok(!JSON.stringify(b).includes("binaryExcluded"),
-      "the binary exclusion is still prose-only; update the contract correction if this changes");
-    assert.match(b.summary.scope, /not scanned — binary/,
-      "the disclosure is the only signal a reader gets");
+    // REFERENCE MODEL: the eligibility verdict.
+    assert.notDeepStrictEqual(a.binaryDigest, b.binaryDigest,
+      "the excluded set changed from {} to {app.js}; the pair MUST be incomparable");
+    assert.strictEqual(eligible(a, b).ok, false, "a still-present credential must not read as removed");
   });
 });
 
-test("a report that still cannot look is incomplete under v3 too", () => {
+test("removing the NUL again is also incomparable", () => {
+  withDir((dir) => {
+    const file = path.join(dir, "app.js");
+    writeFileSync(file, Buffer.concat([Buffer.from("// \u0000\n"), Buffer.from(`const t = "${TOKEN}";\n`)]));
+    const a = json(dir);
+    // Going the other way must fail too: a finding APPEARING because a file
+    // left the binary set is no more comparable than one disappearing.
+    writeFileSync(file, `const t = "${TOKEN}";\n`);
+    const b = json(dir);
+    assert.strictEqual(a.findings.length, 0);
+    assert.strictEqual(b.findings.length, 1);
+    assert.notDeepStrictEqual(a.binaryDigest, b.binaryDigest);
+    assert.strictEqual(eligible(a, b).ok, false);
+  });
+});
+
+test("equal exclusion COUNTS with different excluded paths are incomparable", () => {
+  // The case a count could never catch: one file enters the binary set as
+  // another leaves it, so "1 file(s) not scanned — binary" is identical in both
+  // reports and only the SET distinguishes them.
+  withDir((dir) => {
+    const nul = (t: string) => Buffer.concat([Buffer.from("// \u0000\n"), Buffer.from(t)]);
+    writeFileSync(path.join(dir, "a.js"), nul("const a = 1;\n"));
+    writeFileSync(path.join(dir, "b.js"), "const b = 1;\n");
+    const a = json(dir);
+    writeFileSync(path.join(dir, "a.js"), "const a = 1;\n");
+    writeFileSync(path.join(dir, "b.js"), nul("const b = 1;\n"));
+    const b = json(dir);
+    assert.match(a.summary.scope, /1 file\(s\) not scanned — binary/);
+    assert.match(b.summary.scope, /1 file\(s\) not scanned — binary/, "the COUNTS are identical");
+    assert.notDeepStrictEqual(a.binaryDigest, b.binaryDigest, "but the SETS differ");
+    assert.strictEqual(eligible(a, b).ok, false);
+  });
+});
+
+test("unchanged excluded images plus changed scanned text stays eligible", () => {
+  // The benefit the schema-3 change exists to deliver must survive schema 4:
+  // ordinary edits to scanned text keep comparing.
+  withDir((dir) => {
+    gitInit(dir);
+    writeBinary(dir, "logo.png");
+    writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
+    const a = json(dir);
+    writeFileSync(path.join(dir, "app.js"), "const a = 2;\nconst b = 3;\n");
+    const b = json(dir);
+    assert.deepStrictEqual(a.binaryDigest, b.binaryDigest, "the excluded set did not change");
+    // REFERENCE MODEL: eligible.
+    assert.strictEqual(eligible(a, b).ok, true, eligible(a, b).why.join("; "));
+  });
+});
+
+test("exclusion order does not matter: the digest is over a set", () => {
+  assert.strictEqual(
+    binaryIdentity(["b/two.png", "a/one.gif", "b/two.png"]),
+    binaryIdentity(["a/one.gif", "b/two.png"]),
+    "duplicates collapse and order is irrelevant"
+  );
+  assert.strictEqual(
+    binaryIdentity(["./a/one.gif", "a\\two.png"]),
+    binaryIdentity(["a/one.gif", "a/two.png"]),
+    "a leading ./ is stripped and separators are normalized"
+  );
+  assert.notStrictEqual(binaryIdentity(["a.png"]), binaryIdentity(["b.png"]));
+});
+
+test("empty set is an identity; unavailable accounting is not", () => {
+  const empty = binaryIdentity([]);
+  assert.match(String(empty), /^binary:[0-9a-f]{16}$/, "an empty set gets a real identity");
+  assert.strictEqual(binaryIdentity(undefined), undefined, "unavailable accounting has none");
+  assert.notStrictEqual(empty, binaryIdentity(["x.png"]));
+  // Two scans that excluded nothing must compare with each other.
+  assert.strictEqual(binaryIdentity([]), binaryIdentity([]));
+});
+
+test("an absolute path is refused rather than published", () => {
+  // A report travels; a local layout has no business in one. Withholding makes
+  // the pair ineligible, which is the safe direction.
+  assert.strictEqual(binaryIdentity(["/etc/secret.png"]), undefined);
+  assert.strictEqual(binaryIdentity(["C:/Users/x/a.png"]), undefined);
+  assert.strictEqual(binaryIdentity([""]), undefined);
+});
+
+test("no file content, credential or absolute path reaches the digest", () => {
+  // The digest input is names only. Same paths, wildly different contents.
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "blob.bin"), Buffer.from([0x00, 0x01, 0x02]));
+    const a = json(dir);
+    writeFileSync(path.join(dir, "blob.bin"), Buffer.concat([Buffer.from([0]), Buffer.from(TOKEN)]));
+    const b = json(dir);
+    assert.deepStrictEqual(a.binaryDigest, b.binaryDigest,
+      "contents changed, the path set did not, so the identity must not move");
+    assert.ok(!JSON.stringify(b).includes(TOKEN), "no credential is emitted");
+    assert.ok(!JSON.stringify(b).includes(dir), "no absolute path is emitted");
+  });
+});
+
+test("PRODUCER TRACE: only a producer that observes exclusions claims the set", () => {
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
+    spawnSync("git", ["init", "-q", dir]);
+    spawnSync("git", ["-C", dir, "config", "user.email", "t@t"]);
+    spawnSync("git", ["-C", dir, "config", "user.name", "t"]);
+    spawnSync("git", ["-C", dir, "add", "-A"]);
+    spawnSync("git", ["-C", dir, "commit", "-qm", "init"]);
+
+    const scan = json(dir);
+    assert.match(String(scan.binaryDigest), /^binary:[0-9a-f]{16}$/,
+      "a file scan observes every skip, so it may claim the set");
+
+    // history reads blobs and emits no file-level exclusion events, so it
+    // cannot establish the set and must NOT invent one.
+    const hist = JSON.parse(cli(["history", "--format", "json"], dir).stdout);
+    assert.ok(!("binaryDigest" in hist), "history must not fabricate an exclusion identity");
+    assert.strictEqual(eligible(hist, hist).ok, false, "and is therefore ineligible");
+  });
+});
+
+test("REFERENCE MODEL: invalid, missing or mismatched binaryDigest is rejected", () => {
+  const base = {
+    schemaVersion: 4, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
+    configDigest: "b".repeat(16), ruleSetDigest: "c".repeat(16),
+    suppressionDigest: "d".repeat(16), scopeDigest: "scope:" + "e".repeat(16),
+    binaryDigest: "binary:" + "f".repeat(16), incomplete: false,
+  };
+  assert.strictEqual(eligible(base, { ...base }).ok, true, "the control pair must be eligible");
+
+  const { binaryDigest, ...missing } = base;
+  for (const [label, bad] of [
+    ["missing", missing],
+    ["null", { ...base, binaryDigest: null }],
+    ["empty", { ...base, binaryDigest: "" }],
+    ["whitespace", { ...base, binaryDigest: "   " }],
+    ["wrong type", { ...base, binaryDigest: 7 }],
+    ["malformed", { ...base, binaryDigest: "binary:xyz" }],
+    ["unprefixed", { ...base, binaryDigest: "f".repeat(16) }],
+    ["mismatched", { ...base, binaryDigest: "binary:" + "0".repeat(16) }],
+  ] as const) {
+    assert.strictEqual(eligible(base, bad as any).ok, false, `${label} binaryDigest must be rejected`);
+  }
+  // A shared absence is still an absence.
+  assert.strictEqual(eligible(missing as any, missing as any).ok, false,
+    "two reports that BOTH omit it are not thereby comparable");
+});
+
+test("REFERENCE MODEL: schema versions 1, 2 and 3 are unsupported", () => {
+  const ok = {
+    schemaVersion: 4, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
+    configDigest: "b".repeat(16), ruleSetDigest: "c".repeat(16),
+    suppressionDigest: "d".repeat(16), scopeDigest: "scope:" + "e".repeat(16),
+    binaryDigest: "binary:" + "f".repeat(16), incomplete: false,
+  };
+  for (const v of [1, 2, 3, 99]) {
+    assert.strictEqual(eligible({ ...ok, schemaVersion: v }, { ...ok, schemaVersion: v }).ok, false,
+      `schemaVersion ${v} must be rejected even when both sides agree`);
+  }
+  // A version-3 report is rejected twice over: unsupported version AND no
+  // binaryDigest, so nothing establishes which files it declined to look at.
+  const { binaryDigest, ...v3 } = { ...ok, schemaVersion: 3 };
+  const why = eligible(v3 as any, v3 as any).why.join("; ");
+  assert.match(why, /schemaVersion/);
+  assert.match(why, /binaryDigest/);
+});
+
+test("REFERENCE MODEL: a partial scan cannot claim complete accounting", () => {
+  // incomplete gates before binaryDigest is ever consulted, so an interrupted
+  // or failed scan is ineligible regardless of what set it managed to observe.
+  const base = {
+    schemaVersion: 4, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
+    configDigest: "b".repeat(16), ruleSetDigest: "c".repeat(16),
+    suppressionDigest: "d".repeat(16), scopeDigest: "scope:" + "e".repeat(16),
+    binaryDigest: "binary:" + "f".repeat(16), incomplete: true,
+  };
+  assert.strictEqual(eligible(base, { ...base }).ok, false,
+    "incomplete: true on both sides must not permit comparison");
+});
+
+test("a genuine read failure keeps a report ineligible even with a valid binaryDigest", () => {
+  // PRODUCT BEHAVIOUR plus REFERENCE MODEL: the conservative paths are unchanged
+  // by the new field.
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n");
+    const clean = json(dir);
+    writeAdmittedDer(dir, "store.p12");
+    const failed = json(dir);
+    assert.strictEqual(failed.incomplete, true, "an inconclusive supported-format read still fails");
+    assert.strictEqual(eligible(clean, failed).ok, false);
+  });
+});
+
+test("a report that still cannot look is incomplete under v4 too", () => {
   withDir((dir) => {
     writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n");
     writeAdmittedDer(dir, "store.p12");
     const d = json(dir);
-    assert.strictEqual(d.schemaVersion, 3);
-    assert.strictEqual(d.incomplete, true, "v3 must not have weakened real failures");
+    assert.strictEqual(d.schemaVersion, 4);
+    assert.strictEqual(d.incomplete, true, "v4 must not have weakened real failures");
   });
 });
 

@@ -41,11 +41,34 @@ heading below.
   - The CLI and MCP skip tallies are now exhaustive over the reason type, so a
     future reason cannot silently be absorbed into `unreadable` on one surface
     and something else on the other.
-  - **`schemaVersion` is now `3`.** `incomplete` counts a strictly narrower set
+  - **`binaryDigest` identifies WHICH files were excluded as binary**, and is
+    the ninth required comparison field. Without it, the exemption above opened
+    a hole: a file could cross *into* the binary set between two scans and its
+    findings would vanish while every comparison field stayed equal. Measured —
+    insert one NUL into a file holding a credential, without touching the
+    credential, and the pair stayed eligible while the finding disappeared, so a
+    consumer would read a still-present credential as removed. The digest covers
+    a canonical, sorted, deduplicated set of repository-relative paths, carried
+    with its own contract version; separators are normalized to `/`, a leading
+    `./` is stripped, and an absolute path is refused rather than published.
+    **No file content, credential or absolute path is hashed.**
+    - It is derived from the scan's own exclusion events, never from a second
+      walk of the tree that might observe something different.
+    - **An empty set is a real identity**, so two scans that excluded nothing
+      compare. A producer that cannot observe its own exclusion events omits the
+      field instead, which makes the pair ineligible — `history` does exactly
+      that, because it reads blobs and emits no file-level exclusion events. A
+      stopped scan omits it too, its set being partial.
+    - It is **not anonymisation**: repository paths are often predictable, so a
+      candidate list can be tested against the digest exactly as against `root`.
+  - **`schemaVersion` is now `4`.** `incomplete` counts a strictly narrower set
     of facts than it did under 2, and the boolean still type-checks either way —
     so the version is the only thing preventing a version-2 report and a
     version-3 report from comparing across two different meanings of one field.
-    A consumer implementing this contract accepts `3` and rejects `2` and `1`.
+    Versions 1, 2 and 3 are unsupported: a consumer implementing this contract
+    accepts `4` and rejects everything else. Version 3 is rejected because it
+    carries no `binaryDigest`, so nothing establishes which files it declined to
+    look at.
   - No detector, finding, fingerprint, consent, suppression identity or provider
     behaviour changed. On a fixed corpus the findings and their fingerprints are
     byte-identical before and after.
