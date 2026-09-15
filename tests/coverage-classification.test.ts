@@ -18,7 +18,7 @@ import { buildZip } from "./archive-builders";
  * INTENTIONAL EXCLUSION IS NOT INABILITY TO INSPECT.
  *
  * `SkipReason` carried one bucket, `unreadable`, for four unrelated events: a
- * confirmed binary file, a path that was not a regular file, a path that had
+ * file classified binary, a path that was not a regular file, a path that had
  * gone away, and a read that threw. Its own disclosure said "binary or
  * unreadable" because it genuinely could not tell which had happened.
  *
@@ -273,14 +273,16 @@ test("UTF-16 text carrying a live-format token is classified binary", () => {
   });
 });
 
-test("text with an embedded NUL is classified binary, and nothing after it is read", () => {
+test("text with an embedded NUL is classified binary: read in full, scanned not at all", () => {
   withDir((dir) => {
     writeFileSync(
       path.join(dir, "secret.txt"),
       Buffer.concat([Buffer.from("header\u0000marker\n"), Buffer.from(`token = "${TOKEN}"\n`)])
     );
     const d = json(dir);
-    assert.strictEqual(d.findings.length, 0, "the token after the NUL is never reached");
+    // The file is READ in full -- the classifier runs on bytes already in
+    // memory. What does not happen is SCANNING, so no rule sees the token.
+    assert.strictEqual(d.findings.length, 0, "the token is never scanned, though its bytes were read");
     assert.match(d.summary.scope, /not scanned — binary/);
   });
 });
@@ -376,6 +378,52 @@ test("a supported ARCHIVE whose parser declined it stays a limitation, disclosed
 
     const d = json(dir);
     assert.strictEqual(d.incomplete, true, "a declined container must still make the report incomplete");
+  });
+});
+
+test("KNOWN GAP: a NUL turns a found secret into an eligible-looking absence", () => {
+  // The boundary this exemption opens, pinned so it cannot be lost silently.
+  //
+  // Scan a file, find a credential. Insert ONE NUL byte and rescan WITHOUT
+  // touching the credential. The file is now classified binary, so the finding
+  // disappears and -- because binary no longer counts -- the report still says
+  // `incomplete: false`. All eight required fields match across the pair, so a
+  // consumer implementing docs/reports.md would call it ELIGIBLE and read the
+  // credential as GONE while it sits on disk, unchanged.
+  //
+  // This is PRODUCT BEHAVIOUR for the emitted fields only. SecretLoop ships no
+  // comparator, so nothing in the product reports anything as gone today. The
+  // "eligible" half is a REFERENCE-MODEL result: the documented contract
+  // applied to these two reports by hand.
+  withDir((dir) => {
+    const file = path.join(dir, "app.js");
+    writeFileSync(file, `const token = "${TOKEN}";\n`);
+    const a = json(dir);
+    assert.strictEqual(a.findings.length, 1, "the credential is found first time");
+    assert.strictEqual(a.incomplete, false);
+
+    // One NUL, prepended inside a comment. The credential is untouched.
+    const withNul = Buffer.concat([Buffer.from("// \u0000\n"), Buffer.from(`const token = "${TOKEN}";\n`)]);
+    writeFileSync(file, withNul);
+    assert.ok(withNul.includes(Buffer.from(TOKEN)), "the credential must still be on disk");
+    const b = json(dir);
+
+    assert.strictEqual(b.findings.length, 0, "the finding is gone from the report");
+    assert.strictEqual(b.incomplete, false, "and the report still claims completeness");
+
+    // Every comparison-bearing field is equal across the pair.
+    for (const f of ["schemaVersion", "toolVersion", "root", "configDigest",
+                     "ruleSetDigest", "suppressionDigest", "scopeDigest"] as const) {
+      assert.deepStrictEqual(a[f], b[f], `${f} differs, which would have saved the pair`);
+    }
+
+    // The ONLY thing distinguishing the two reports is prose, and the binary
+    // count is not machine-readable anywhere. If a future change makes the
+    // exclusion identifiable, this assertion is the one to revisit.
+    assert.ok(!JSON.stringify(b).includes("binaryExcluded"),
+      "the binary exclusion is still prose-only; update the contract correction if this changes");
+    assert.match(b.summary.scope, /not scanned — binary/,
+      "the disclosure is the only signal a reader gets");
   });
 });
 

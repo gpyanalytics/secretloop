@@ -55,9 +55,11 @@ here.
 
 The test is a probe, not a proof, and it does **not** mean the file is free of
 secrets — only that nothing looked. **UTF-16 and UTF-32 text lands here**, since
-those encodings pad ASCII with NUL; so does any text with an embedded NUL, and
-nothing after that NUL is read. A binary file whose first 8,000 bytes carry no
-NUL is *not* caught and is scanned as text. If you keep credentials in a
+those encodings pad ASCII with NUL; so does any text with an embedded NUL. Such
+a file is still read in full — the test runs on bytes already in memory — but
+none of its content is *scanned*, before or after the NUL. One stray NUL near
+the top of a large source file therefore costs you the whole file. A binary file
+whose first 8,000 bytes carry no NUL is *not* caught and is scanned as text. If you keep credentials in a
 UTF-16 file, convert it to UTF-8 to bring it into scope.
 
 **`N file(s) not scanned — could not be read`** — the scan meant to read these

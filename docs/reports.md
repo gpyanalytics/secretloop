@@ -297,8 +297,11 @@ proof. Its boundary, stated precisely:
   Such a file would not scan usefully in any case — the reader is UTF-8 only and
   selects no decoder from a BOM or from content — so it is outside the supported
   scan scope either way.
-- **Text carrying an embedded NUL is classified binary**, and nothing after that
-  NUL is read.
+- **Text carrying an embedded NUL is classified binary.** The file is still read
+  in full — the classifier runs on bytes already in memory — but none of its
+  content is *scanned*, before or after the NUL. In this repository
+  `tests/verify-consent.test.ts` is a 47 KB TypeScript source carrying one NUL
+  at offset 1867, so 96% of it goes unscanned.
 - **A binary file whose first 8,000 bytes happen to carry no NUL is not
   classified binary.** It takes the text path and is scanned as text.
 
@@ -418,6 +421,39 @@ from the repository it came from.
 **No claim is made about renaming, resolution or remediation.** Absence from a
 later report means it was not observed there. It never means fixed, moved,
 rotated or revoked.
+
+**A binary exclusion can turn a found secret into an eligible absence — the
+contract is not yet safe against this, and the correction is proposed below.**
+
+Scan a UTF-8 file holding a credential: it is found, and the report is complete.
+Insert one NUL byte anywhere in the first 8,000 bytes **without touching the
+credential** and scan again. The file is now classified binary, so the finding
+disappears; and because a binary exclusion no longer counts toward `incomplete`,
+the second report still says `incomplete: false`. All eight required fields are
+equal across the pair, so the pair is **eligible**, and a consumer would read
+the credential as *gone* while it sits on disk unchanged. Under schema 2 the
+second report was `incomplete: true` and the pair was correctly incomparable.
+
+Two things that do **not** fix it:
+
+- **A prose warning.** `summary.scope` is the only place the exclusion appears,
+  and a consumer must never parse the scope sentence to decide eligibility.
+- **Equal binary-skip counts.** A count is not an identity: one file entering
+  the binary set while another leaves it keeps the count equal and hides exactly
+  the substitution that matters. The count is also not machine-readable today.
+
+**Proposed correction — not implemented.** Add a ninth comparison-bearing field,
+`binaryDigest`, over the **sorted set of paths excluded as binary**, following
+the rules the other identities already follow: absent means unknown, and it must
+be **present, valid and equal in both** reports. Then the pair above becomes
+incomparable because the set changed from empty to one path, while two scans
+that exclude the same images still compare — which is the benefit this change
+exists to deliver. Because it adds a required field, it would move
+`schemaVersion` to **4**.
+
+Until that exists, **treat any report disclosing a binary exclusion as
+ineligible.** That is the conservative reading, and it restores the schema-2
+safety property without putting binary input back into `incomplete`.
 
 **A supported keystore whose inspection failed cannot be named as such.**
 `detectPkcs12Bytes` returns nothing both for a well-formed PKCS#12 carrying no

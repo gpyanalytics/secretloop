@@ -14,8 +14,11 @@ heading below.
   unreadable" because it could not tell them apart. `incomplete` is derived from
   that list and comparison requires `incomplete: false` on **both** sides, so a
   single image made every report from a tree permanently ineligible. Scanning
-  SecretLoop's own repository skipped 17 files, every one of them confirmed
-  binary, and reported `incomplete: true`.
+  SecretLoop's own repository skipped 17 files and reported `incomplete: true`.
+  Sixteen are images; the seventeenth is `tests/verify-consent.test.ts`, a 47 KB
+  TypeScript source carrying exactly one NUL byte at offset 1867 — a separator
+  in a test string — whose remaining 96% is not scanned. They are *classified*
+  binary, which is not the same as being binary.
   - `SkipReason` now separates `binary`, `not-a-file`, `vanished` and
     `unreadable`. Only `binary` is an intentional exclusion; **every other
     reason still makes the report incomplete**, and `unreadable` remains the

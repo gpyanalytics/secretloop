@@ -244,8 +244,13 @@ export function readTextFileResult(
     //     UTF-8 only and no decoder is selected by BOM or content -- so it is
     //     out of the supported scan scope either way. It is still SKIPPED,
     //     still DISCLOSED, and nothing here says it was clean.
-    //   - TEXT CARRYING AN EMBEDDED NUL is classified binary, and anything
-    //     after that NUL is never read.
+    //   - TEXT CARRYING AN EMBEDDED NUL is classified binary. Note what that
+    //     does and does not mean: the WHOLE FILE HAS ALREADY BEEN READ into
+    //     `buf` by the line above -- every byte, before and after the NUL. What
+    //     does not happen is SCANNING: the buffer is discarded here and never
+    //     reaches scanText, so no rule ever sees the content. A 47 KB source
+    //     file with one NUL near the top is read in full and scanned not at
+    //     all. "Not read" would be wrong; "not scanned" is the fact.
     //   - A BINARY FILE WHOSE FIRST 8000 BYTES HAPPEN TO CARRY NO NUL is NOT
     //     classified binary. It takes the text path and is scanned as text.
     //
