@@ -81,7 +81,13 @@ export interface ScanFilesOptions {
    * list cannot reconstruct how many were dropped -- and a scan that read 20 of
    * 500 files reads exactly like one that had 20 files.
    */
-  onSkipped?: (reason: SkipReason) => void;
+  /**
+   * `relPath` is the path the skip happened to, so a caller can build an
+   * IDENTITY over the set of exclusions rather than only a count. It is passed
+   * from the scan event itself -- never reconstructed by walking the tree a
+   * second time, which could observe a different tree.
+   */
+  onSkipped?: (reason: SkipReason, relPath: string) => void;
   /**
    * Called once per file whose header the archive prefilter accepted but which
    * the parser declined (ZIP64, corrupt directory, undecodable stream). Such a
@@ -106,7 +112,7 @@ export function scanFiles(
     // a DER container is NUL-dense and never survives the text path's binary
     // check -- so no SecretRule could ever see one. Content-driven and
     // extension-independent: a renamed .bin still reports.
-    const binary = detectPkcs12(root, relPath, config);
+    const { finding: binary, admitted: pkcs12Admitted } = detectPkcs12(root, relPath, config);
 
     // The container layer, one level deep, beside the PKCS#12 hook and through
     // the same non-dereferencing, size-gated read. An archive is scanned as
@@ -144,8 +150,21 @@ export function scanFiles(
         }
         // A recognised container that would not open has already been disclosed
         // as such; counting it as an ordinary binary too would report one failure
-        // twice under two names.
-        if (!(unopenedContainer && read.skipped === "unreadable")) options.onSkipped?.(read.skipped);
+        // twice under two names. Such a file is NUL-dense, so the text path now
+        // calls it `binary` rather than `unreadable` -- both are suppressed here,
+        // or the split would have turned one failure back into two disclosures.
+        const duplicateOfContainer =
+          unopenedContainer && (read.skipped === "binary" || read.skipped === "unreadable");
+        if (!duplicateOfContainer) {
+          // A file the PKCS#12 prefilter admitted but that produced no finding
+          // was not conclusively inspected (see detectPkcs12): a SUPPORTED
+          // binary format whose inspection was inconclusive must stay a coverage
+          // limitation, so it keeps `unreadable` rather than being reclassified
+          // as an intentionally excluded binary.
+          const reason =
+            read.skipped === "binary" && pkcs12Admitted ? "unreadable" : read.skipped;
+          options.onSkipped?.(reason, relPath);
+        }
         continue;
       }
       text = read.text;
@@ -179,6 +198,24 @@ export function scanFiles(
  * both reach the same ScannedFile list, so report, SARIF, baseline and MCP
  * serialization are untouched.
  */
+/**
+ * `finding` when the container carries plaintext private-key material.
+ *
+ * `admitted` reports whether the PKCS#12 HEADER PREFILTER accepted the file,
+ * and exists only to keep the binary skip conservative. The detector cannot
+ * distinguish "well-formed keystore carrying no plaintext key bag" -- a
+ * successful inspection that found nothing -- from "declined by the structural
+ * walk", because `containsDirectPlaintextKeyBag` is a boolean that never throws
+ * and answers false to both. So when the prefilter admitted a file and no
+ * finding came back, the honest report is that a POSSIBLY SUPPORTED binary was
+ * not conclusively inspected, and the file keeps the conservative `unreadable`
+ * treatment instead of being written off as an intentionally excluded binary.
+ *
+ * The prefilter is deliberately not treated as proof of format in the other
+ * direction: it only asserts "outer DER SEQUENCE whose declared extent is the
+ * whole file", which many DER files that are not keystores satisfy. That is why
+ * `admitted` steers toward caution and never toward a stronger claim.
+ */
 function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
   const candidate = readBinaryCandidate(
     root,
@@ -187,8 +224,8 @@ function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
     pkcs12HeaderAccepts,
     PKCS12_HEADER_BYTES
   );
-  if (!("bytes" in candidate)) return null;
-  return detectPkcs12Bytes(candidate.bytes, relPath);
+  if (!("bytes" in candidate)) return { finding: null, admitted: false };
+  return { finding: detectPkcs12Bytes(candidate.bytes, relPath), admitted: true };
 }
 
 /**

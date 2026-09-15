@@ -5,6 +5,74 @@
 **Not in any published package.** Published 0.5.1 behaves as described under that
 heading below.
 
+### Coverage
+
+- **A binary file no longer makes a report incomplete.** The read path
+  reported one `unreadable` reason for four unrelated events — a binary file, a
+  path that is not a regular file, a read that failed, and a file that vanished
+  between enumeration and read — and disclosed all four as "binary or
+  unreadable" because it could not tell them apart. `incomplete` is derived from
+  that list and comparison requires `incomplete: false` on **both** sides, so a
+  single image made every report from a tree permanently ineligible. Scanning
+  SecretLoop's own repository skipped 17 files and reported `incomplete: true`.
+  Sixteen are images; the seventeenth is `tests/verify-consent.test.ts`, a 47 KB
+  TypeScript source carrying exactly one NUL byte at offset 1867 — a separator
+  in a test string — whose remaining 96% is not scanned. They are *classified*
+  binary, which is not the same as being binary.
+  - `SkipReason` now separates `binary`, `not-a-file`, `vanished` and
+    `unreadable`. Only `binary` is an intentional exclusion; **every other
+    reason still makes the report incomplete**, and `unreadable` remains the
+    conservative bucket for anything unexplained.
+  - **The binary skip is still disclosed**, as `N file(s) not scanned — binary`.
+    What changed is what it means, not whether it is reported. The other reasons
+    get their own clauses, each naming what actually happened.
+  - **The classifier's boundary is now documented rather than implied.** It
+    tests one thing — a NUL byte in the first 8,000 bytes — so UTF-16/UTF-32
+    text and any text with an embedded NUL are classified binary, while a binary
+    file whose first 8,000 bytes carry no NUL is not. A binary skip therefore
+    never establishes that a file is free of secrets, only that nothing looked,
+    which is why the disclosure is retained.
+  - **A failed inspection of a SUPPORTED binary format stays a limitation.** An
+    archive whose parser declined it is still disclosed as a container that was
+    not opened, and still counted once rather than twice. A file the PKCS#12
+    prefilter admits but that yields no finding keeps the `could not be read`
+    reason, because the detector cannot distinguish "well-formed keystore,
+    nothing in it" from "declined by the structural walk".
+  - The CLI and MCP skip tallies are now exhaustive over the reason type, so a
+    future reason cannot silently be absorbed into `unreadable` on one surface
+    and something else on the other.
+  - **`binaryDigest` identifies WHICH files were excluded as binary**, and is
+    the ninth required comparison field. Without it, the exemption above opened
+    a hole: a file could cross *into* the binary set between two scans and its
+    findings would vanish while every comparison field stayed equal. Measured —
+    insert one NUL into a file holding a credential, without touching the
+    credential, and the pair stayed eligible while the finding disappeared, so a
+    consumer would read a still-present credential as removed. The digest covers
+    a canonical, sorted, deduplicated set of repository-relative paths, carried
+    with its own contract version; separators are normalized to `/`, a leading
+    `./` is stripped, and an absolute path is refused rather than published.
+    **No file content, credential or absolute path is hashed.**
+    - It is derived from the scan's own exclusion events, never from a second
+      walk of the tree that might observe something different.
+    - **An empty set is a real identity**, so two scans that excluded nothing
+      compare. A producer that cannot observe its own exclusion events omits the
+      field instead, which makes the pair ineligible — `history` does exactly
+      that, because it reads blobs and emits no file-level exclusion events. A
+      stopped scan omits it too, its set being partial.
+    - It is **not anonymisation**: repository paths are often predictable, so a
+      candidate list can be tested against the digest exactly as against `root`.
+  - **`schemaVersion` is now `4`.** `incomplete` counts a strictly narrower set
+    of facts than it did under 2, and the boolean still type-checks either way —
+    so the version is the only thing preventing a version-2 report and a
+    version-3 report from comparing across two different meanings of one field.
+    Versions 1, 2 and 3 are unsupported: a consumer implementing this contract
+    accepts `4` and rejects everything else. Version 3 is rejected because it
+    carries no `binaryDigest`, so nothing establishes which files it declined to
+    look at.
+  - No detector, finding, fingerprint, consent, suppression identity or provider
+    behaviour changed. On a fixed corpus the findings and their fingerprints are
+    byte-identical before and after.
+
 ### Reports
 
 - **The JSON report carries comparison metadata.** `schemaVersion`,

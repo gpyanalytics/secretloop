@@ -152,14 +152,45 @@ function walkDirectory(dir: string, root: string, acc: string[] = []): string[] 
 /**
  * Why a file that was in scope produced no text to scan.
  *
- * Three reasons rather than a boolean, because they do not share a remedy:
- * `oversized` is answered by raising maxFileSizeBytes, `unreadable` by nothing
- * the reader can do, and `outside` is the containment refusal that the walk
- * already counts under its own clause. A single count would have to describe
- * all three in one sentence and would name a fix for two of them that does not
- * apply.
+ * Separate reasons rather than a boolean, because they do not share a remedy:
+ * `oversized` is answered by raising maxFileSizeBytes, `outside` is the
+ * containment refusal the walk already counts under its own clause, and the
+ * rest are answered by different things or by nothing at all. A single count
+ * would have to describe them in one sentence and would name a fix for some of
+ * them that does not apply to the others.
+ *
+ * THE LOAD-BEARING SPLIT IS `binary` VERSUS THE FAILURES. A NUL byte in the
+ * first block is a POSITIVE determination that the input is binary, and binary
+ * input is outside what a text scanner set out to read -- an intentional
+ * exclusion, like a generated file. `not-a-file`, `vanished` and `unreadable`
+ * are the opposite: the scanner INTENDED to read the input and could not. They
+ * were one bucket, `unreadable`, whose own disclosure said "binary or
+ * unreadable" because it genuinely could not tell which had happened. A PNG and
+ * a file the process was refused permission to open produced byte-identical
+ * output, and both made the report incomplete -- so one image anywhere in a
+ * tree made every report from it permanently ineligible for comparison, for a
+ * scope decision rather than a failure to look.
+ *
+ * `unreadable` remains the CONSERVATIVE bucket. Anything that is not one of the
+ * positive determinations above lands there and still counts as a coverage
+ * limitation, because "we do not know why this did not read" is never evidence
+ * that nothing was missed.
  */
-export type SkipReason = "oversized" | "unreadable" | "outside";
+export type SkipReason =
+  | "oversized"
+  /**
+   * A NUL byte in the FIRST 8000 BYTES. See readTextFileResult for what this
+   * classifier does and does not establish: it is a probe, not a proof, and it
+   * never establishes that the file holds no secret.
+   */
+  | "binary"
+  /** stat answered, and the entry is not a regular file (directory, fifo, socket, device). */
+  | "not-a-file"
+  /** The path was enumerated but was gone by the time the read reached it. */
+  | "vanished"
+  /** The read itself failed -- permission, I/O -- or the reason is unknown. */
+  | "unreadable"
+  | "outside";
 
 export type ReadResult = { text: string } | { skipped: SkipReason };
 
@@ -189,18 +220,51 @@ export function readTextFileResult(
     // between enumeration and read would otherwise be disclosed as a symlink
     // escaping the scan root, which is the same class of overstatement as
     // counting a node_modules skip against the generated-file group.
-    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "unreadable" };
+    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "vanished" };
   }
   const full = path.join(root, relPath);
   try {
     const stat = statSync(full);
-    if (!stat.isFile()) return { skipped: "unreadable" };
+    if (!stat.isFile()) return { skipped: "not-a-file" };
     if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
     const buf = readFileSync(full);
-    // A NUL byte in the first block is the standard heuristic for "binary".
-    if (buf.subarray(0, 8000).includes(0)) return { skipped: "unreadable" };
+    // THE BINARY CLASSIFIER, AND EXACTLY WHAT IT IS.
+    //
+    // It tests one thing: does a NUL byte occur in the first 8000 bytes. That
+    // is the standard heuristic, it is what `git diff` uses, and it is a
+    // POSITIVE determination rather than a failure -- which is why it gets its
+    // own reason instead of being disclosed as an inability to inspect.
+    //
+    // It is NOT a proof that the file is binary, and it is emphatically NOT a
+    // proof that the file holds no secret. Its real boundary:
+    //
+    //   - UTF-16 and UTF-32 TEXT IS CLASSIFIED BINARY. Their encodings pad
+    //     ASCII with NUL, so a UTF-16 file carrying a live credential lands
+    //     here. Such a file would not scan usefully anyway -- the read below is
+    //     UTF-8 only and no decoder is selected by BOM or content -- so it is
+    //     out of the supported scan scope either way. It is still SKIPPED,
+    //     still DISCLOSED, and nothing here says it was clean.
+    //   - TEXT CARRYING AN EMBEDDED NUL is classified binary. Note what that
+    //     does and does not mean: the WHOLE FILE HAS ALREADY BEEN READ into
+    //     `buf` by the line above -- every byte, before and after the NUL. What
+    //     does not happen is SCANNING: the buffer is discarded here and never
+    //     reaches scanText, so no rule ever sees the content. A 47 KB source
+    //     file with one NUL near the top is read in full and scanned not at
+    //     all. "Not read" would be wrong; "not scanned" is the fact.
+    //   - A BINARY FILE WHOSE FIRST 8000 BYTES HAPPEN TO CARRY NO NUL is NOT
+    //     classified binary. It takes the text path and is scanned as text.
+    //
+    // This is why the skip stays disclosed in the scope sentence even though it
+    // no longer makes the report incomplete. The disclosure is the only thing
+    // that tells a reader a credential could be sitting where nothing looked.
+    if (buf.subarray(0, 8000).includes(0)) return { skipped: "binary" };
+    // Decoding is deliberately LOSSY and never fails here: invalid UTF-8 becomes
+    // U+FFFD and the file is still scanned. There is therefore no "decoding
+    // failure" skip -- nothing is withheld from the rules on that ground, so
+    // nothing is withheld from coverage either.
     return { text: buf.toString("utf8") };
   } catch {
+    // Permission, I/O, or anything unanticipated. Stays conservative.
     return { skipped: "unreadable" };
   }
 }
@@ -237,13 +301,16 @@ export function readBinaryCandidate(
   headerBytes = 16
 ): BinaryCandidate {
   if (!isInsideRoot(root, relPath)) {
-    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "unreadable" };
+    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "vanished" };
   }
   const full = path.join(root, relPath);
   try {
     // lstat: the entry itself, never its target.
     const stat = lstatSync(full);
-    if (!stat.isFile()) return { skipped: "unreadable" };
+    // A symlink lands here too, by design (see above). "not a regular file" is
+    // the same answer for both, and this reason is never counted: the caller
+    // discards a candidate skip and lets the text path account for the file.
+    if (!stat.isFile()) return { skipped: "not-a-file" };
     if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
     if (headerAccepts) {
       const head = Buffer.alloc(Math.min(headerBytes, stat.size));
@@ -253,7 +320,9 @@ export function readBinaryCandidate(
       } finally {
         closeSync(fd);
       }
-      if (!headerAccepts(head, stat.size)) return { skipped: "unreadable" };
+      // Not this format. Not a failure and never counted -- the caller discards
+      // every candidate skip -- but named honestly rather than as "unreadable".
+      if (!headerAccepts(head, stat.size)) return { skipped: "not-a-file" };
     }
     return { bytes: readFileSync(full) };
   } catch {

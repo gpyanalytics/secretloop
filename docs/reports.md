@@ -20,7 +20,7 @@ carries these fields.
   "tool": "secretloop",
 
   // Comparison-bearing. See the rule below: an absent key means UNKNOWN.
-  "schemaVersion": 2,
+  "schemaVersion": 4,
   "toolVersion": "0.5.1",
   "root": "git:af829fc833133fca",
   "configDigest": "3071344b11905ec5",
@@ -29,6 +29,9 @@ carries these fields.
   // omitted for a staged scan, when the selection cannot be established,
   // and when a history scan was interrupted
   "scopeDigest": "scope:4a9f5bca…",
+  // the set of files excluded as binary. An EMPTY set is a real identity;
+  // omitted when the producer cannot establish the set at all (history)
+  "binaryDigest": "binary:3fd006a9…",
   "incomplete": false,
 
   "summary": {
@@ -81,14 +84,27 @@ refuse the comparison**, never as "the same". The same applies to a
 | `ruleSetDigest` | the rule definitions this build applies | never |
 | `suppressionDigest` | the configured exclusions | any suppression mechanism was active that cannot be identified |
 | `scopeDigest` | **which population the scan examined** | the scan was `staged`, the selection could not be established, or the scan stopped early |
+| `binaryDigest` | **which files were excluded as binary** | the producer cannot observe its own exclusion events (a `history` scan), or the scan stopped early |
 | `incomplete` | the scan could not cover what it set out to | never |
 
 `schemaVersion` is bumped when the **meaning** of one of these changes — what a
 digest covers, what `incomplete` counts, or the set of required fields. Adding a
-descriptive field does not bump it. **It is `2`**: version 1 had no `scopeDigest`,
-so a version-1 report cannot be shown to have examined any particular population
-and must not be compared. A consumer implementing this contract accepts `2` and
-rejects everything else, including `1`.
+descriptive field does not bump it. **It is `4`**:
+
+- version 1 had no `scopeDigest`, so a version-1 report cannot be shown to have
+  examined any particular population;
+- version 2 counted **binary input as a coverage failure**, so its
+  `incomplete: true` may describe nothing worse than a PNG;
+- version 3 stopped counting it, and thereby allowed a file to cross **into**
+  the binary set between two scans while every comparison field stayed equal —
+  so a still-present credential could read as removed;
+- version 4 adds **`binaryDigest`**, making the excluded set part of
+  eligibility, which closes that.
+
+**Versions 1, 2 and 3 are unsupported by this contract.** A consumer
+implementing it accepts `4` and rejects everything else. The boolean fields
+still type-check under every version, so nothing but the version number stops
+reports written against different meanings from comparing as though they agreed.
 
 ### `root` is a shared-ancestry marker, not a repository identity
 
@@ -255,21 +271,61 @@ suppression identity.
 ### `incomplete` covers the gaps, not the decisions
 
 `incomplete` is true when the scan could not look at something it **set out to
-look at**: a file over `maxFileSizeBytes`, a file it could not decode, a symlink
-refused by the containment guard, an archive it could not finish enumerating, a
-container it could not open, or a run that was stopped.
+look at**: a file over `maxFileSizeBytes`, a file it could not read, a path that
+was not a regular file or had vanished, a symlink refused by the containment
+guard, an archive it could not finish enumerating, a container it could not
+open, or a run that was stopped.
 
 Deliberate policy is **not** incompleteness. Generated-file exclusions, fixture
 suppression, API-document scoping and configured `excludePaths` are decisions;
 they are identified by `configDigest`, and a change to any of them already makes
 a pair incomparable. Calling them "incomplete" too would say nothing.
 
-`summary.coverage.limitations` lists the reasons in human-readable form.
+**Binary input is a decision, not a gap.** A text scanner declining a
+PNG is the same kind of fact as declining a generated file: it is disclosed, and
+it does not make the report incomplete. Until version 3 it did — binary input
+and "the read failed" shared one reason — so a single image made every report
+from that tree permanently ineligible for comparison. Scanning SecretLoop's own
+repository is the example: 17 files skipped, every one of them classified binary,
+and the report said `incomplete: true`.
 
-**In practice most scans of real repositories report `incomplete: true`**,
-because most repositories contain files the text path skips as binary or
-unreadable. That is honest rather than useful, and the fix is named under
-[Known limitations](#known-limitations) below.
+**A binary skip is still disclosed.** The scope sentence names it —
+`N file(s) not scanned — binary` — because a reader must still know the scan did
+not look. What changed is what the skip *means*, not whether it is reported.
+
+#### What "binary" actually means here
+
+The classifier tests exactly one thing: **does a NUL byte occur in the first
+8,000 bytes.** That is the standard heuristic, and it is a probe rather than a
+proof. Its boundary, stated precisely:
+
+- **UTF-16 and UTF-32 text is classified binary.** Those encodings pad ASCII
+  with NUL, so a UTF-16 file carrying a live credential is skipped as binary.
+  Such a file would not scan usefully in any case — the reader is UTF-8 only and
+  selects no decoder from a BOM or from content — so it is outside the supported
+  scan scope either way.
+- **Text carrying an embedded NUL is classified binary.** The file is still read
+  in full — the classifier runs on bytes already in memory — but none of its
+  content is *scanned*, before or after the NUL. In this repository
+  `tests/verify-consent.test.ts` is a 47 KB TypeScript source carrying one NUL
+  at offset 1867, so 96% of it goes unscanned.
+- **A binary file whose first 8,000 bytes happen to carry no NUL is not
+  classified binary.** It takes the text path and is scanned as text.
+
+**A binary skip does not establish that the file contains no secret.** It
+establishes only that the scanner did not look. That is precisely why the skip
+remains disclosed in the scope sentence after ceasing to make the report
+incomplete: `incomplete` now answers "did anything the scan intended to read
+fail", and the scope sentence answers "what did it decline to read at all".
+Reading a clean report without reading its scope sentence was never safe, and
+this change does not make it safe.
+
+**An inspection that FAILED is still a gap**, including for binary formats the
+scanner does support. An archive whose parser declined it, and a file the
+PKCS#12 prefilter admitted but could not conclusively inspect, both remain
+coverage limitations.
+
+`summary.coverage.limitations` lists the reasons in human-readable form.
 
 ## Required-field validation — what a comparator must enforce
 
@@ -278,19 +334,20 @@ producer omits what it cannot determine; a comparator must still reject
 everything else. Before comparing two reports it MUST check, for each of
 
     schemaVersion  toolVersion  root  configDigest  ruleSetDigest
-    suppressionDigest  scopeDigest  incomplete
+    suppressionDigest  scopeDigest  binaryDigest  incomplete
 
-**All eight are required.** Per field:
+**All nine are required.** Per field:
 
 | field | valid when | and |
 |---|---|---|
-| `schemaVersion` | an integer, and **exactly `2`** | equal in both |
+| `schemaVersion` | an integer, and **exactly `4`** | equal in both |
 | `toolVersion` | a non-empty string | equal in both |
 | `root` | a non-empty string matching `git:<16 hex>` | equal in both |
 | `configDigest` | a non-empty string of 16 hex characters | equal in both |
 | `ruleSetDigest` | a non-empty string of 16 hex characters | equal in both |
 | `suppressionDigest` | a non-empty string of 16 hex characters | equal in both |
 | `scopeDigest` | a non-empty string matching `scope:<16 hex>` | equal in both |
+| `binaryDigest` | a non-empty string matching `binary:<16 hex>` | equal in both |
 | `incomplete` | a boolean | **`false` in BOTH reports** |
 
 Reject when a field is **missing**, **null**, of the **wrong type**, **empty or
@@ -311,7 +368,48 @@ determinate and valid first.
 **A legacy seven-field report does not silently qualify.** A report written
 against schema version 1 carries no `scopeDigest`, so nothing establishes which
 population it examined. It is rejected twice over — on the missing field and on
-the unsupported version — and never by accident.
+the unsupported version — and never by accident. A version-3 report is rejected
+the same way: it carries no `binaryDigest`, so nothing establishes which files
+it declined to look at.
+
+### What an eligible pair does and does not establish
+
+A pair that passes all nine checks may be compared **only over the scanned scope
+the two reports share**. Specifically:
+
+- **"No longer observed" never means removed, fixed, rotated or revoked.** It
+  means the later scan did not see it. Nothing in this contract can distinguish
+  a deleted credential from one that moved, was renamed, or stopped being
+  scanned for a reason the metadata does not capture.
+- **Excluded files may still contain credentials.** An unchanged `binaryDigest`
+  says the same *set of paths* was excluded from both scans. It says **nothing
+  about their contents**, which were never read by either scan and may have
+  changed completely between them. A credential can be added to an excluded file
+  and no comparison will ever see it.
+- **Staged reports remain ineligible.** They carry no `scopeDigest`, and that is
+  unchanged here.
+- **Ambiguous archive and keystore cases remain conservative.** A container the
+  parser declined, and a file the PKCS#12 prefilter admitted but could not
+  conclusively inspect, are still coverage limitations, so such reports are
+  ineligible on `incomplete` before `binaryDigest` is ever consulted. Archive
+  members refused as binary are counted in the archive accounting, not in
+  `binaryDigest`.
+- **A `history` report carries no `binaryDigest` at all** and is therefore
+  ineligible under this contract. A history scan reads blobs and emits no
+  file-level exclusion events, so it cannot establish the set. Claiming the
+  empty set there would be metadata invented for a mode that never produced it.
+
+**`binaryDigest` is not anonymisation.** It hashes a set of repository-relative
+paths, and repository paths are often predictable — `docs/icon.png`,
+`assets/logo.gif`. Anyone holding a candidate list can test guesses against the
+digest exactly as they can against `root`. It publishes no file content, no
+credential and no absolute path, but it is a comparison identity, not
+concealment, and nothing here should be read as hiding which files were
+excluded.
+
+**No comparison command exists.** This section describes what a consumer must
+enforce; SecretLoop ships no comparator, and adding one is not part of this
+change.
 
 The reference model shipped with the frozen design (`D/model_compare.py`)
 implements only the *present-and-equal* half over four fields, and measured
@@ -373,14 +471,54 @@ from the repository it came from.
 later report means it was not observed there. It never means fixed, moved,
 rotated or revoked.
 
-**`incomplete` is currently blunt.** The read path reports one `unreadable`
-reason for four different situations — a binary file, a path that is not a file,
-an I/O error, and a file that vanished between enumeration and read. A binary
-file is not a coverage failure; an I/O error is. Because they cannot be told
-apart today, both count, which is why nearly every real repository reports
-`incomplete: true`. Splitting that reason apart would let `incomplete` mean
-something sharper — **that change is proposed, not implemented**, because it
-changes the disclosed scope sentence and is more than metadata.
+**A binary exclusion could turn a found secret into an eligible absence — fixed
+in schema 4 by `binaryDigest`.**
+
+Under schema 3: scan a UTF-8 file holding a credential, then insert one NUL byte
+anywhere in the first 8,000 bytes **without touching the credential**. The file
+is now classified binary, the finding disappears, and — because a binary
+exclusion no longer counts toward `incomplete` — the second report still said
+`incomplete: false`. All eight required fields were equal, so the pair was
+**eligible** and a consumer would have read the credential as *gone* while it
+sat on disk unchanged.
+
+`binaryDigest` closes this: the excluded set changed from empty to one path, so
+the two digests differ and the pair is incomparable. Two scans that exclude the
+same images still compare, which is the benefit the schema-3 change exists to
+deliver.
+
+Two things that would **not** have fixed it, and are not relied on:
+
+- **A prose warning.** `summary.scope` is prose, and a consumer must never parse
+  it to decide eligibility.
+- **Equal binary-skip counts.** A count is not an identity: one file entering
+  the binary set while another leaves it keeps the count equal and hides exactly
+  the substitution that matters. `binaryDigest` covers the *set of paths*, so
+  that substitution changes it.
+
+What remains true, and is not a defect this field can fix: an unchanged
+`binaryDigest` says the same paths were excluded, **not** that their contents
+are unchanged. See [What an eligible pair does and does not
+establish](#what-an-eligible-pair-does-and-does-not-establish).
+
+**A supported keystore whose inspection failed cannot be named as such.**
+`detectPkcs12Bytes` returns nothing both for a well-formed PKCS#12 carrying no
+plaintext key bag — a successful inspection that found nothing — and for one its
+structural walk declined. The two are indistinguishable at the source, and the
+header prefilter only asserts "outer DER SEQUENCE spanning the file", which many
+DER objects satisfy without being keystores. So any file the prefilter admits
+that yields no finding is treated **conservatively**: it keeps the
+`could not be read` reason and still makes the report incomplete. That is
+deliberately cautious — a plain DER certificate is reported the same way — and
+naming the case precisely needs a detector that reports *why* it declined, which
+is a parser change and is **not implemented here**.
+
+**Archive member refusals are still aggregated.** A member refused as `binary`
+is counted alongside members refused as `encrypted` or `malformed` in one
+`N archive member(s) not scanned` clause, so a container holding only binary
+members still reports incomplete. Separating them would change the archive
+accounting's aggregate counts, which is a larger change than this one and is
+**not implemented here**.
 
 **Identifying suppression content is unresolved.** Making a baselined,
 allowlisted or inline-suppressed project comparable needs a way to identify those

@@ -47,9 +47,32 @@ corrupt. It is named so you know which file to fix.
 **`N file(s) not scanned — larger than maxFileSizeBytes`** — raise
 `maxFileSizeBytes` in `.secretloop.json` if those files matter.
 
-**`N file(s) not scanned — binary or unreadable`** — a NUL byte in the first
-8,000 bytes, an unreadable entry, or a container that would not open and also
-read as binary. PKCS#12 keystores are still detected structurally.
+**`N file(s) not scanned — binary`** — a NUL byte in the first 8,000 bytes:
+input a text scanner is not meant to read. An intentional exclusion, so it is
+disclosed but does **not** make the report incomplete. PKCS#12 keystores are
+still detected structurally, and archives are still opened — neither is counted
+here.
+
+The test is a probe, not a proof, and it does **not** mean the file is free of
+secrets — only that nothing looked. **UTF-16 and UTF-32 text lands here**, since
+those encodings pad ASCII with NUL; so does any text with an embedded NUL. Such
+a file is still read in full — the test runs on bytes already in memory — but
+none of its content is *scanned*, before or after the NUL. One stray NUL near
+the top of a large source file therefore costs you the whole file. A binary file
+whose first 8,000 bytes carry no NUL is *not* caught and is scanned as text. If you keep credentials in a
+UTF-16 file, convert it to UTF-8 to bring it into scope.
+
+**`N file(s) not scanned — could not be read`** — the scan meant to read these
+and could not: a permission or I/O failure, or a binary format it supports but
+could not conclusively inspect. Unlike a binary skip, this **does** make the
+report incomplete, because "we could not look" is never evidence that nothing
+was there.
+
+**`N path(s) not scanned — not a regular file`** — a directory, fifo, socket or
+device turned up where a file was expected.
+
+**`N file(s) not scanned — gone before they could be read`** — the path was
+enumerated and had disappeared by the time the read reached it.
 
 **`N recognized archive container(s) not opened`** — a file with archive
 magic that the parser declined (corrupt, or ZIP64). It was scanned as raw text

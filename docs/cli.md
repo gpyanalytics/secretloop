@@ -113,7 +113,7 @@ Every report ends with what the scan read and what it did not:
 24686 file(s); 53 generic finding(s) suppressed in test/fixture paths
 (--include-fixtures to report them); 11 file(s) not scanned — larger than
 maxFileSizeBytes (raise it in .secretloop.json to cover them); 1018 file(s)
-not scanned — binary or unreadable
+not scanned — binary
 ```
 
 On `main` the sentence also counts API description documents the entropy tier

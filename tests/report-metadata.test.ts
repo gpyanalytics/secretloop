@@ -264,7 +264,7 @@ test("a scan with nothing skipped reports no limitation", () => {
 test("cancellation, size, readability and containment each register", () => {
   assert.match(coverageLimitations({ cancelled: true })[0], /stopped before it finished/);
   assert.match(coverageLimitations({ oversizedExcluded: 3 })[0], /maxFileSizeBytes/);
-  assert.match(coverageLimitations({ unreadableExcluded: 2 })[0], /binary or unreadable/);
+  assert.match(coverageLimitations({ unreadableExcluded: 2 })[0], /could not be read/);
   assert.match(coverageLimitations({ outsideExcluded: 1 })[0], /outside the scan root/);
 });
 
@@ -308,7 +308,7 @@ function json(opts: Record<string, unknown> = {}): any {
 test("a legacy report — no metadata supplied — carries no metadata keys at all", () => {
   const d = json();
   for (const k of ["schemaVersion", "toolVersion", "root", "configDigest", "ruleSetDigest",
-                   "suppressionDigest", "scopeDigest", "incomplete"]) {
+                   "suppressionDigest", "scopeDigest", "binaryDigest", "incomplete"]) {
     assert.ok(!(k in d), `${k} appeared without a caller supplying it`);
   }
   assert.ok(!("coverage" in d.summary));
@@ -361,13 +361,13 @@ test("supplied identities are serialized at the top level, where the design puts
 test("coverage detail is descriptive and sits under summary, not beside the identities", () => {
   const d = json({
     reportCoverage: {
-      limitations: ["1 file(s) not scanned — binary or unreadable"],
+      limitations: ["1 file(s) not scanned — could not be read"],
       suppression: { allowValuesCount: 0, baselineApplied: false, inlineSuppressed: 2, unidentified: ["x"] },
     },
   });
   assert.ok(!("coverage" in d), "coverage must not be a comparison-bearing top-level field");
   assert.strictEqual(d.summary.coverage.suppression.inlineSuppressed, 2);
-  assert.deepStrictEqual(d.summary.coverage.limitations, ["1 file(s) not scanned — binary or unreadable"]);
+  assert.deepStrictEqual(d.summary.coverage.limitations, ["1 file(s) not scanned — could not be read"]);
 });
 
 test("the serialized report carries no secret, no absolute root and no allowValue", () => {
@@ -496,7 +496,7 @@ test("no emitted metadata field is ever null, empty or the wrong type", () => wi
     spawnSync("node", [CLI, "scan", "--path", dir, "--format", "json", "--fail-on", "never"],
       { cwd: dir, encoding: "utf8" }).stdout
   );
-  const strings = ["toolVersion", "root", "configDigest", "ruleSetDigest", "suppressionDigest", "scopeDigest"];
+  const strings = ["toolVersion", "root", "configDigest", "ruleSetDigest", "suppressionDigest", "scopeDigest", "binaryDigest"];
   for (const k of strings) {
     if (!(k in d)) continue;                       // absent is the sanctioned "unknown"
     assert.strictEqual(typeof d[k], "string", `${k} is not a string`);
@@ -506,10 +506,11 @@ test("no emitted metadata field is ever null, empty or the wrong type", () => wi
   assert.strictEqual(typeof d.incomplete, "boolean");
   assert.ok(Number.isInteger(d.schemaVersion) && d.schemaVersion >= 1);
   // and nothing is ever emitted as an explicit null
-  assert.ok(!/"(schemaVersion|toolVersion|root|configDigest|ruleSetDigest|suppressionDigest|scopeDigest|incomplete)"\s*:\s*null/
+  assert.ok(!/"(schemaVersion|toolVersion|root|configDigest|ruleSetDigest|suppressionDigest|scopeDigest|binaryDigest|incomplete)"\s*:\s*null/
     .test(JSON.stringify(d)), "a metadata field was emitted as null");
-  assert.strictEqual(d.schemaVersion, 2, "the contract gained a required field, so the version must be 2");
+  assert.strictEqual(d.schemaVersion, 4, "the contract gained a required field, `binaryDigest`, so the version must be 4");
   assert.match(d.scopeDigest, /^scope:[0-9a-f]{16}$/);
+  assert.match(d.binaryDigest, /^binary:[0-9a-f]{16}$/);
 }));
 
 test("a zero-match allowlist or baseline still withholds the suppression identity", () => {

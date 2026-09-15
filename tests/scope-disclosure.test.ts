@@ -54,14 +54,16 @@ const cli = (args: string[], dir: string) =>
 // ---------------------------------------------------------------------------
 suite("scope disclosure — the reader says why, not just no");
 
-test("readTextFileResult separates oversized from unreadable from outside", () => {
+test("readTextFileResult separates oversized from binary from vanished from outside", () => {
   withTree((dir) => {
     const config = mergeConfig({});
     assert.deepStrictEqual(readTextFileResult(dir, "big.js", config), { skipped: "oversized" });
-    assert.deepStrictEqual(readTextFileResult(dir, "bin.dat", config), { skipped: "unreadable" });
-    // A path that does not resolve is unreadable, NOT "outside": isInsideRoot
+    // A POSITIVE determination, not a failure. It used to share one reason with
+    // "we could not read it", which is what made a PNG set `incomplete`.
+    assert.deepStrictEqual(readTextFileResult(dir, "bin.dat", config), { skipped: "binary" });
+    // A path that does not resolve is `vanished`, NOT "outside": isInsideRoot
     // answers false for both, and only one of them is a containment event.
-    assert.deepStrictEqual(readTextFileResult(dir, "nope.js", config), { skipped: "unreadable" });
+    assert.deepStrictEqual(readTextFileResult(dir, "nope.js", config), { skipped: "vanished" });
     const ok = readTextFileResult(dir, "app.js", config);
     assert.ok("text" in ok && ok.text.includes("const ok"));
   });
@@ -74,7 +76,7 @@ test("scanFiles reports every file it could not read", () => {
       onSkipped: (r) => reasons.push(r),
     });
     assert.deepStrictEqual(scanned.map((s) => s.path), ["app.js"]);
-    assert.deepStrictEqual(reasons.sort(), ["oversized", "unreadable"]);
+    assert.deepStrictEqual(reasons.sort(), ["binary", "oversized"]);
   });
 });
 
@@ -110,7 +112,7 @@ test("the scope sentence names both counts, and the credentials are not reported
     );
     assert.match(
       out.stdout,
-      /1 file\(s\) not scanned — binary or unreadable/,
+      /1 file\(s\) not scanned — binary/,
       `the binary skip was silent:\n${out.stdout}`
     );
     // And the disclosure is not a substitute for finding them: they really were
@@ -124,7 +126,7 @@ test("json carries both counts in the scope string", () => {
     const d = JSON.parse(cli(["scan", "--format", "json"], dir).stdout);
     assert.strictEqual(d.summary.scannedCount, 1);
     assert.match(d.summary.scope, /larger than maxFileSizeBytes/, "JSON lost the size clause");
-    assert.match(d.summary.scope, /binary or unreadable/, "JSON lost the unreadable clause");
+    assert.match(d.summary.scope, /not scanned — binary/, "JSON lost the unreadable clause");
   });
 });
 
@@ -133,7 +135,7 @@ test("sarif carries them too, in the invocations block", () => {
     const s = JSON.parse(cli(["scan", "--format", "sarif"], dir).stdout);
     const scope = s.runs[0].invocations[0].properties.scope;
     assert.match(scope, /larger than maxFileSizeBytes/, "SARIF lost the size clause");
-    assert.match(scope, /binary or unreadable/, "SARIF lost the unreadable clause");
+    assert.match(scope, /not scanned — binary/, "SARIF lost the unreadable clause");
   });
 });
 
@@ -146,7 +148,7 @@ test("the staged path discloses the same way", () => {
     git("add", "-A");
     const out = cli(["staged"], dir);
     assert.match(out.stdout, /larger than maxFileSizeBytes/, `staged was silent:\n${out.stdout}`);
-    assert.match(out.stdout, /binary or unreadable/);
+    assert.match(out.stdout, /not scanned — binary/);
   });
 });
 
@@ -177,7 +179,7 @@ test("raising maxFileSizeBytes removes the clause and finds the credential", () 
       "raising the cap did not bring the oversized file into scope"
     );
     // The binary file is still refused, and still says so.
-    assert.match(d.summary.scope, /binary or unreadable/);
+    assert.match(d.summary.scope, /not scanned — binary/);
   });
 });
 
@@ -193,7 +195,7 @@ test("describeScope carries each clause only when nonzero, alongside the other f
   );
   assert.strictEqual(
     describeScope(9, "file", { unreadableExcluded: 3 }),
-    "9 file(s); 3 file(s) not scanned — binary or unreadable"
+    "9 file(s); 3 file(s) not scanned — could not be read"
   );
   const all = describeScope(9, "file", {
     generatedExcluded: 1,
@@ -209,7 +211,7 @@ test("describeScope carries each clause only when nonzero, alongside the other f
     /3 file\(s\) excluded \(symlinks/,
     /4 generic finding\(s\) suppressed in test/,
     /5 file\(s\) not scanned — larger than maxFileSizeBytes/,
-    /6 file\(s\) not scanned — binary or unreadable/,
+    /6 file\(s\) not scanned — could not be read/,
   ]) {
     assert.match(all, clause, `clause missing when all six compose: ${all}`);
   }

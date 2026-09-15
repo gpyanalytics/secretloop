@@ -129,7 +129,7 @@ test("an unopened container is not an ordinary binary skip, and an ordinary bina
     const skips: string[] = []; const notOpened: string[] = [];
     const scanned = scanFiles(dir, ["z64.zip", "image.bin"], cfg, { onSkipped: (r) => skips.push(r), onContainerNotOpened: (r) => notOpened.push(r) });
     assert.deepStrictEqual(scanned, [], "neither yields a scanned file");
-    assert.deepStrictEqual(skips, ["unreadable"], "only the plain binary is an ordinary skip");
+    assert.deepStrictEqual(skips, ["binary"], "only the plain binary is an ordinary skip");
     assert.deepStrictEqual(notOpened, ["unsupported-feature"]);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });
@@ -194,7 +194,7 @@ const ACC = {
   metadataEntries: 6,
   enumeration: { incompleteContainers: 1, declaredNotInspected: 50, unknownRemainderContainers: 0, byReason: { "member-cap": 1 } },
 };
-const EXPECTED = "9 file(s); 3 file(s) not scanned — binary or unreadable; 2 archive(s) opened — 5 member(s) scanned; 3 archive member(s) not scanned; 4 archive member(s) excluded by configuration; 6 archive metadata entry(s) skipped; 1 archive(s) not fully enumerated — 50 declared entry(s) not inspected, 0 with unknown remainder; 1 recognized archive container(s) not opened";
+const EXPECTED = "9 file(s); 3 file(s) not scanned — could not be read; 2 archive(s) opened — 5 member(s) scanned; 3 archive member(s) not scanned; 4 archive member(s) excluded by configuration; 6 archive metadata entry(s) skipped; 1 archive(s) not fully enumerated — 50 declared entry(s) not inspected, 0 with unknown remainder; 1 recognized archive container(s) not opened";
 
 test("describeScope renders the six clauses in order, after the file clauses, omitting zeros; the MCP copy agrees", () => {
   assert.strictEqual(describeScope(9, "file", { unreadableExcluded: 3, archives: ACC }), EXPECTED);

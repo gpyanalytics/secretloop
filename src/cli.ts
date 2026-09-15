@@ -11,6 +11,7 @@ import {
   repositoryIdentity,
   ruleSetDigest,
   scopeIdentity,
+  binaryIdentity,
   suppressionIdentity,
 } from "./report-metadata";
 import "./node-guard";
@@ -580,10 +581,23 @@ interface ScannedList {
   texts: Map<string, string>;
   suppressed: number;
   fixtureSuppressed: number;
-  /** Enumerated but never read: over the size cap, binary, or outside the root. */
+  /** Enumerated but never read: over the size cap, or outside the root. */
   oversized: number;
+  /**
+   * Classified binary, intentionally excluded. Disclosed, but NOT a coverage
+   * limitation -- see coverageLimitations.
+   */
+  binary: number;
+  /** The scan intended to read these and could not. Each is a limitation. */
   unreadable: number;
+  notAFile: number;
+  vanished: number;
   outside: number;
+  /**
+   * The paths excluded as binary, from the scan's own events. Feeds
+   * `binaryIdentity`; never rebuilt by a second walk of the tree.
+   */
+  binaryPaths: string[];
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped: number;
   /** Containers met, opened or not, and what happened to their members. Counts only. */
@@ -592,16 +606,34 @@ interface ScannedList {
 
 function scanFileList(root: string, files: string[], config: SecretLoopConfig): ScannedList {
   let oversized = 0;
+  let binaryExcluded = 0;
+  const binaryPaths: string[] = [];
   let unreadable = 0;
+  let notAFile = 0;
+  let vanished = 0;
   let outside = 0;
   const archives = emptyArchiveAccounting();
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
   const scanned = scanFiles(root, files, config, {
-    onSkipped: (reason) => {
-      if (reason === "oversized") oversized++;
-      else if (reason === "outside") outside++;
-      else unreadable++;
+    // Exhaustive on purpose. The previous `else unreadable++` meant a new skip
+    // reason silently became "binary or unreadable"; the compiler now refuses a
+    // reason nobody decided how to disclose.
+    onSkipped: (reason, relPath) => {
+      switch (reason) {
+        case "oversized": oversized++; break;
+        // Recorded from the event that excluded it, so the identity describes
+        // the tree this scan actually saw.
+        case "binary": binaryExcluded++; binaryPaths.push(relPath); break;
+        case "not-a-file": notAFile++; break;
+        case "vanished": vanished++; break;
+        case "unreadable": unreadable++; break;
+        case "outside": outside++; break;
+        default: {
+          const never: never = reason;
+          void never;
+        }
+      }
     },
     onContainerNotOpened: (reason) => {
       archives.containersNotOpened[reason] = (archives.containersNotOpened[reason] ?? 0) + 1;
@@ -616,8 +648,12 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
     apiDocumentsScoped: scanned.reduce((n, s) => n + (s.apiDocumentsScoped ?? 0), 0),
     archives,
     oversized,
+    binary: binaryExcluded,
     unreadable,
+    notAFile,
+    vanished,
     outside,
+    binaryPaths,
   };
 }
 
@@ -737,6 +773,13 @@ async function main(): Promise<void> {
   // What this scan selected, filled by whichever branch runs. Left undefined if
   // a branch cannot establish it, which omits scopeDigest rather than guessing.
   let selection: ScopeSelection | undefined;
+  // The files this scan excluded as binary, filled ONLY by a branch that
+  // genuinely observes its own exclusion events. `undefined` means "this
+  // producer cannot establish the set" and omits binaryDigest; an EMPTY ARRAY
+  // is the positive claim that nothing was excluded. The two must never be
+  // conflated -- an omitted field makes a pair ineligible, an empty set makes
+  // it comparable.
+  let binaryExclusions: string[] | undefined;
 
   if (args.command === "history") {
     if (!isGitRepo(root)) {
@@ -779,6 +822,13 @@ async function main(): Promise<void> {
       }
       throw err;
     }
+    // A history scan classifies nothing as binary: it reads blobs through
+    // scanText and never goes through the file read path, so it emits no skip
+    // events at all. It therefore CANNOT establish that no relevant binary
+    // exclusion occurred, and must not claim the empty set. `binaryExclusions`
+    // is left undefined, which omits the field and makes history reports
+    // ineligible under this contract -- the honest answer rather than metadata
+    // invented for a mode that never produced it.
     scope = describeScope(commitsScanned, "commit", { generatedExcluded, suppressed, fixtureSuppressed });
     scannedCount = commitsScanned;
     scopeNoun = "commit";
@@ -817,13 +867,22 @@ async function main(): Promise<void> {
       fixtureSuppressed: result.fixtureSuppressed,
       apiDocumentsScoped: result.apiDocumentsScoped,
       oversizedExcluded: result.oversized,
+      binaryExcluded: result.binary,
       unreadableExcluded: result.unreadable,
+      notAFileExcluded: result.notAFile,
+      vanishedExcluded: result.vanished,
       archives,
     });
     selection = { mode: args.command === "staged" ? "staged" : "worktree" };
     inlineSuppressed = result.suppressed;
     coverage.oversizedExcluded = result.oversized;
+    coverage.binaryExcluded = result.binary;
+    // scanFileList visits every enumerated file and reports each skip, so this
+    // list is complete for a file scan. An empty list here is a real claim.
+    binaryExclusions = result.binaryPaths;
     coverage.unreadableExcluded = result.unreadable;
+    coverage.notAFileExcluded = result.notAFile;
+    coverage.vanishedExcluded = result.vanished;
     coverage.outsideExcluded = listed.outsideExcluded + result.outside;
     coverage.archives = archives;
   }
@@ -877,6 +936,10 @@ async function main(): Promise<void> {
   const toolVersion = packageVersion();
   const repoId = repositoryIdentity(root);
   const scopeDigest = scopeIdentity(selection);
+  // A stopped scan saw only part of the tree, so whatever exclusions it did
+  // observe are a PARTIAL set that would compare equal to a complete one.
+  // Withheld for the same reason the selection is.
+  const binaryDigest = coverage.cancelled ? undefined : binaryIdentity(binaryExclusions);
   const report = render(sortFindings(findings), args.format, {
     toolVersion,
     redact: args.redact,
@@ -894,6 +957,7 @@ async function main(): Promise<void> {
       ruleSetDigest: ruleSetDigest(),
       ...(suppression.digest ? { suppressionDigest: suppression.digest } : {}),
       ...(scopeDigest ? { scopeDigest } : {}),
+      ...(binaryDigest ? { binaryDigest } : {}),
       incomplete: limitations.length > 0,
     },
     reportCoverage: {

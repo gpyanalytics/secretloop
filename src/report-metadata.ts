@@ -29,8 +29,30 @@ import { ArchiveAccounting, countOf } from "./archive";
  * A consumer that does not recognise the version must treat the report as
  * incomparable rather than guess. Adding a purely descriptive field does not
  * bump it; changing what `incomplete` counts, or what a digest covers, does.
+ *
+ * 1 -> 2 added `scopeDigest`, so a version-1 report could not be shown to have
+ * examined any particular population.
+ *
+ * 2 -> 3 NARROWED WHAT `incomplete` COUNTS. Binary input (see the classifier's
+ * documented boundary in walk.ts) is now an intentional exclusion rather than a
+ * coverage limitation, so a version-3
+ * report can say `incomplete: false` where version 2 said `true` for the same
+ * tree. The two booleans do not mean the same thing, and comparison requires
+ * `incomplete: false` on BOTH sides -- so without this bump a version-2 report
+ * and a version-3 report would have qualified as equivalent on a field whose
+ * meaning had changed underneath them. Rejecting on the version is the only
+ * thing that stops that, because the value itself still type-checks.
+ *
+ * 3 -> 4 ADDED A REQUIRED FIELD, `binaryDigest`, closing the hole that the
+ * 2 -> 3 exemption opened. Under 3 a file could cross into the binary set
+ * between two scans and its findings would vanish with every comparison field
+ * still equal -- measured: insert one NUL into a file holding a credential,
+ * without touching the credential, and the pair stays eligible while the
+ * finding disappears. Version 4 makes the excluded SET part of eligibility, so
+ * that pair is incomparable. The set of required fields changed, which is the
+ * named trigger for a bump on its own.
  */
-export const REPORT_SCHEMA_VERSION = 2;
+export const REPORT_SCHEMA_VERSION = 4;
 
 /**
  * The version of the scope representation `scopeDigest` covers.
@@ -40,6 +62,15 @@ export const REPORT_SCHEMA_VERSION = 2;
  * the report schema version because the two can move independently.
  */
 export const SCOPE_CONTRACT_VERSION = 1;
+
+/**
+ * The version of the binary-exclusion representation `binaryDigest` covers.
+ *
+ * Carried INSIDE the digest input for the same reason as the scope version: a
+ * change to what an exclusion set means must produce a different digest rather
+ * than a silently comparable one.
+ */
+export const BINARY_CONTRACT_VERSION = 1;
 
 /** The comparison-bearing fields. Every optional one means "unknown" when absent. */
 export interface ComparisonMetadata {
@@ -62,6 +93,12 @@ export interface ComparisonMetadata {
    * not be established.
    */
   scopeDigest?: string;
+  /**
+   * Covers WHICH FILES WERE EXCLUDED AS BINARY, so a file crossing into or out
+   * of that set breaks a pair instead of reading as a finding appearing or
+   * disappearing. Omitted when the scan could not establish the exclusion set.
+   */
+  binaryDigest?: string;
   /** True when the scan could not look at something it set out to look at. */
   incomplete: boolean;
 }
@@ -70,8 +107,21 @@ export interface ComparisonMetadata {
 export interface CoverageFacts {
   /** Files enumerated but skipped for exceeding maxFileSizeBytes. */
   oversizedExcluded?: number;
-  /** Files enumerated but skipped as binary, or unreadable at the read. */
+  /**
+   * Files classified BINARY and intentionally not scanned.
+   *
+   * Descriptive and disclosed, but NOT a coverage limitation: a text scanner
+   * declining binary input is a scope decision, not a failure to look. See
+   * coverageLimitations, and walk.ts for what the classifier does and does not
+   * establish -- it never establishes that the file held no secret.
+   */
+  binaryExcluded?: number;
+  /** Files the scan intended to read and could not: permission, I/O, unknown. */
   unreadableExcluded?: number;
+  /** Paths enumerated that were not regular files by the time they were read. */
+  notAFileExcluded?: number;
+  /** Paths that were gone by the time the read reached them. */
+  vanishedExcluded?: number;
   /** Files refused because a symlink resolved outside the scan root. */
   outsideExcluded?: number;
   /** Archive accounting, when the scan met a container. */
@@ -344,6 +394,63 @@ export function scopeIdentity(selection: ScopeSelection | undefined): string | u
 }
 
 /**
+ * The identity of the set of files EXCLUDED AS BINARY.
+ *
+ * WHY THIS EXISTS. Once a binary exclusion stopped making a report incomplete,
+ * a file could cross into the binary set between two scans and its findings
+ * would simply vanish from the second report with every comparison field still
+ * equal. Measured on the real build: a UTF-8 file holding a credential, then
+ * ONE NUL byte inserted without touching the credential -- the finding is gone,
+ * `incomplete` is still false, all eight other fields match, and a conforming
+ * consumer reads the credential as REMOVED while it sits on disk. This digest
+ * is what makes that pair incomparable, because the excluded set changed.
+ *
+ * WHAT IT COVERS. A canonical, sorted, deduplicated set of REPOSITORY-RELATIVE
+ * paths, carried with `BINARY_CONTRACT_VERSION` inside the digest input.
+ *
+ * NORMALIZATION, so two runs of the same tree agree:
+ *   - separators are normalized to `/`, so a Windows and a POSIX run of one
+ *     tree produce one identity;
+ *   - a leading `./` is stripped;
+ *   - duplicates collapse (a Set), and order is irrelevant -- the caller may
+ *     report exclusions in any order, including a different order per run;
+ *   - an ABSOLUTE path is refused outright, returning undefined rather than
+ *     publishing a local directory layout into a report that travels.
+ *
+ * WHAT IT DOES NOT COVER. No file CONTENT is hashed, no credential, and no
+ * absolute path. It is a set of names and nothing else.
+ *
+ * IT IS NOT ANONYMISATION. Paths in a repository are often predictable --
+ * `docs/icon.png`, `assets/logo.gif` -- so a reader holding a candidate list can
+ * test guesses against this digest exactly as they can against `root`. It is a
+ * comparison identity, not concealment, and nothing here should be read as
+ * hiding which files were excluded.
+ *
+ * THE EMPTY SET IS A REAL IDENTITY, not an absence: a scan that excluded
+ * nothing binary gets a digest, and two such scans compare. `undefined` means
+ * something different and stronger -- the producer could not establish the set
+ * at all -- and under the contract that makes the pair ineligible.
+ */
+export function binaryIdentity(paths: readonly string[] | undefined): string | undefined {
+  // Not "no exclusions": no ACCOUNTING. A producer that cannot observe its own
+  // exclusion events must not claim the empty set, which would compare equal to
+  // a scan that genuinely excluded nothing.
+  if (!paths) return undefined;
+  const normalized = new Set<string>();
+  for (const raw of paths) {
+    if (typeof raw !== "string" || raw === "") return undefined;
+    const slashed = raw.replace(/\\/g, "/").replace(/^\.\//, "");
+    // An absolute path means the caller handed us something that is not
+    // repository-relative. Withholding is the honest answer; publishing it
+    // would put a local layout into the report.
+    if (slashed.startsWith("/") || /^[A-Za-z]:\//.test(slashed)) return undefined;
+    normalized.add(slashed);
+  }
+  const sorted = [...normalized].sort();
+  return `binary:${digest(canonical({ v: BINARY_CONTRACT_VERSION, paths: sorted }))}`;
+}
+
+/**
  * The reasons this scan did not cover everything it set out to cover.
  *
  * Deliberate policy -- generated-file exclusions, fixture suppression, API
@@ -351,14 +458,34 @@ export function scopeIdentity(selection: ScopeSelection | undefined): string | u
  * decisions, they are identified by the configuration digest, and a change to
  * any of them already makes a pair incomparable. What lands here is the scan
  * failing to reach something it intended to read: a file too large, a file it
- * could not decode, a symlink refused by the containment guard, an archive it
- * could not finish enumerating, and a run that was stopped.
+ * could not read, a path that was not a file or was gone, a symlink refused by
+ * the containment guard, an archive it could not finish enumerating, and a run
+ * that was stopped.
+ *
+ * `binaryExcluded` IS DELIBERATELY ABSENT FROM THIS FUNCTION. Binary input is
+ * the same kind of fact as a generated file: a scope decision, not a
+ * failure to look. It stays fully disclosed in the scope sentence -- an
+ * intentional skip is still a skip the reader must know about -- but it does
+ * not make the report incomplete. It used to: binary and "could not read it"
+ * shared one bucket, so a single PNG made every report from that tree
+ * permanently ineligible for comparison.
+ *
+ * This is why REPORT_SCHEMA_VERSION moved to 3. `incomplete` now counts a
+ * strictly narrower set of facts, and a version-2 report that says
+ * `incomplete: true` may be describing nothing worse than an image. Two
+ * meanings of one boolean must never silently qualify as equivalent.
+ *
+ * Everything that is NOT a positive determination stays here, including the
+ * conservative `unreadable` bucket: not knowing why an input did not read is
+ * never evidence that nothing was missed.
  */
 export function coverageLimitations(facts: CoverageFacts): string[] {
   const out: string[] = [];
   const {
     oversizedExcluded = 0,
     unreadableExcluded = 0,
+    notAFileExcluded = 0,
+    vanishedExcluded = 0,
     outsideExcluded = 0,
     archives,
     cancelled = false,
@@ -368,7 +495,13 @@ export function coverageLimitations(facts: CoverageFacts): string[] {
     out.push(`${oversizedExcluded} file(s) not scanned — larger than maxFileSizeBytes`);
   }
   if (unreadableExcluded > 0) {
-    out.push(`${unreadableExcluded} file(s) not scanned — binary or unreadable`);
+    out.push(`${unreadableExcluded} file(s) not scanned — could not be read`);
+  }
+  if (notAFileExcluded > 0) {
+    out.push(`${notAFileExcluded} path(s) not scanned — not a regular file`);
+  }
+  if (vanishedExcluded > 0) {
+    out.push(`${vanishedExcluded} file(s) not scanned — gone before they could be read`);
   }
   if (outsideExcluded > 0) {
     out.push(`${outsideExcluded} file(s) not scanned — resolved outside the scan root`);
