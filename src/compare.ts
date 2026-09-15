@@ -1,4 +1,4 @@
-import { readFileSync, statSync } from "fs";
+import { openSync, fstatSync, readSync, closeSync, statSync } from "fs";
 import { REPORT_SCHEMA_VERSION, scopeIdentity } from "./report-metadata";
 
 /**
@@ -46,9 +46,24 @@ export const MAX_REPORT_BYTES = 64 * 1024 * 1024;
 /** Refuse a findings array longer than this. Bounded work on hostile input. */
 export const MAX_FINDINGS = 200_000;
 
-/** A fingerprint ends in `:` plus the 16-hex digest. Paths may contain colons. */
-const FINGERPRINT_TAIL = /:[0-9a-f]{16}$/;
-const MAX_FINGERPRINT_CHARS = 1024;
+/**
+ * The COMPLETE fingerprint structure the producer emits, per
+ * `createFingerprint` in src/config.ts:
+ *
+ *     <normalized path>:<ruleId>:<16 lowercase hex>
+ *
+ * Parsed from the RIGHT, because only the last two separators are structural: a
+ * path legitimately contains colons on every platform, and `normalizePath` maps
+ * the platform separator to `/` without touching anything else. So the path
+ * segment is whatever remains, and no pattern is imposed on it.
+ *
+ * The rule id IS constrained: every id the build can emit -- all 110 in
+ * src/rules.ts plus `generic-high-entropy` and `pkcs12-private-key` -- matches
+ * this grammar, and the same identity shape is what the baseline file stores.
+ */
+const RULE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const FINGERPRINT_DIGEST = /^[0-9a-f]{16}$/;
+const MAX_FINGERPRINT_CHARS = 4096;
 
 /**
  * Control characters, DEL, and the bidirectional overrides that let text render
@@ -148,15 +163,24 @@ export interface Reason {
  * not a fact.
  */
 export interface FindingRef {
-  fingerprint: string;
+  /**
+   * The rule that matched, taken from the fingerprint and checked against the
+   * rule-id grammar. A closed vocabulary, so it is safe to display.
+   */
   ruleId: string;
-  file: string;
+  /**
+   * The 16-hex tail of the fingerprint: fixed shape, and a VERBATIM SUBSTRING of
+   * the identity already in the report -- not a new identifier, and nothing is
+   * hashed here. It is enough to find the finding again in either report.
+   */
+  digest: string;
   line: number | null;
   severity: string | null;
 }
 
 export interface AmbiguityNote {
-  fingerprint: string;
+  ruleId: string;
+  digest: string;
   beforeCount: number;
   afterCount: number;
 }
@@ -204,14 +228,20 @@ const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
  * Shape is `<path>:<ruleId>:<16 hex>`, split from the RIGHT because a path may
  * itself contain colons.
  */
-function locationOf(fingerprint: string): { file: string; ruleId: string } {
+function parseFingerprint(
+  fingerprint: string
+): { pathPart: string; ruleId: string; digest: string } | null {
   const lastColon = fingerprint.lastIndexOf(":");
+  if (lastColon <= 0) return null;
+  const digest = fingerprint.slice(lastColon + 1);
+  if (!FINGERPRINT_DIGEST.test(digest)) return null;
   const ruleColon = fingerprint.lastIndexOf(":", lastColon - 1);
-  if (ruleColon < 0) return { file: "", ruleId: "" };
-  return {
-    file: fingerprint.slice(0, ruleColon),
-    ruleId: fingerprint.slice(ruleColon + 1, lastColon),
-  };
+  if (ruleColon < 0) return null;
+  const ruleId = fingerprint.slice(ruleColon + 1, lastColon);
+  if (!RULE_ID.test(ruleId)) return null;
+  const pathPart = fingerprint.slice(0, ruleColon);
+  if (pathPart.length === 0) return null;
+  return { pathPart, ruleId, digest };
 }
 
 /** Strip anything that could break a terminal or forge structure in output. */
@@ -231,32 +261,82 @@ function safeText(value: unknown, max = 512): string {
  * Size is checked with `stat` BEFORE the read, so a hostile 4 GB file costs a
  * stat rather than 4 GB of memory.
  */
+/** Chunk size for the bounded read. Also the bound on overflow past the cap. */
+const READ_CHUNK = 1 << 20;
+
+/** Test seam. Not reachable from the CLI, which never passes options. */
+export interface LoadOptions {
+  /** Overrides MAX_REPORT_BYTES so limit tests need no giant fixture. */
+  maxBytes?: number;
+  /** Runs after the descriptor is opened and inspected, before any read. */
+  afterOpen?: () => void;
+}
+
 export function loadReport(
   path: string,
-  side: "before" | "after"
+  side: "before" | "after",
+  options: LoadOptions = {}
 ): { report: LoadedReport } | { reasons: Reason[] } {
+  const limit = options.maxBytes ?? MAX_REPORT_BYTES;
+  const oversized = (): { reasons: Reason[] } => ({
+    reasons: [
+      { code: "oversized-input", side, detail: `report is larger than the ${limit}-byte limit` },
+    ],
+  });
+
   let raw: string;
+  // ONE DESCRIPTOR for inspection and reading.
+  //
+  // The previous shape was `statSync(path)` followed by `readFileSync(path)`:
+  // two independent resolutions of the same name, with no bound on the second.
+  // A file that grew, or a path replaced, between the two was read in full
+  // whatever its size -- the cap described the file that WAS there, not the
+  // bytes that were actually read.
+  //
+  // Now `fstat` inspects the OPENED OBJECT and every byte comes from that same
+  // descriptor, so a later rename or replacement of the path cannot change what
+  // is read, and growth is caught because the cap is enforced DURING the read
+  // rather than before it.
+  let fd: number;
   try {
-    const st = statSync(path);
+    fd = openSync(path, "r");
+  } catch {
+    // The OS message can carry the path and the reason; neither is needed.
+    return { reasons: [{ code: "unreadable-input", side, detail: "could not be opened" }] };
+  }
+  try {
+    const st = fstatSync(fd);
     if (!st.isFile()) {
       return { reasons: [{ code: "unreadable-input", side, detail: "not a regular file" }] };
     }
-    if (st.size > MAX_REPORT_BYTES) {
-      return {
-        reasons: [
-          {
-            code: "oversized-input",
-            side,
-            detail: `report is larger than the ${MAX_REPORT_BYTES}-byte limit`,
-          },
-        ],
-      };
+    // An optimization only: it rejects an already-huge file without reading it.
+    // It is NOT the guard -- the loop below is, and it does not trust this.
+    if (st.size > limit) return oversized();
+    options.afterOpen?.();
+
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const buf = Buffer.allocUnsafe(READ_CHUNK);
+      const n = readSync(fd, buf, 0, READ_CHUNK, null);
+      if (n === 0) break;
+      total += n;
+      // Enforced while reading. At most one chunk is ever read past the cap,
+      // which is the bounded overflow that lets "exactly the limit" and "one
+      // byte over" be told apart, and the input is rejected BEFORE parsing.
+      if (total > limit) return oversized();
+      chunks.push(buf.subarray(0, n));
     }
-    raw = readFileSync(path, "utf8");
+    raw = Buffer.concat(chunks, total).toString("utf8");
   } catch {
-    // The OS error text can contain the path; the path came from the caller
-    // rather than the report, but there is no reason to widen the message.
     return { reasons: [{ code: "unreadable-input", side, detail: "could not be read" }] };
+  } finally {
+    // Closed on every path: success, rejection and throw alike.
+    try {
+      closeSync(fd);
+    } catch {
+      /* already closed or invalid; nothing further to do */
+    }
   }
 
   let parsed: unknown;
@@ -382,23 +462,26 @@ function validateOne(meta: Record<string, unknown>, side: "before" | "after"): R
  * dropping it would under-report a difference in whichever direction happens to
  * be convenient. The caller refuses the whole comparison instead.
  */
-function refOf(raw: unknown): FindingRef | null {
+function refOf(raw: unknown): { key: string; ref: FindingRef } | null {
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
   const f = raw as Record<string, unknown>;
   const fp = f.fingerprint;
   if (typeof fp !== "string") return null;
   if (fp.length === 0 || fp.length > MAX_FINGERPRINT_CHARS) return null;
-  // Shape check rather than a full parse: the path segment may itself contain
-  // colons, so only the trailing digest is structurally guaranteed.
-  if (!FINGERPRINT_TAIL.test(fp)) return null;
   if (UNSAFE_CHARS.test(fp)) return null;
   const line = typeof f.line === "number" && Number.isFinite(f.line) ? f.line : null;
   // Location comes from the fingerprint, not from the report's own fields --
   // see locationOf. `severity` is admitted only from the scanner's own set, so
   // an arbitrary string cannot ride out through it either.
-  const { file, ruleId } = locationOf(fp);
+  const parts = parseFingerprint(fp);
+  if (!parts) return null;
   const severity = typeof f.severity === "string" && SEVERITIES.has(f.severity) ? f.severity : null;
-  return { fingerprint: fp, ruleId, file, line, severity };
+  // The PATH IS DELIBERATELY NOT CARRIED. See the note on FindingRef above and
+  // the policy in docs/reports.md: matching uses the full raw fingerprint,
+  // presentation uses only fields of fixed, closed shape.
+  // `key` is the FULL RAW fingerprint and is used for matching ONLY. It is
+  // never sanitized (that would change what matches what) and never printed.
+  return { key: fp, ref: { ruleId: parts.ruleId, digest: parts.digest, line, severity } };
 }
 
 /**
@@ -421,8 +504,8 @@ function groupByFingerprint(
 ): { groups: Map<string, { ref: FindingRef; count: number }> } | { reasons: Reason[] } {
   const groups = new Map<string, { ref: FindingRef; count: number }>();
   for (let i = 0; i < findings.length; i++) {
-    const ref = refOf(findings[i]);
-    if (!ref) {
+    const parsed = refOf(findings[i]);
+    if (!parsed) {
       return {
         reasons: [
           {
@@ -435,9 +518,9 @@ function groupByFingerprint(
         ],
       };
     }
-    const existing = groups.get(ref.fingerprint);
+    const existing = groups.get(parsed.key);
     if (existing) existing.count += 1;
-    else groups.set(ref.fingerprint, { ref, count: 1 });
+    else groups.set(parsed.key, { ref: parsed.ref, count: 1 });
   }
   return { groups };
 }
@@ -449,14 +532,17 @@ function groupByFingerprint(
  * ineligible pair -- not even internally -- so there is no way for a
  * difference to leak into output beside an "incomparable" verdict.
  *
- * WORKING-TREE SCOPE. This contract admits working-tree reports only, and it
- * establishes that from REQUIRED-FIELD PRESENCE rather than from any prose:
- * a staged report carries no `scopeDigest` and a history report carries no
- * `binaryDigest`, so neither can satisfy the nine-field rule. That is a
- * structural property of the producers, not a coincidence of one run, and it is
- * verified by test. Its limit is documented in docs/reports.md: presence is an
- * INFERENCE, and a future mode emitting all nine would need an explicit
- * declared scope kind to stay distinguishable.
+ * WORKING-TREE SCOPE IS CHECKED POSITIVELY. Each report's `scopeDigest` must
+ * EQUAL `scopeIdentity({ mode: "worktree" })`, computed here from the same
+ * shared authority the producer uses. Presence of the nine fields is not
+ * enough, and neither is the two reports agreeing with each other: two history
+ * scans over the same commits carry equal, well-formed scope digests, so
+ * equality alone would admit them. Because `SCOPE_CONTRACT_VERSION` is hashed
+ * inside that function's input, a report written under a different scope
+ * contract stops matching automatically rather than comparing silently.
+ *
+ * Nothing is inferred from a field being absent, and nothing is read from the
+ * prose scope sentence.
  */
 export function compareReports(before: LoadedReport, after: LoadedReport): ComparisonResult {
   const reasons: Reason[] = [
@@ -545,17 +631,30 @@ export function compareReports(before: LoadedReport, after: LoadedReport): Compa
   for (const [fp, entry] of gb.groups) {
     const other = ga.groups.get(fp);
     if (entry.count > 1 || (other && other.count > 1)) {
-      ambiguousIdentity.push({ fingerprint: fp, beforeCount: entry.count, afterCount: other?.count ?? 0 });
+      ambiguousIdentity.push({
+        ruleId: entry.ref.ruleId,
+        digest: entry.ref.digest,
+        beforeCount: entry.count,
+        afterCount: other?.count ?? 0,
+      });
     }
   }
   for (const [fp, entry] of ga.groups) {
     if (!gb.groups.has(fp) && entry.count > 1) {
-      ambiguousIdentity.push({ fingerprint: fp, beforeCount: 0, afterCount: entry.count });
+      ambiguousIdentity.push({
+        ruleId: entry.ref.ruleId,
+        digest: entry.ref.digest,
+        beforeCount: 0,
+        afterCount: entry.count,
+      });
     }
   }
 
-  const byFp = (x: { fingerprint: string }, y: { fingerprint: string }) =>
-    x.fingerprint < y.fingerprint ? -1 : x.fingerprint > y.fingerprint ? 1 : 0;
+  const byFp = (x: { ruleId: string; digest: string }, y: { ruleId: string; digest: string }) => {
+    const a = `${x.ruleId}:${x.digest}`;
+    const b = `${y.ruleId}:${y.digest}`;
+    return a < b ? -1 : a > b ? 1 : 0;
+  };
   added.sort(byFp);
   persisting.sort(byFp);
   noLongerObserved.sort(byFp);
@@ -600,9 +699,8 @@ export function renderText(result: ComparisonResult): string {
     if (refs.length === 0) return;
     lines.push("", `${title.toUpperCase()} (${refs.length})`);
     for (const f of refs) {
-      const at = f.line === null ? f.file : `${f.file}:${f.line}`;
-      lines.push(`  [${f.severity ?? "unknown"}] ${f.ruleId} — ${at}`);
-      lines.push(`    ${f.fingerprint}`);
+      const at = f.line === null ? "" : ` line ${f.line}`;
+      lines.push(`  [${f.severity ?? "unknown"}] ${f.ruleId}${at} — ${f.digest}`);
     }
   };
   section("new", result.added);
@@ -615,7 +713,7 @@ export function renderText(result: ComparisonResult): string {
     lines.push("  credential repeated in a file shares one identity. Occurrence-level");
     lines.push("  changes below are NOT tracked and are not reported either way:");
     for (const a of result.ambiguousIdentity) {
-      lines.push(`    ${a.fingerprint} — ${a.beforeCount} before, ${a.afterCount} after`);
+      lines.push(`    ${a.ruleId} — ${a.digest} — ${a.beforeCount} before, ${a.afterCount} after`);
     }
   }
 

@@ -1,5 +1,5 @@
 import { test, suite, finish, assert } from "./harness";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
@@ -109,9 +109,9 @@ test("two empty eligible reports compare and say nothing changed", () => {
 test("new, persisting and no-longer-observed are each reported", () => {
   const r = cmp(report({}, [finding(FP1), finding(FP2)]), report({}, [finding(FP1), finding("z.js:slack-token:" + hex("3"))]));
   assert.strictEqual(r.comparable, true);
-  assert.deepStrictEqual(r.persisting.map((f) => f.fingerprint), [FP1]);
-  assert.deepStrictEqual(r.noLongerObserved.map((f) => f.fingerprint), [FP2]);
-  assert.deepStrictEqual(r.added.map((f) => f.fingerprint), ["z.js:slack-token:" + hex("3")]);
+  assert.deepStrictEqual(r.persisting.map((f) => f.digest), [hex("1")]);
+  assert.deepStrictEqual(r.noLongerObserved.map((f) => f.digest), [hex("2")]);
+  assert.deepStrictEqual(r.added.map((f) => f.digest), [hex("3")]);
 });
 
 // ---------------------------------------------------------------------------
@@ -227,10 +227,11 @@ test("duplicate fingerprints are counted, not collapsed by a Set", () => {
   const b = report({}, [finding(FP1, { line: 1 })]);
   const r = cmp(a, b);
   assert.strictEqual(r.comparable, true);
-  assert.deepStrictEqual(r.persisting.map((f) => f.fingerprint), [FP1]);
+  assert.deepStrictEqual(r.persisting.map((f) => f.digest), [hex("1")]);
   assert.deepStrictEqual(r.noLongerObserved, [], "the credential is still there; nothing vanished");
   assert.strictEqual(r.ambiguousIdentity.length, 1, "the occurrence change must be surfaced");
-  assert.deepStrictEqual(r.ambiguousIdentity[0], { fingerprint: FP1, beforeCount: 3, afterCount: 1 });
+  assert.deepStrictEqual(r.ambiguousIdentity[0],
+    { ruleId: "github-token", digest: hex("1"), beforeCount: 3, afterCount: 1 });
 });
 
 test("a finding with no usable fingerprint rejects the comparison outright", () => {
@@ -282,9 +283,9 @@ test("hostile ruleId, file and severity are scrubbed in output", () => {
   for (const ch of ["\u0000", "\u001b", "\u202e"]) {
     assert.ok(!out.includes(ch), `${JSON.stringify(ch)} must not reach output`);
   }
-  // The location now comes from the fingerprint, so the hostile strings are
-  // not shown at all rather than shown with their control characters removed.
-  assert.strictEqual(r.added[0].file, "app.js");
+  // Descriptive fields from the report are not carried at all now.
+  assert.strictEqual(r.added[0].ruleId, "github-token");
+  assert.strictEqual(r.added[0].digest, hex("1"));
 });
 
 test("descriptive fields cannot leak a credential: location comes from the fingerprint", () => {
@@ -298,10 +299,9 @@ test("descriptive fields cannot leak a credential: location comes from the finge
   assert.strictEqual(r.comparable, true);
   const out = renderText(r) + renderJson(r);
   assert.ok(!out.includes(secret), "no descriptive field may echo report-supplied text");
-  // Derived from the validated fingerprint instead, so the displayed location is
-  // always the one that was matched on.
-  assert.strictEqual(r.added[0].file, "app.js");
+  // Derived from the validated fingerprint instead.
   assert.strictEqual(r.added[0].ruleId, "github-token");
+  assert.strictEqual(r.added[0].digest, hex("1"));
   assert.strictEqual(r.added[0].severity, null, "an unknown severity is dropped, not echoed");
 });
 
@@ -315,20 +315,76 @@ test("severity is admitted only from the scanner's own set", () => {
   }
 });
 
-test("LIMIT: the fingerprint is echoed because it is the identity", () => {
-  // The one untrusted string the comparator must print. It embeds the scanned
-  // path, so a report whose PATH contains credential-shaped text has that text
-  // echoed — exactly as the source report already contained it. The comparator
-  // does not widen exposure beyond its input; it cannot narrow it either
-  // without removing the identity it matched on.
+test("a credential in the PATH is never echoed, in either format", () => {
+  // REGRESSION. The path segment of a fingerprint is arbitrary text: no format
+  // check can prove it holds no secret, so it is not printed at all. Matching
+  // still uses the full raw fingerprint, unchanged.
   const secret = token();
-  const r = cmp(report(), report({}, [finding(`${secret}:github-token:${hex("2")}`)]));
+  const a = report();
+  const b = report({}, [finding(`src/${secret}/app.js:github-token:${hex("2")}`)]);
+  const r = cmp(a, b);
   assert.strictEqual(r.comparable, true);
-  assert.ok(renderText(r).includes(secret),
-    "documented limit: the identity is printed, and the identity embeds the path");
-  // What is NOT echoed is any separate content-bearing field.
-  const r2 = cmp(report(), report({}, [finding(FP1, { value: secret, redactedValue: secret })]));
-  assert.ok(!(renderText(r2) + renderJson(r2)).includes(secret));
+  const out = renderText(r) + renderJson(r);
+  assert.ok(!out.includes(secret), "the path must not reach text or JSON output");
+  // What IS shown is enough to find the finding again in either report.
+  assert.strictEqual(r.added[0].ruleId, "github-token");
+  assert.strictEqual(r.added[0].digest, hex("2"));
+
+  // Matching is unaffected: the same path on both sides still pairs up.
+  const same = cmp(b, report({}, [finding(`src/${secret}/app.js:github-token:${hex("2")}`)]));
+  assert.strictEqual(same.persisting.length, 1);
+  assert.strictEqual(same.added.length, 0);
+  // A DIFFERENT path with the same rule and digest is a different finding.
+  const other = cmp(b, report({}, [finding(`src/other/app.js:github-token:${hex("2")}`)]));
+  assert.strictEqual(other.added.length, 1, "the raw path still distinguishes identities");
+  assert.strictEqual(other.noLongerObserved.length, 1);
+});
+
+test("a credential in the path is absent from AMBIGUITY entries and errors too", () => {
+  const secret = token();
+  const fp = `src/${secret}/app.js:github-token:${hex("3")}`;
+  // Ambiguity path.
+  const amb = cmp(report({}, [finding(fp), finding(fp)]), report({}, [finding(fp)]));
+  assert.strictEqual(amb.ambiguousIdentity.length, 1);
+  assert.ok(!(renderText(amb) + renderJson(amb)).includes(secret), "ambiguity entries must not echo it");
+  // Error path: a malformed sibling forces rejection while this one is present.
+  const err = cmp(report(), report({}, [finding(fp), { fingerprint: `x/${secret}:BADRULE:${hex("4")}` }]));
+  assert.strictEqual(err.comparable, false);
+  assert.ok(!(renderText(err) + renderJson(err)).includes(secret), "reasons must not echo it");
+});
+
+test("legitimate fingerprint shapes are accepted", () => {
+  const shapes = [
+    `app.js:github-token:${hex("1")}`,
+    `src/deep/nested/path/file.ts:aws-access-key:${hex("2")}`,
+    `weird:name/with:colons.js:generic-high-entropy:${hex("3")}`,
+    `spaced name/a b.txt:pkcs12-private-key:${hex("4")}`,
+    `C:/Windows/path/app.cfg:azure-sas-token:${hex("5")}`,
+    `ünïcode/pÄth.js:gitlab-pat:${hex("6")}`,
+    `a:${hex("7")}`.replace(`a:`, `a:github-token:`),
+  ];
+  for (const fp of shapes) {
+    const r = cmp(report(), report({}, [finding(fp)]));
+    assert.strictEqual(r.comparable, true, `legitimate fingerprint refused: ${fp}`);
+  }
+});
+
+test("structurally wrong fingerprints are refused, not guessed at", () => {
+  for (const fp of [
+    `app.js:github-token:${"g".repeat(16)}`,      // digest not hex
+    `app.js:github-token:${hex("1")}extra`,        // digest not the tail
+    `app.js:Github-Token:${hex("1")}`,             // rule id not the grammar
+    `app.js:github token:${hex("1")}`,             // space in rule id
+    `app.js:github_token:${hex("1")}`,             // underscore in rule id
+    `app.js::${hex("1")}`,                          // empty rule id
+    `:github-token:${hex("1")}`,                    // empty path
+    `github-token:${hex("1")}`,                     // no path segment
+    hex("1"),                                       // digest alone
+  ]) {
+    const r = cmp(report(), report({}, [finding(fp)]));
+    assert.strictEqual(r.comparable, false, `must refuse: ${fp}`);
+    assert.ok(codes(r).includes("malformed-finding-identity"));
+  }
 });
 
 test("a value field is never copied through, whatever it is called", () => {
@@ -343,7 +399,8 @@ test("a value field is never copied through, whatever it is called", () => {
   // Explicit fields only: the finding reference carries exactly five keys.
   assert.deepStrictEqual(
     Object.keys(r.added[0]).sort(),
-    ["file", "fingerprint", "line", "ruleId", "severity"]
+    ["digest", "line", "ruleId", "severity"],
+    "no path and no raw fingerprint may appear in a result"
   );
 });
 
@@ -375,6 +432,105 @@ test("an over-long findings array is refused rather than processed", () => {
     writeFileSync(p, JSON.stringify({ findings: new Array(MAX_FINDINGS + 1).fill(0) }));
     const res = loadReport(p, "before");
     assert.ok("reasons" in res && res.reasons[0].code === "malformed-findings");
+  });
+});
+
+// ---------------------------------------------------------------------------
+suite("\ncompare (unit) — the read is bounded by the descriptor, not the name");
+
+/** Small limits and an injected hook: no giant fixtures, no timing races. */
+test("exactly the limit is accepted; one byte over is refused", () => {
+  withDir((dir) => {
+    const body = JSON.stringify(report());
+    const p = path.join(dir, "r.json");
+    writeFileSync(p, body);
+    const exact = Buffer.byteLength(body);
+
+    assert.ok("report" in loadReport(p, "before", { maxBytes: exact }), "exactly the limit must pass");
+    const over = loadReport(p, "before", { maxBytes: exact - 1 });
+    assert.ok("reasons" in over && over.reasons[0].code === "oversized-input",
+      "one byte over the limit must be refused");
+  });
+});
+
+test("growth after inspection is caught DURING the read", () => {
+  withDir((dir) => {
+    const p = path.join(dir, "r.json");
+    const body = JSON.stringify(report());
+    writeFileSync(p, body);
+    const size = Buffer.byteLength(body);
+
+    // fstat sees `size`; the hook then appends past the cap before any read.
+    // The old shape (stat then unrestricted readFileSync) read it all anyway.
+    const res = loadReport(p, "before", {
+      maxBytes: size,
+      afterOpen: () => appendFileSync(p, "x".repeat(size * 4)),
+    });
+    assert.ok("reasons" in res && res.reasons[0].code === "oversized-input",
+      "the cap must be enforced while reading, not only before it");
+  });
+});
+
+test("replacing the path after opening does not change what is read", () => {
+  withDir((dir) => {
+    const p = path.join(dir, "r.json");
+    const original = report({}, [finding(FP1)]);
+    writeFileSync(p, JSON.stringify(original));
+
+    const res = loadReport(p, "before", {
+      afterOpen: () => {
+        // Swap the NAME for different content. The descriptor still refers to
+        // the original inode, so the swap must not be observed.
+        unlinkSync(p);
+        writeFileSync(p, JSON.stringify(report({}, [finding(FP2), finding(FP1)])));
+      },
+    });
+    assert.ok("report" in res);
+    assert.strictEqual(res.report.findings.length, 1, "the original object must be what was read");
+  });
+});
+
+test("non-regular inputs are refused through the opened descriptor", () => {
+  withDir((dir) => {
+    mkdirSync(path.join(dir, "adir"));
+    const d = loadReport(path.join(dir, "adir"), "before");
+    assert.ok("reasons" in d && d.reasons[0].code === "unreadable-input");
+    assert.strictEqual(d.reasons[0].detail, "not a regular file");
+
+    // A symlink to a directory resolves to one; fstat on the opened object sees
+    // that, so the check cannot be sidestepped by the name.
+    symlinkSync(path.join(dir, "adir"), path.join(dir, "link"));
+    assert.ok("reasons" in loadReport(path.join(dir, "link"), "before"));
+  });
+});
+
+test("open failures are reported without leaking the reason or the path", () => {
+  withDir((dir) => {
+    const res = loadReport(path.join(dir, "absent.json"), "after");
+    assert.ok("reasons" in res);
+    assert.strictEqual(res.reasons[0].code, "unreadable-input");
+    assert.strictEqual(res.reasons[0].detail, "could not be opened");
+    assert.ok(!JSON.stringify(res).includes(dir), "the path must not appear in the reason");
+    assert.ok(!/ENOENT|no such file/i.test(JSON.stringify(res)), "nor the OS error text");
+  });
+});
+
+test("descriptors are closed on every path, including failures", () => {
+  withDir((dir) => {
+    const good = path.join(dir, "ok.json");
+    writeFileSync(good, JSON.stringify(report()));
+    mkdirSync(path.join(dir, "adir"));
+    const missing = path.join(dir, "absent.json");
+
+    // Enough iterations to exhaust the descriptor table if any path leaked one.
+    for (let i = 0; i < 400; i++) {
+      loadReport(good, "before");
+      loadReport(path.join(dir, "adir"), "before");
+      loadReport(missing, "before");
+      loadReport(good, "before", { maxBytes: 1 });
+    }
+    assert.ok("report" in loadReport(good, "before"),
+      "a normal load must still succeed: a leaked descriptor would have exhausted the table");
   });
 });
 
@@ -664,13 +820,15 @@ test("DUPLICATES: ambiguous multiplicity invents no match and no disappearance",
   assert.strictEqual(r.comparable, true);
   assert.deepStrictEqual(r.noLongerObserved, [], "one fewer occurrence is NOT a disappearance");
   assert.deepStrictEqual(r.added, [], "and it is not an appearance either");
-  assert.deepStrictEqual(r.persisting.map((f) => f.fingerprint), [FP1]);
-  assert.deepStrictEqual(r.ambiguousIdentity, [{ fingerprint: FP1, beforeCount: 2, afterCount: 1 }]);
+  assert.deepStrictEqual(r.persisting.map((f) => f.digest), [hex("1")]);
+  assert.deepStrictEqual(r.ambiguousIdentity,
+    [{ ruleId: "github-token", digest: hex("1"), beforeCount: 2, afterCount: 1 }]);
 
   // The reverse direction is equally silent about the count.
   const rev = cmp(b, a);
   assert.deepStrictEqual(rev.added, []);
-  assert.deepStrictEqual(rev.ambiguousIdentity, [{ fingerprint: FP1, beforeCount: 1, afterCount: 2 }]);
+  assert.deepStrictEqual(rev.ambiguousIdentity,
+    [{ ruleId: "github-token", digest: hex("1"), beforeCount: 1, afterCount: 2 }]);
 
   // And the output says so in words rather than leaving it to be inferred.
   const text = renderText(r);

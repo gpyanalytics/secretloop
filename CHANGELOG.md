@@ -51,15 +51,29 @@ heading below.
     structure is validated before processing, output fields are built explicitly
     rather than copied from the input, and no `value` or `redactedValue` is ever
     emitted — a field named "redacted" is a claim by the input, not a fact.
-    Control characters and bidirectional overrides are refused in identities.
-    The displayed location and rule are derived from the **validated
-    fingerprint** rather than from the report's own `file` and `ruleId`, which
-    are free-form and could carry anything, and `severity` is admitted only from
-    the scanner's own set — so no descriptive field can echo report-supplied
-    text. The fingerprint itself is printed because it is the identity, and it
-    embeds the scanned path; exposure is never widened beyond the input report.
-    Validation errors name the field at fault and never quote its value.
-    Nothing in a report is fetched or executed.
+    **No report-supplied free text is printed at all.** Results carry only
+    `ruleId` (checked against the rule-id grammar, a closed vocabulary), the
+    16-hex `digest` tail of the fingerprint, `line` and `severity` (admitted
+    only from the scanner's own set). The scanned path and the raw fingerprint
+    are **not** shown: a path is arbitrary text, and no format check can
+    establish that arbitrary text contains no secret, so the comparator declines
+    to print it rather than claim otherwise. `value` and `redactedValue` are
+    never emitted, and the report's own `file` and `ruleId` fields are ignored
+    in favour of the identity actually matched on. No new secret-derived
+    identifier is computed — the digest is a verbatim substring of the
+    fingerprint the report already carries. Matching still uses the **full raw
+    fingerprint**, never a sanitized one, and an identity that cannot be parsed
+    against the full `<path>:<ruleId>:<16 hex>` structure rejects the whole
+    comparison instead of being dropped. Validation errors name the field at
+    fault and never quote its value. Nothing in a report is fetched or executed.
+  - **The read is bounded by the descriptor, not the name.** Each report is
+    opened once, inspected with `fstat` on the opened object, and read from that
+    same descriptor with the cap enforced **during** the read — at most one
+    chunk past the limit — and rejected before parsing. The descriptor is closed
+    on every path. A file that grows or a path replaced after inspection can no
+    longer cause an unbounded read. This is not an immutable or authenticated
+    snapshot: another process writing the same file can still change what a
+    later run sees.
   - No rescanning, no liveness verification, no provider call, no remediation,
     and no editor or MCP integration.
 

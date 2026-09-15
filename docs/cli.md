@@ -13,7 +13,7 @@ Applies to **published 0.5.1**.
 | `scan` | Scan the working tree (the default when no command is given). |
 | `staged` | Scan staged changes only. This is what the pre-commit hook runs. |
 | `history` | Scan git history for secrets committed at any point, including ones deleted later. |
-| `compare` | Compare two saved JSON reports (older first). Reads files only — never rescans, verifies or contacts a provider. |
+| `compare` | Compare two saved JSON reports (older first). Reads files only — never rescans, verifies or contacts a provider. Results name the rule and identity digest; scanned paths are not echoed. |
 | `mask` | Read stdin, write it back with every secret replaced by `[REDACTED:<rule-id>]`. |
 | `approve <fingerprint>` | Authorize one credential verification that an MCP client requested. Interactive only. |
 | `help` / `version` | Print the help text or the version. |

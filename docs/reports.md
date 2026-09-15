@@ -413,6 +413,21 @@ excluded.
 reads two saved reports and nothing else: it never rescans, never verifies
 liveness, never contacts a provider and never writes to a scanned file.
 
+**The read is bounded by the descriptor, not by the name.** Each report is
+opened once; the opened object is inspected with `fstat` and every byte is read
+from that same descriptor, with the byte cap enforced **while reading** rather
+than only before it. At most one chunk is ever read past the cap, which is what
+lets "exactly the limit" and "one byte over" be told apart, and an oversized
+report is rejected **before parsing**. The descriptor is closed on every path,
+including failures. An initial size check remains, but only as an optimization
+that avoids reading an already-huge file — it is not the guard.
+
+This means a file that grows, or a path that is replaced, after inspection
+cannot cause an unbounded read. It does **not** mean the comparator holds an
+immutable or authenticated snapshot: another process writing to the same file
+can still change what a *later* run sees, and nothing here proves the bytes read
+came from the scan they claim to describe.
+
 Exit codes distinguish the three outcomes that must never be confused:
 
 | code | meaning |
@@ -455,21 +470,40 @@ That is the right boundary for metadata designed to prevent *accidental*
 mis-comparison, but a caller comparing reports from an untrusted source is
 trusting that source, not this contract.
 
-**Report text is never echoed back.** A report is untrusted input, so the
-comparator builds its output field by field rather than copying the input's
-objects through. `value` and `redactedValue` are never emitted — a field named
-"redacted" is a claim by the input, not a fact — and the displayed location and
-rule are derived from the **validated fingerprint**, not from the report's own
-`file` and `ruleId`, which are free-form strings that could carry anything.
-`severity` is admitted only from the scanner's own set. Validation errors name
-the field at fault and never quote its value.
+**No report-supplied free text is ever printed.** A report is untrusted input,
+so the comparator builds its output from fields of fixed, closed shape only:
 
-The one untrusted string the comparator does print is the **fingerprint**,
-because it is the identity it matched on. A fingerprint embeds the scanned path,
-so a report whose path contains credential-shaped text has that text shown —
-exactly as the source report already contained it. The comparator does not widen
-exposure beyond its input, and it cannot narrow this without dropping the
-identity from its output.
+| shown | why it is safe to show |
+|---|---|
+| `ruleId` | taken from the fingerprint and checked against the rule-id grammar, a closed vocabulary |
+| `digest` | the 16-hex tail of the fingerprint — fixed shape, and a verbatim substring of the identity already in the report |
+| `line` | a number |
+| `severity` | admitted only from the scanner's own set |
+
+**The scanned path is deliberately not shown, and neither is the raw
+fingerprint.** A path is arbitrary text, and **no format check can establish
+that arbitrary text contains no secret** — a credential-shaped path passes every
+pattern a display filter could apply. Rather than claim otherwise, the
+comparator does not print it. `value` and `redactedValue` are never emitted
+either; a field named "redacted" is a claim by the input, not a fact, and the
+report's own `file` and `ruleId` fields are ignored entirely in favour of the
+identity that was actually matched on.
+
+To locate a finding, look up its `ruleId` and `digest` in whichever report you
+already hold: together they identify it, and neither is new — the digest is a
+substring of the fingerprint the report already carries. **No new
+secret-derived identifier is computed**; nothing is hashed here.
+
+**Matching is unaffected.** Eligibility and matching use the **full raw
+fingerprint**, exactly as it appears in the report. It is never sanitized,
+truncated or normalised before matching — that would change which findings pair
+up. Presentation is a separate step that discards rather than rewrites.
+
+A finding whose identity cannot be parsed against the full structure
+(`<path>:<ruleId>:<16 hex>`) is **never silently dropped**: it rejects the whole
+comparison, which is reported as `malformed-finding-identity`.
+
+Validation errors name the field at fault and never quote its value.
 
 **Duplicate identities are reported, not resolved.** A fingerprint covers
 (path, rule, value) and deliberately not the line, so one credential repeated in
