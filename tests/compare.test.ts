@@ -574,6 +574,59 @@ test("no truncation note when everything fits", () => {
   assert.strictEqual(r.reasons.length, 2);
 });
 
+test("the per-side cap is exact at 0, 1, 10 and 11 invalid findings", () => {
+  const N = MAX_FINDING_DIAGNOSTICS_PER_SIDE;
+  const invalid = (n: number) => Array.from({ length: n }, (_, i) => badStruct(i));
+
+  // 0: a valid pair is comparable and carries no diagnostics at all.
+  const none = cmp(report({}, [at("a.js", "1")]), report({}, [at("a.js", "1")]));
+  assert.strictEqual(none.comparable, true);
+  assert.deepStrictEqual(none.reasons, []);
+
+  for (const [count, expectDetailed, expectTruncation] of [
+    [1, 1, false],
+    [N, N, false],          // exactly at the cap: everything described, no note
+    [N + 1, N, true],       // one over: the note appears
+  ] as const) {
+    const r = cmp(report({}, invalid(count)), report());
+    assert.strictEqual(r.comparable, false, `${count} invalid must refuse`);
+    const detailed = r.reasons.filter((x) => x.code === "malformed-finding-identity");
+    const trunc = r.reasons.filter((x) => x.code === "diagnostics-truncated");
+    assert.strictEqual(detailed.length, expectDetailed, `${count}: detailed count`);
+    assert.strictEqual(trunc.length, expectTruncation ? 1 : 0, `${count}: truncation note`);
+    // Indices are zero-based positions in that input, in ascending order.
+    assert.deepStrictEqual(
+      detailed.map((x) => x.field),
+      Array.from({ length: expectDetailed }, (_, i) => `findings[${i}]`),
+      `${count}: index convention`
+    );
+    if (expectTruncation) {
+      assert.match(trunc[0].detail, new RegExp(`${count} invalid finding\\(s\\) in total`));
+      assert.match(trunc[0].detail, new RegExp(`${count - expectDetailed} not listed`));
+    }
+  }
+});
+
+test("both sides over the cap each get their own truncation note", () => {
+  const N = MAX_FINDING_DIAGNOSTICS_PER_SIDE;
+  const r = cmp(
+    report({}, Array.from({ length: N + 5 }, (_, i) => badStruct(i))),
+    report({}, Array.from({ length: N + 2 }, (_, i) => badRule(i)))
+  );
+  assert.strictEqual(r.comparable, false);
+  for (const [side, total] of [["before", N + 5], ["after", N + 2]] as const) {
+    const mine = r.reasons.filter((x) => x.side === side);
+    assert.strictEqual(mine.filter((x) => x.code === "malformed-finding-identity").length, N,
+      `${side}: capped at the budget`);
+    const trunc = mine.filter((x) => x.code === "diagnostics-truncated");
+    assert.strictEqual(trunc.length, 1, `${side}: its own truncation note`);
+    assert.match(trunc[0].detail, new RegExp(`${total} invalid finding\\(s\\) in total`));
+  }
+  // Ordering stays before-side block then after-side block.
+  const sides = r.reasons.map((x) => x.side);
+  assert.deepStrictEqual(sides, [...Array(N + 1).fill("before"), ...Array(N + 1).fill("after")]);
+});
+
 test("valid findings that WOULD differ produce no partial results", () => {
   const r = cmp(
     report({}, [at("a.js", "1"), badStruct(0)]),
