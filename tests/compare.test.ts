@@ -4,6 +4,7 @@ import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
 import {
+  MAX_FINDING_DIAGNOSTICS_PER_SIDE,
   compareReports,
   loadReport,
   renderText,
@@ -436,6 +437,166 @@ test("an over-long findings array is refused rather than processed", () => {
     const res = loadReport(p, "before");
     assert.ok("reasons" in res && res.reasons[0].code === "malformed-findings");
   });
+});
+
+// ---------------------------------------------------------------------------
+suite("\ncompare — displayed references that stand for several identities");
+
+/** A finding at an explicit path, so display collisions can be constructed. */
+const at = (path: string, digest: string, over: Record<string, unknown> = {}) =>
+  finding(`${path}:github-token:${hex(digest)}`, over);
+
+test("A unique displayed reference produces no note at all", () => {
+  const r = cmp(report(), report({}, [at("u.js", "3")]));
+  assert.strictEqual(r.comparable, true);
+  assert.deepStrictEqual(r.sharedDisplayReferences, []);
+  assert.deepStrictEqual(r.ambiguousIdentity, []);
+  assert.ok(!renderText(r).includes("SHARED DISPLAY REFERENCE"));
+});
+
+test("B repeated occurrences of ONE identity are ambiguity, not a shared reference", () => {
+  const r = cmp(report({}, [at("a.js", "1")]), report({}, [at("a.js", "1"), at("a.js", "1", { line: 9 })]));
+  assert.strictEqual(r.comparable, true);
+  assert.strictEqual(r.ambiguousIdentity.length, 1, "one identity seen twice");
+  assert.deepStrictEqual(r.ambiguousIdentity[0],
+    { ruleId: "github-token", digest: hex("1"), beforeCount: 1, afterCount: 2 });
+  assert.deepStrictEqual(r.sharedDisplayReferences, [],
+    "a repeated identity is NOT a display collision");
+});
+
+test("C distinct identities sharing a displayed pair are reported separately", () => {
+  const r = cmp(report(), report({}, [at("x/one.js", "2"), at("y/two.js", "2")]));
+  assert.strictEqual(r.comparable, true);
+  // Told apart correctly: two separate results, not merged.
+  assert.strictEqual(r.added.length, 2, "distinct findings must stay distinct");
+  assert.deepStrictEqual(r.sharedDisplayReferences,
+    [{ ruleId: "github-token", digest: hex("2"), distinctIdentities: 2 }]);
+  assert.deepStrictEqual(r.ambiguousIdentity, [],
+    "a display collision is NOT an occurrence count");
+});
+
+test("the two kinds are reported in separate sections with distinct wording", () => {
+  const r = cmp(
+    report({}, [at("a.js", "1")]),
+    report({}, [at("a.js", "1"), at("a.js", "1", { line: 9 }), at("x/one.js", "2"), at("y/two.js", "2")])
+  );
+  const text = renderText(r);
+  assert.match(text, /SHARED DISPLAY REFERENCE \(1\)/);
+  assert.match(text, /AMBIGUOUS IDENTITY \(1\)/);
+  // The three things a user must be told about a shared reference.
+  assert.match(text, /More than one DISTINCT finding/);
+  assert.match(text, /paths are omitted from this output on purpose/i);
+  assert.match(text, /may return MORE THAN ONE match/);
+  // And the occurrence section says it is a different thing.
+  assert.match(text, /a different thing from the shared/);
+});
+
+test("a display collision spanning the two reports is caught", () => {
+  const r = cmp(report({}, [at("x/one.js", "2")]), report({}, [at("y/two.js", "2")]));
+  assert.strictEqual(r.comparable, true);
+  assert.strictEqual(r.added.length, 1);
+  assert.strictEqual(r.noLongerObserved.length, 1);
+  assert.deepStrictEqual(r.sharedDisplayReferences,
+    [{ ruleId: "github-token", digest: hex("2"), distinctIdentities: 2 }]);
+});
+
+test("the JSON field is additive and carries no path, fingerprint or new hash", () => {
+  const secret = token();
+  const r = cmp(report(), report({}, [at(`x/${secret}/one.js`, "2"), at("y/two.js", "2")]));
+  const d = JSON.parse(renderJson(r));
+  // Existing keys are unchanged; the new one is added beside them.
+  for (const k of ["tool", "comparable", "summary", "new", "persisting",
+                   "noLongerObserved", "ambiguousIdentity", "caveat"]) {
+    assert.ok(k in d, `existing key lost: ${k}`);
+  }
+  assert.deepStrictEqual(d.sharedDisplayReferences,
+    [{ ruleId: "github-token", digest: hex("2"), distinctIdentities: 2 }]);
+  assert.strictEqual(d.summary.sharedDisplayReferences, 1);
+  // Only ruleId, digest and a count -- nothing else.
+  assert.deepStrictEqual(Object.keys(d.sharedDisplayReferences[0]).sort(),
+    ["digest", "distinctIdentities", "ruleId"]);
+  const out = renderText(r) + renderJson(r);
+  assert.ok(!out.includes(secret), "no path may reach output");
+});
+
+// ---------------------------------------------------------------------------
+suite("\ncompare — invalid findings are collected from BOTH reports, bounded");
+
+const badRule = (i: number) => ({ fingerprint: `p${i}.js:${unknownRuleId()}:${hex("7")}` });
+const badStruct = (i: number) => ({ fingerprint: `nostructure${i}` });
+
+test("errors from both sides are reported, in a deterministic order", () => {
+  const r = cmp(
+    report({}, [at("a.js", "1"), badRule(0), badStruct(1)]),
+    report({}, [badStruct(2), at("b.js", "2"), badRule(3)])
+  );
+  assert.strictEqual(r.comparable, false);
+  const fields = r.reasons.map((x) => `${x.side}:${x.field}`);
+  assert.deepStrictEqual(fields, [
+    "before:findings[1]", "before:findings[2]",
+    "after:findings[0]", "after:findings[2]",
+  ], "before side first, each in ascending index order");
+  // The cause is named without quoting anything the report supplied.
+  const details = r.reasons.map((x) => x.detail).join(" | ");
+  assert.match(details, /names a rule this build does not support/);
+  assert.match(details, /has no usable fingerprint/);
+});
+
+test("one side cannot exhaust the allowance and hide the other", () => {
+  const flood = Array.from({ length: 40 }, (_, i) => badRule(i));
+  const few = Array.from({ length: 3 }, (_, i) => badStruct(i));
+  const r = cmp(report({}, flood), report({}, few));
+  assert.strictEqual(r.comparable, false);
+  const before = r.reasons.filter((x) => x.side === "before");
+  const after = r.reasons.filter((x) => x.side === "after");
+  assert.strictEqual(before.filter((x) => x.code === "malformed-finding-identity").length,
+    MAX_FINDING_DIAGNOSTICS_PER_SIDE, "the flooding side is capped");
+  assert.strictEqual(after.length, 3, "the other side's errors all survive");
+  assert.ok(after.every((x) => x.code === "malformed-finding-identity"),
+    "and need no truncation note");
+});
+
+test("truncation is stated explicitly, with an exact total", () => {
+  const flood = Array.from({ length: 25 }, (_, i) => badStruct(i));
+  const r = cmp(report({}, flood), report());
+  const trunc = r.reasons.filter((x) => x.code === "diagnostics-truncated");
+  assert.strictEqual(trunc.length, 1);
+  assert.strictEqual(trunc[0].side, "before");
+  // Every finding IS inspected, so the total may be stated exactly.
+  assert.match(trunc[0].detail, /25 invalid finding\(s\) in total/);
+  assert.match(trunc[0].detail, new RegExp(`${MAX_FINDING_DIAGNOSTICS_PER_SIDE} described above`));
+  assert.match(trunc[0].detail, new RegExp(`${25 - MAX_FINDING_DIAGNOSTICS_PER_SIDE} not listed`));
+});
+
+test("no truncation note when everything fits", () => {
+  const r = cmp(report({}, [badStruct(0), badStruct(1)]), report());
+  assert.deepStrictEqual(r.reasons.filter((x) => x.code === "diagnostics-truncated"), []);
+  assert.strictEqual(r.reasons.length, 2);
+});
+
+test("valid findings that WOULD differ produce no partial results", () => {
+  const r = cmp(
+    report({}, [at("a.js", "1"), badStruct(0)]),
+    report({}, [at("b.js", "2"), badRule(1)])
+  );
+  assert.strictEqual(r.comparable, false);
+  assert.deepStrictEqual(r.added, []);
+  assert.deepStrictEqual(r.persisting, []);
+  assert.deepStrictEqual(r.noLongerObserved, []);
+  assert.deepStrictEqual(r.ambiguousIdentity, []);
+  assert.deepStrictEqual(r.sharedDisplayReferences, []);
+  const d = JSON.parse(renderJson(r));
+  assert.deepStrictEqual(Object.keys(d).sort(), ["comparable", "reasons", "tool"]);
+});
+
+test("metadata failures still refuse BEFORE any finding is matched", () => {
+  // Ineligible metadata plus invalid findings: only the metadata reasons appear,
+  // so matching is never reached.
+  const r = cmp(report({ incomplete: true }), report({}, [badStruct(0), badStruct(1)]));
+  assert.strictEqual(r.comparable, false);
+  assert.ok(codes(r).includes("incomplete-coverage"));
+  assert.ok(!codes(r).includes("malformed-finding-identity"),
+    "finding validation must not run once eligibility has failed");
 });
 
 // ---------------------------------------------------------------------------
@@ -1050,6 +1211,53 @@ test("CLI: a credential-shaped path is accepted internally and absent from outpu
       assert.strictEqual(out.status, 1, "the pair must still compare");
       assert.ok(!(out.stdout + out.stderr).includes(secret), "the path must not reach output");
     }
+  });
+});
+
+test("CLI: a shared displayed reference is explained, without paths", () => {
+  withDir((dir) => {
+    const secret = token();
+    const A = path.join(dir, "A.json"), B = path.join(dir, "B.json");
+    writeFileSync(A, JSON.stringify(report()));
+    writeFileSync(B, JSON.stringify(report({}, [
+      at(`x/${secret}/one.js`, "2"), at("y/two.js", "2"),
+    ])));
+    const out = cli(["compare", A, B]);
+    assert.strictEqual(out.status, 1, "a normal comparison with new findings");
+    assert.match(out.stdout, /SHARED DISPLAY REFERENCE/);
+    assert.match(out.stdout, /2 distinct findings/);
+    assert.ok(!(out.stdout + out.stderr).includes(secret), "no path may reach output");
+
+    const d = JSON.parse(cli(["compare", A, B, "--format", "json"]).stdout);
+    assert.strictEqual(d.summary.sharedDisplayReferences, 1);
+    assert.strictEqual(d.summary.new, 2, "the two findings are still counted separately");
+  });
+});
+
+test("CLI: invalid findings on both sides are all reported, bounded and truncated", () => {
+  withDir((dir) => {
+    const A = path.join(dir, "A.json"), B = path.join(dir, "B.json");
+    const flood = Array.from({ length: 40 }, (_, i) => badRule(i));
+    writeFileSync(A, JSON.stringify(report({}, [at("a.js", "1"), ...flood])));
+    writeFileSync(B, JSON.stringify(report({}, [badStruct(0), at("b.js", "2"), badStruct(1)])));
+
+    for (const args of [["compare", A, B], ["compare", A, B, "--format", "json"]]) {
+      const out = cli(args);
+      assert.strictEqual(out.status, 3, `${args.join(" ")} must refuse`);
+      const both = out.stdout + out.stderr;
+      // Neither side's valid digests may leak as a partial result.
+      assert.ok(!both.includes(hex("1")) && !both.includes(hex("2")),
+        "no partial differences may be emitted");
+    }
+    const d = JSON.parse(cli(["compare", A, B, "--format", "json"]).stdout);
+    assert.deepStrictEqual(Object.keys(d).sort(), ["comparable", "reasons", "tool"]);
+    const before = d.reasons.filter((r: any) => r.side === "before");
+    const after = d.reasons.filter((r: any) => r.side === "after");
+    assert.strictEqual(after.length, 2, "the smaller side stays fully visible");
+    assert.ok(before.some((r: any) => r.code === "diagnostics-truncated"));
+    // No unsupported rule id is ever echoed.
+    const text = JSON.stringify(d);
+    assert.ok(!/zz[a-z0-9]{24}/.test(text), "an unsupported rule id reached output");
   });
 });
 

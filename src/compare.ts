@@ -50,6 +50,20 @@ export const MAX_REPORT_BYTES = 64 * 1024 * 1024;
 export const MAX_FINDINGS = 200_000;
 
 /**
+ * How many invalid findings are described IN DETAIL for each report.
+ *
+ * PER SIDE, not shared, and that is the point: a single allowance would let one
+ * hostile report fill it and hide every error in the other, so a user fixing
+ * the first side would then discover the second only on the next run. Each side
+ * gets its own budget, so errors from both are always visible.
+ *
+ * Every finding is still INSPECTED -- the walk is bounded by MAX_FINDINGS -- so
+ * the counts reported are exact. Only the per-error detail is capped, which is
+ * what keeps output bounded on hostile input.
+ */
+export const MAX_FINDING_DIAGNOSTICS_PER_SIDE = 10;
+
+/**
  * The COMPLETE fingerprint structure the producer emits, per
  * `createFingerprint` in src/config.ts:
  *
@@ -160,7 +174,8 @@ export type ReasonCode =
   | "identity-mismatch"
   | "unsupported-scope"
   | "malformed-findings"
-  | "malformed-finding-identity";
+  | "malformed-finding-identity"
+  | "diagnostics-truncated";
 
 export interface Reason {
   code: ReasonCode;
@@ -240,6 +255,34 @@ export interface AmbiguityNote {
   afterCount: number;
 }
 
+/**
+ * DISTINCT identities that happen to display the same `ruleId` and `digest`.
+ *
+ * A DIFFERENT THING FROM `AmbiguityNote`, and deliberately reported separately:
+ *
+ *   - `AmbiguityNote` is ONE identity seen several times -- the same full
+ *     fingerprint repeated within a report, which the digest cannot tell apart
+ *     because it does not cover the line.
+ *   - This is SEVERAL identities that look alike on screen. The digest covers
+ *     the matched value and not the path, so one credential found by one rule
+ *     in several files yields several distinct fingerprints sharing one
+ *     displayed pair.
+ *
+ * Conflating them would be wrong in both directions: the first is a count the
+ * comparator refuses to interpret, the second is a display collision over
+ * findings it has already told apart correctly.
+ *
+ * `distinctIdentities` counts the distinct FULL fingerprints involved across
+ * both reports. It is a count, not an identifier: no path, no fingerprint and
+ * nothing positional is published, and nothing new is hashed.
+ */
+export interface SharedReferenceNote {
+  ruleId: string;
+  digest: string;
+  /** How many distinct full identities share this displayed pair. Always > 1. */
+  distinctIdentities: number;
+}
+
 export interface ComparisonResult {
   /** True only for an eligible pair that was actually compared. */
   comparable: boolean;
@@ -254,6 +297,11 @@ export interface ComparisonResult {
    * than guessed at -- see `groupByFingerprint`.
    */
   ambiguousIdentity: AmbiguityNote[];
+  /**
+   * Displayed references that stand for more than one distinct identity. Empty
+   * when every displayed pair in this result is unique.
+   */
+  sharedDisplayReferences: SharedReferenceNote[];
 }
 
 interface LoadedReport {
@@ -525,19 +573,34 @@ function validateOne(meta: Record<string, unknown>, side: "before" | "after"): R
  * dropping it would under-report a difference in whichever direction happens to
  * be convenient. The caller refuses the whole comparison instead.
  */
-function refOf(raw: unknown): { key: string; ref: FindingRef } | null {
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+/**
+ * Why one finding's identity was refused.
+ *
+ * Two causes, distinguished so a reader knows which to fix: a fingerprint that
+ * does not parse against the structure at all, and one that parses but names a
+ * rule this build does not emit. Both refuse the comparison; neither is ever
+ * described by quoting the offending value.
+ */
+type IdentityFailure = "structure" | "unsupported-rule";
+
+function refOf(
+  raw: unknown
+): { key: string; ref: FindingRef } | { failure: IdentityFailure } {
+  const bad = (failure: IdentityFailure) => ({ failure });
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return bad("structure");
   const f = raw as Record<string, unknown>;
   const fp = f.fingerprint;
-  if (typeof fp !== "string") return null;
-  if (fp.length === 0 || fp.length > MAX_FINGERPRINT_CHARS) return null;
-  if (UNSAFE_CHARS.test(fp)) return null;
+  if (typeof fp !== "string") return bad("structure");
+  if (fp.length === 0 || fp.length > MAX_FINGERPRINT_CHARS) return bad("structure");
+  if (UNSAFE_CHARS.test(fp)) return bad("structure");
   const line = typeof f.line === "number" && Number.isFinite(f.line) ? f.line : null;
   // Location comes from the fingerprint, not from the report's own fields --
   // see locationOf. `severity` is admitted only from the scanner's own set, so
   // an arbitrary string cannot ride out through it either.
-  const parts = supportedIdentity(fp);
-  if (!parts) return null;
+  const structure = parseFingerprint(fp);
+  if (!structure) return bad("structure");
+  if (!SUPPORTED_RULE_IDS.has(structure.ruleId)) return bad("unsupported-rule");
+  const parts = structure;
   const severity = typeof f.severity === "string" && SEVERITIES.has(f.severity) ? f.severity : null;
   // The PATH IS DELIBERATELY NOT CARRIED. See the note on FindingRef above and
   // the policy in docs/reports.md: matching uses the full raw fingerprint,
@@ -561,31 +624,61 @@ function refOf(raw: unknown): { key: string; ref: FindingRef } | null {
  * fingerprint seen more than once as an explicit ambiguity rather than guessing
  * what the count change meant.
  */
-function groupByFingerprint(
+function inspectFindings(
   findings: unknown[],
   side: "before" | "after"
-): { groups: Map<string, { ref: FindingRef; count: number }> } | { reasons: Reason[] } {
+): {
+  groups: Map<string, { ref: FindingRef; count: number }>;
+  reasons: Reason[];
+  invalidCount: number;
+} {
   const groups = new Map<string, { ref: FindingRef; count: number }>();
+  const reasons: Reason[] = [];
+  let invalidCount = 0;
+
+  // EVERY finding is inspected, so `invalidCount` is exact and may be stated as
+  // a total. Only the per-error DETAIL is capped. The walk is bounded by
+  // MAX_FINDINGS, which loadReport enforces before this is reached.
   for (let i = 0; i < findings.length; i++) {
     const parsed = refOf(findings[i]);
-    if (!parsed) {
-      return {
-        reasons: [
-          {
-            code: "malformed-finding-identity",
-            side,
-            field: "findings",
-            // The index is this module's own counter, not report content.
-            detail: `finding at index ${i} has no usable fingerprint`,
-          },
-        ],
-      };
+    if ("failure" in parsed) {
+      invalidCount += 1;
+      if (reasons.length < MAX_FINDING_DIAGNOSTICS_PER_SIDE) {
+        reasons.push({
+          code: "malformed-finding-identity",
+          side,
+          // `field` carries the array index so an error is addressable without
+          // naming anything the report supplied. The index is this module's own
+          // counter over the input array, not a value from the report, and it
+          // is deliberately NOT an identifier that means anything in another
+          // report -- the same index in a different file is a different finding.
+          field: `findings[${i}]`,
+          detail:
+            parsed.failure === "unsupported-rule"
+              ? "names a rule this build does not support"
+              : "has no usable fingerprint",
+        });
+      }
+      continue;
     }
     const existing = groups.get(parsed.key);
     if (existing) existing.count += 1;
     else groups.set(parsed.key, { ref: parsed.ref, count: 1 });
   }
-  return { groups };
+
+  // Truncation is stated, never implied by a short list.
+  const listed = reasons.length;
+  if (invalidCount > listed) {
+    reasons.push({
+      code: "diagnostics-truncated",
+      side,
+      field: "findings",
+      detail:
+        `${invalidCount} invalid finding(s) in total; ${listed} described above and ` +
+        `${invalidCount - listed} not listed`,
+    });
+  }
+  return { groups, reasons, invalidCount };
 }
 
 /**
@@ -652,29 +745,27 @@ export function compareReports(before: LoadedReport, after: LoadedReport): Compa
       persisting: [],
       noLongerObserved: [],
       ambiguousIdentity: [],
+      sharedDisplayReferences: [],
     };
   }
 
-  const gb = groupByFingerprint(before.findings, "before");
-  if ("reasons" in gb) {
+  // BOTH sides are inspected before refusing. Stopping at the first invalid
+  // finding meant a user fixed one report, reran, and only then learned the
+  // other was broken too. Metadata is still validated first and matching still
+  // never happens for an ineligible pair -- this only widens the DIAGNOSTICS.
+  const gb = inspectFindings(before.findings, "before");
+  const ga = inspectFindings(after.findings, "after");
+  if (gb.invalidCount > 0 || ga.invalidCount > 0) {
     return {
       comparable: false,
-      reasons: gb.reasons,
+      // Deterministic order: every before-side reason in ascending index order,
+      // then every after-side reason, each followed by its truncation note.
+      reasons: [...gb.reasons, ...ga.reasons],
       added: [],
       persisting: [],
       noLongerObserved: [],
       ambiguousIdentity: [],
-    };
-  }
-  const ga = groupByFingerprint(after.findings, "after");
-  if ("reasons" in ga) {
-    return {
-      comparable: false,
-      reasons: ga.reasons,
-      added: [],
-      persisting: [],
-      noLongerObserved: [],
-      ambiguousIdentity: [],
+      sharedDisplayReferences: [],
     };
   }
 
@@ -713,6 +804,29 @@ export function compareReports(before: LoadedReport, after: LoadedReport): Compa
     }
   }
 
+  // Distinct identities that will PRINT the same way. Computed over the union
+  // of full keys from both sides, so a collision spanning the two reports is
+  // caught as readily as one inside either.
+  const identitiesByReference = new Map<string, { ref: FindingRef; keys: Set<string> }>();
+  for (const groups of [gb.groups, ga.groups]) {
+    for (const [key, entry] of groups) {
+      const reference = `${entry.ref.ruleId}:${entry.ref.digest}`;
+      const seen = identitiesByReference.get(reference);
+      if (seen) seen.keys.add(key);
+      else identitiesByReference.set(reference, { ref: entry.ref, keys: new Set([key]) });
+    }
+  }
+  const sharedDisplayReferences: SharedReferenceNote[] = [];
+  for (const { ref, keys } of identitiesByReference.values()) {
+    if (keys.size > 1) {
+      sharedDisplayReferences.push({
+        ruleId: ref.ruleId,
+        digest: ref.digest,
+        distinctIdentities: keys.size,
+      });
+    }
+  }
+
   const byFp = (x: { ruleId: string; digest: string }, y: { ruleId: string; digest: string }) => {
     const a = `${x.ruleId}:${x.digest}`;
     const b = `${y.ruleId}:${y.digest}`;
@@ -722,8 +836,17 @@ export function compareReports(before: LoadedReport, after: LoadedReport): Compa
   persisting.sort(byFp);
   noLongerObserved.sort(byFp);
   ambiguousIdentity.sort(byFp);
+  sharedDisplayReferences.sort(byFp);
 
-  return { comparable: true, reasons: [], added, persisting, noLongerObserved, ambiguousIdentity };
+  return {
+    comparable: true,
+    reasons: [],
+    added,
+    persisting,
+    noLongerObserved,
+    ambiguousIdentity,
+    sharedDisplayReferences,
+  };
 }
 
 /**
@@ -770,11 +893,26 @@ export function renderText(result: ComparisonResult): string {
   section("persisting", result.persisting);
   section("no longer observed", result.noLongerObserved);
 
+  if (result.sharedDisplayReferences.length > 0) {
+    lines.push("", `SHARED DISPLAY REFERENCE (${result.sharedDisplayReferences.length})`);
+    lines.push("  More than one DISTINCT finding is shown under each reference below.");
+    lines.push("  They were told apart correctly and counted separately above; it is");
+    lines.push("  only the printed pair that collides, because the digest covers the");
+    lines.push("  matched value and not the file.");
+    lines.push("  Scanned paths are omitted from this output on purpose, so looking a");
+    lines.push("  pair up in the original report may return MORE THAN ONE match.");
+    for (const r of result.sharedDisplayReferences) {
+      lines.push(`    ${r.ruleId} — ${r.digest} — ${r.distinctIdentities} distinct findings`);
+    }
+  }
+
   if (result.ambiguousIdentity.length > 0) {
     lines.push("", `AMBIGUOUS IDENTITY (${result.ambiguousIdentity.length})`);
-    lines.push("  A fingerprint covers (path, rule, value) and NOT the line, so one");
-    lines.push("  credential repeated in a file shares one identity. Occurrence-level");
-    lines.push("  changes below are NOT tracked and are not reported either way:");
+    lines.push("  ONE identity seen several times -- a different thing from the shared");
+    lines.push("  references above. A fingerprint covers (path, rule, value) and NOT the");
+    lines.push("  line, so one credential repeated in a file shares one identity.");
+    lines.push("  Occurrence-level changes below are NOT tracked and are not reported");
+    lines.push("  either way:");
     for (const a of result.ambiguousIdentity) {
       lines.push(`    ${a.ruleId} — ${a.digest} — ${a.beforeCount} before, ${a.afterCount} after`);
     }
@@ -796,11 +934,17 @@ export function renderJson(result: ComparisonResult): string {
           persisting: result.persisting.length,
           noLongerObserved: result.noLongerObserved.length,
           ambiguousIdentity: result.ambiguousIdentity.length,
+          sharedDisplayReferences: result.sharedDisplayReferences.length,
         },
         new: result.added,
         persisting: result.persisting,
         noLongerObserved: result.noLongerObserved,
         ambiguousIdentity: result.ambiguousIdentity,
+        // ADDITIVE. Distinct identities that print alike -- never a change to
+        // the meaning of an existing field, and unrelated to
+        // REPORT_SCHEMA_VERSION, which versions the input scan reports rather
+        // than this tool's own output.
+        sharedDisplayReferences: result.sharedDisplayReferences,
         caveat: NO_LONGER_OBSERVED_CAVEAT,
       }
     : {
