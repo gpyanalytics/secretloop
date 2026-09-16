@@ -6,10 +6,21 @@ Nothing yet.
 
 ## 0.6.0 — 2026-09-15
 
-Published from the commit tagged `v0.6.0`, to all three channels within
-seventeen minutes: npm at 23:31 UTC, the VS Code Marketplace at 23:44, Open VSX
-at 23:48. The three timestamps fall on one UTC date, so the heading carries one
-date, as every heading here does. Additive throughout.
+Published to all three channels over about seventeen minutes: npm at 23:31 UTC,
+the VS Code Marketplace at 23:44, Open VSX at 23:48. The three timestamps fall on
+one UTC date, so the heading carries one date, as every heading here does.
+
+`v0.6.0` tags `96070bf6`, which is the released **source**. The published
+artifacts were built earlier, from `5686944`, and were not rebuilt for the tag —
+so the tagged tree and the build tree are not the same tree; they differ by
+documentation. What makes the tag honest is that every **packaging input** is
+byte-identical between them: `package.json`, `package-lock.json`, `.npmignore`,
+`.vscodeignore`, `scripts/vsix-manifest.txt`, the bundle source under `src/`, and
+the packaged `LICENSE`, `README.md`, `SECURITY.md` and `docs/icon.png`. Nothing
+that enters a package changed. This is equivalence of inputs, not a reproducible
+build: no rebuild was measured, and `npm pack` and `vsce` embed timestamps.
+
+Additive throughout.
 
 **No rule, threshold, severity or fingerprint changed**, so the same tree reports
 the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION` is 4,

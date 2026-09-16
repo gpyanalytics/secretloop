@@ -155,6 +155,36 @@ reassessment.
   the settling command names. It was not itself reviewed under §5 and must not
   be described as the endpoint.
 
+**Three commits, kept apart.** 0.6.0 has three commit identities and conflating
+them would misdescribe the release:
+
+| | commit | what it is |
+|---|---|---|
+| review endpoint | `403352ef` | what §5 was run against |
+| artifact build | `5686944` | what the published `.tgz` and `.vsix` were built from |
+| tag target | `96070bf6` | what `v0.6.0` names, and `main` |
+
+The artifacts were **not** rebuilt for the tag, so `tree(5686944)` —
+`563d10bd…` — and `tree(96070bf6)` — `54fbd4d4…` — are **different trees**.
+They differ by ten documentation files merged after the build. Whole-tree
+equality is therefore false and is not claimed anywhere.
+
+What is claimed, and was verified blob by blob: every **packaging input** is
+byte-identical across the two. `package.json`, `package-lock.json`, `.npmignore`,
+`.vscodeignore`, `scripts/vsix-manifest.txt`, the bundle source under `src/`, and
+the packaged `LICENSE`, `README.md`, `SECURITY.md` and `docs/icon.png` all match,
+with zero files changed under `src/`, `scripts/` or `.github/`. So a reader who
+checks an installed 0.6.0 against the tag finds the same manifest, ignore lists,
+bundle source and shipped documentation; what differs is repository documentation
+that is in neither artifact.
+
+That is equivalence of **inputs**, not reproducibility. No rebuild from
+`96070bf6` was performed or measured, and `npm pack` and `vsce` embed timestamps,
+so a rebuild would not be expected to reproduce the published bytes. Bit-level
+provenance belongs to `5686944`. The tag was placed on `96070bf6` rather than the
+build commit because RELEASING.md §8 requires `main` and the tag to be in sync,
+and §7 records that the tag has drifted behind `main` more than once.
+
   **Limitations of that review, carried forward:** no actual MCP-client
   execution and no wire-level protocol probe were performed — protocol purity
   was assessed from the manifest and source only; the review predates the
