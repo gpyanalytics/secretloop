@@ -2,7 +2,7 @@ import {
   readdirSync,
   statSync,
   lstatSync,
-  readFileSync,
+  fstatSync,
   openSync,
   readSync,
   closeSync,
@@ -12,6 +12,12 @@ import {
 import * as path from "path";
 import { spawnSync } from "child_process";
 import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
+
+/**
+ * One read request at a time. Bounded so a refusal never allocates in
+ * proportion to the file: at most this much is held past the cap.
+ */
+const READ_CHUNK_BYTES = 64 * 1024;
 
 /**
  * Enumerates candidate files. Prefers `git ls-files` when available so
@@ -204,10 +210,123 @@ export type ReadResult = { text: string } | { skipped: SkipReason };
  * in the words of one that found nothing. Every other skip this scanner
  * performs is disclosed; this was the largest one and the only silent one.
  */
+/**
+ * Reads a whole file from ONE descriptor, with the byte cap enforced WHILE
+ * reading.
+ *
+ * WHY THIS EXISTS. The previous shape was `statSync(full)` then
+ * `readFileSync(full)`: two independent resolutions of the same name, and the
+ * second had no bound at all -- `readFileSync` takes no maximum-bytes option.
+ * The cap therefore described the file `stat` HAPPENED TO SEE, not the bytes
+ * actually read. A file that grew between the two calls was read in full at
+ * whatever size it had reached. That was reproduced deterministically: a 64-byte
+ * cap, a 10-byte file at stat time, 4096 bytes read.
+ *
+ * WHAT ONE DESCRIPTOR DOES BUY. Every byte comes from the object that was
+ * opened, so replacing the PATH after the open cannot change which bytes arrive,
+ * and `fstat` describes that same object rather than whatever the name resolves
+ * to next.
+ *
+ * WHAT IT DOES NOT BUY, AND MUST NOT BE READ AS BUYING:
+ *   - It does NOT prove the opened object is inside the scan root. `openSync`
+ *     resolves the name and follows symlinks like any other resolution, so a
+ *     final-component or PARENT-DIRECTORY replacement between the containment
+ *     check and this open is still followed. That is F-1 Concern A, and it
+ *     remains OPEN. The callers' existing `isInsideRoot` check stays exactly
+ *     where it was; this changes nothing about containment in either direction.
+ *   - It is NOT a snapshot. A writer holding the same file can still change the
+ *     bytes between two reads of this descriptor. A descriptor fixes WHICH
+ *     object is read, never what is in it.
+ *
+ * The cap is enforced in the loop, not by the `fstat` size check above it: that
+ * check is an optimization that avoids reading an already-huge file, and the
+ * loop does not trust it.
+ */
+function readBoundedFile(
+  full: string,
+  limit: number,
+  /**
+   * TEST-ONLY SEAM, mirroring `compare.ts`'s reader. Runs after the descriptor
+   * is open and before the first read, so a regression can change the file
+   * deterministically at exactly the point the old code was vulnerable --
+   * without sleeping, racing or patching `fs`. Production callers pass nothing.
+   */
+  afterOpen?: () => void
+): { bytes: Buffer } | { skipped: SkipReason } {
+  let fd: number;
+  try {
+    fd = openSync(full, "r");
+  } catch {
+    // Matches the previous classification: a name that cannot be opened is not
+    // distinguishable here from one that cannot be read.
+    return { skipped: "unreadable" };
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return { skipped: "not-a-file" };
+    // Optimization only. The loop below is the guard.
+    if (st.size > limit) return { skipped: "oversized" };
+
+    // THE CAP MUST BE A USABLE NUMBER FROM HERE ON, because it sizes an
+    // allocation. `loadConfig` does not validate `maxFileSizeBytes` -- it is
+    // `raw.maxFileSizeBytes ?? default` -- so a project file saying
+    // `"maxFileSizeBytes": "abc"` reaches this function as a string. JSON
+    // cannot express NaN, but an embedder calling the API directly can.
+    //
+    // Refuse rather than compute with it. Without this line `"abc" + 1` is
+    // `"abc1"`, `Math.min` of that is NaN, and `Buffer.allocUnsafe(NaN)` throws
+    // into the catch below -- the same refusal, but by accident and with no
+    // way to read the intent. Note the comparison is deliberately `>= 0` and
+    // not `Number.isFinite`: `Infinity` is a real way to say "no cap" and both
+    // the previous code and this one honour it.
+    //
+    // This is the one behaviour this change does NOT preserve: the previous
+    // reader ignored an unusable cap and read the file whole. Refusing is the
+    // fail-closed direction, it is disclosed as a skip rather than silent, and
+    // it does not invent a limit -- but it is a difference, and it is
+    // documented as one.
+    if (!(limit >= 0)) return { skipped: "unreadable" };
+
+    afterOpen?.();
+
+    // Bounded by the cap as well as by the chunk size, so a small configured
+    // limit does not allocate a large buffer to read a few bytes. The `+ 1` is
+    // the OVERFLOW PROBE: it is the single byte past the limit that lets
+    // "exactly the limit" and "one byte over" be distinguished.
+    const chunkSize = Math.min(READ_CHUNK_BYTES, limit + 1);
+    const chunks: Buffer[] = [];
+    let total = 0;
+    for (;;) {
+      const buf = Buffer.allocUnsafe(chunkSize);
+      // A short read is normal and is not end-of-file; only 0 is.
+      const n = readSync(fd, buf, 0, chunkSize, null);
+      if (n === 0) break;
+      total += n;
+      // At most one chunk is ever read past the cap. That bounded overflow is
+      // what lets "exactly the limit" and "one byte over" be told apart, and the
+      // buffer is discarded before anything classifies or scans it.
+      if (total > limit) return { skipped: "oversized" };
+      chunks.push(buf.subarray(0, n));
+    }
+    return { bytes: Buffer.concat(chunks, total) };
+  } catch {
+    return { skipped: "unreadable" };
+  } finally {
+    // Closed on every path: success, refusal and throw alike.
+    try {
+      closeSync(fd);
+    } catch {
+      /* already closed or invalid; nothing further to do */
+    }
+  }
+}
+
 export function readTextFileResult(
   root: string,
   relPath: string,
-  config: SecretLoopConfig
+  config: SecretLoopConfig,
+  /** TEST-ONLY SEAM. See readBoundedFile. Production callers pass nothing. */
+  afterOpen?: () => void
 ): ReadResult {
   // Enforced at the read as well as at the walk. A caller with its own file
   // list -- the staged set, or anything that never goes through listFiles --
@@ -224,10 +343,29 @@ export function readTextFileResult(
   }
   const full = path.join(root, relPath);
   try {
+    // CLASSIFY THE TYPE BEFORE OPENING. This stat is NOT the size guard -- the
+    // read loop is, and using a stat's SIZE to bound a later read is the exact
+    // defect this change removes. It is here for TYPE only, because `openSync`
+    // on a FIFO with no writer BLOCKS INDEFINITELY, and this function is reached
+    // with caller-supplied paths (the staged set) that never went through the
+    // walk. Opening first turned a prompt "not-a-file" into a hang; the binary
+    // reader never had that problem because its lstat gate already ran first.
+    //
+    // Residual, and the same class as F-1 Concern A: a regular file replaced by
+    // a FIFO between this stat and the open would still block. Closing that
+    // needs a non-blocking open, which is a platform-specific change and is not
+    // in scope here.
     const stat = statSync(full);
     if (!stat.isFile()) return { skipped: "not-a-file" };
-    if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
-    const buf = readFileSync(full);
+
+    // ONE DESCRIPTOR for the content. `fstat` describes the opened object and
+    // every byte comes from it, with the cap enforced while reading -- see
+    // readBoundedFile. The oversized/unreadable classifications are the same
+    // ones this function has always returned; what changed is that the cap now
+    // bounds the READ instead of describing a separate stat.
+    const read = readBoundedFile(full, config.maxFileSizeBytes, afterOpen);
+    if (!("bytes" in read)) return read;
+    const buf = read.bytes;
     // THE BINARY CLASSIFIER, AND EXACTLY WHAT IT IS.
     //
     // It tests one thing: does a NUL byte occur in the first 8000 bytes. That
@@ -298,7 +436,9 @@ export function readBinaryCandidate(
   relPath: string,
   config: SecretLoopConfig,
   headerAccepts?: (head: Buffer, size: number) => boolean,
-  headerBytes = 16
+  headerBytes = 16,
+  /** TEST-ONLY SEAM. See readBoundedFile. Production callers pass nothing. */
+  afterOpen?: () => void
 ): BinaryCandidate {
   if (!isInsideRoot(root, relPath)) {
     return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "vanished" };
@@ -324,7 +464,13 @@ export function readBinaryCandidate(
       // every candidate skip -- but named honestly rather than as "unreadable".
       if (!headerAccepts(head, stat.size)) return { skipped: "not-a-file" };
     }
-    return { bytes: readFileSync(full) };
+    // The lstat gate above is DELIBERATELY KEPT: it does not dereference, so a
+    // final-component symlink present at that moment is still refused as
+    // "not-a-file". Replacing it with fstat-on-an-open-descriptor would have
+    // silently removed that refusal. Only the unbounded bulk read is replaced.
+    const read = readBoundedFile(full, config.maxFileSizeBytes, afterOpen);
+    if (!("bytes" in read)) return read;
+    return { bytes: read.bytes };
   } catch {
     return { skipped: "unreadable" };
   }

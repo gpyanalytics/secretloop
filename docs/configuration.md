@@ -20,7 +20,7 @@ nothing else of it.
 | `includePaths` | `[]` | When non-empty, restricts the scan to these globs. |
 | `excludeRules` | `[]` | Rule ids disabled project-wide. For one line, prefer an inline directive. |
 | `allowValues` | `[]` | Regexes matched against the detected value. For fixtures and documented samples. An entry that is not a valid regular expression is rejected, and the error quotes the pattern, so use a prefix or shape here rather than a whole credential. |
-| `maxFileSizeBytes` | `1000000` | Files larger than this are skipped and counted in the scope sentence. On `main` the same bound applies to each archive member. |
+| `maxFileSizeBytes` | `1000000` | Files larger than this are skipped and counted in the scope sentence. The bound is enforced **while the file is read**, from a single descriptor, so a file that grows past it mid-scan is refused rather than read in full. The same bound applies to each archive member. Must be a number: this setting is not validated, and a value that is not one (a quoted string, say) makes every file skip as `unreadable` rather than silently disabling the cap. `Infinity` means no cap. |
 | `entropyPassEnabled` | `false` | Turn on the generic high-entropy tier. Off by default since 0.4.0. |
 | `includeFixtures` | `false` | Report generic high-entropy findings in test, fixture and example paths. Named rules and `generic-api-key-assignment` already report there. |
 | `keyContextRequired` | `false` | Gate quoted generic-entropy findings on a secret-like identifier. Same as `--key-context`. |
