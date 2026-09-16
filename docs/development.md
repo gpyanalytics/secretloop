@@ -155,6 +155,36 @@ reassessment.
   the settling command names. It was not itself reviewed under §5 and must not
   be described as the endpoint.
 
+**Three commits, kept apart.** 0.6.0 has three commit identities and conflating
+them would misdescribe the release:
+
+| | commit | what it is |
+|---|---|---|
+| review endpoint | `403352ef` | what §5 was run against |
+| artifact build | `5686944` | what the published `.tgz` and `.vsix` were built from |
+| tag target | `96070bf6` | what `v0.6.0` names, and `main` |
+
+The artifacts were **not** rebuilt for the tag, so `tree(5686944)` —
+`563d10bd…` — and `tree(96070bf6)` — `54fbd4d4…` — are **different trees**.
+They differ by ten documentation files merged after the build. Whole-tree
+equality is therefore false and is not claimed anywhere.
+
+What is claimed, and was verified blob by blob: every **packaging input** is
+byte-identical across the two. `package.json`, `package-lock.json`, `.npmignore`,
+`.vscodeignore`, `scripts/vsix-manifest.txt`, the bundle source under `src/`, and
+the packaged `LICENSE`, `README.md`, `SECURITY.md` and `docs/icon.png` all match,
+with zero files changed under `src/`, `scripts/` or `.github/`. So a reader who
+checks an installed 0.6.0 against the tag finds the same manifest, ignore lists,
+bundle source and shipped documentation; what differs is repository documentation
+that is in neither artifact.
+
+That is equivalence of **inputs**, not reproducibility. No rebuild from
+`96070bf6` was performed or measured, and `npm pack` and `vsce` embed timestamps,
+so a rebuild would not be expected to reproduce the published bytes. Bit-level
+provenance belongs to `5686944`. The tag was placed on `96070bf6` rather than the
+build commit because RELEASING.md §8 requires `main` and the tag to be in sync,
+and §7 records that the tag has drifted behind `main` more than once.
+
   **Limitations of that review, carried forward:** no actual MCP-client
   execution and no wire-level protocol probe were performed — protocol purity
   was assessed from the manifest and source only; the review predates the
@@ -162,7 +192,7 @@ reassessment.
 
 ## Open items
 
-Accurate as of the 0.6.0 release preparation (2026-09-16), except where an entry
+Accurate as of the 0.6.0 release (published 2026-09-15), except where an entry
 names an earlier release:
 
 - **F-1: `src/walk.ts` resolves the file name twice.** OPEN, **pre-existing**,
@@ -204,12 +234,18 @@ names an earlier release:
   point, so the test asserts an exact commit count and no longer depends on
   delivery timing.
 - **Live-host validation.** Real extension-host behaviour was exercised at
-  `53b5750` and passed 17/17; that is the source identity the run covers, and
-  **the published 0.5.1 VSIX was not installed into a running host**. A VS Code
-  UX review — notifications, diagnostics, prompts — needs a person at a screen
-  and has **not** been done. **Actual MCP-client validation remains NOT RUN**:
-  the stdio exchanges on record are protocol probes, not a client. Neither is a
-  release gate; `RELEASING.md` requires neither.
+  `53b5750` and passed 17/17; that is the source identity that run covers. For
+  0.5.1 the **published VSIX was never installed into a running host**. For
+  0.6.0 it was: release preparation installed the VSIX into an isolated profile
+  and qualified the installed bytes at **11 PASS, 0 FAIL, 3 INFO**, and after
+  publication the VSIXs downloaded from Open VSX and the Marketplace were each
+  installed into a throwaway profile and verified byte-identical to the frozen
+  artifact. Note the boundary: those post-publication installs verified
+  **identity**, not behaviour — no command was invoked and no scenario run. A VS
+  Code UX review — notifications, diagnostics, prompts — needs a person at a
+  screen and has **not** been done. **Actual MCP-client validation remains NOT
+  RUN**: the stdio exchanges on record are protocol probes, not a client.
+  Neither is a release gate; `RELEASING.md` requires neither.
 - **Stale strings in code.** Closed: the MCP `secretloop_scan` description no
   longer states a rule count, and SECURITY.md's supported-version line was
   corrected in the documentation consolidation. The RELEASING.md §6 count check

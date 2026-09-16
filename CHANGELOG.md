@@ -4,15 +4,78 @@
 
 Nothing yet.
 
-## 0.6.0 — not yet published
+## 0.6.0 — 2026-09-15
 
-**Prepared, not released.** The dated heading is applied at publication; until
-then the latest published version is 0.5.1, described under that heading below.
+### What you can do in 0.6.0
 
-Additive throughout. **No rule, threshold, severity or fingerprint changed**, so
-the same tree reports the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION`
-is 4, `BINARY_CONTRACT_VERSION` is 2 and `SCOPE_CONTRACT_VERSION` is 1; schemas 1-3
-and binary contract 1 existed only during development and were never published.
+SecretLoop 0.6.0 helps you compare scan results, check a redaction and understand
+what a scan left out. Detection rules are unchanged.
+
+**Compare a scan before and after your changes.** Save two JSON reports to see
+new findings, findings present in both, and findings no longer observed.
+SecretLoop explains when the reports cannot be compared instead of presenting
+an unreliable difference.
+
+```bash
+secretloop scan --format json --output before.json
+# Make your changes, then save another scan.
+secretloop scan --format json --output after.json
+secretloop compare before.json after.json
+```
+
+Comparison supports working-tree reports with compatible settings and complete
+coverage. Reports with active inline suppression, an applied baseline or a
+non-empty allowlist cannot qualify. Staged and history reports are not
+supported. **No longer observed does not mean fixed, revoked or safe.**
+
+**Know whether another copy remains after redaction.** In VS Code, the redaction
+quick-fixes now check the edited document for the same value. You get a message
+saying it is no longer present, a warning with the number of remaining copies,
+or a message that the check was unavailable. This checks only the editor
+buffer, not other files, saved disk contents, Git history or the provider.
+Encoded findings and moving a value to `.env` are not covered by this check.
+
+**Record why a finding was ignored.** Add optional reasons to inline directives,
+baseline entries and supported configuration exclusions. You can also limit an
+inline directive to a specific rule. Summaries count inline-suppressed findings
+with a recorded reason; reason text stays out of reports, logs and MCP responses.
+
+**Understand skipped files and comparison limits.** Scan summaries distinguish
+binary skips from read failures. Comparisons account for changes to the set of
+binary-excluded paths, so a file becoming unscanned does not silently make its
+finding appear gone. Excluded files may still contain secrets.
+
+**Give your AI assistant better scan context.** MCP clients listing cached
+findings now receive the scope of the scan that produced them. Completed MCP
+history scans also disclose suppression counts. Cached results are not a new
+scan, and stopped history scans keep their existing partial-result message.
+
+**Locate matches more precisely in code-scanning reports.** SARIF reports include
+column locations where available and the scanner version, helping reviewers
+find the matched text.
+
+### Technical details and compatibility
+
+Published to all three channels over about seventeen minutes: npm at 23:31 UTC,
+the VS Code Marketplace at 23:44, Open VSX at 23:48. The three timestamps fall on
+one UTC date, so the heading carries one date, as every heading here does.
+
+`v0.6.0` tags `96070bf6`, which is the released **source**. The published
+artifacts were built earlier, from `5686944`, and were not rebuilt for the tag —
+so the tagged tree and the build tree are not the same tree; they differ by
+documentation. What makes the tag honest is that every **packaging input** is
+byte-identical between them: `package.json`, `package-lock.json`, `.npmignore`,
+`.vscodeignore`, `scripts/vsix-manifest.txt`, the bundle source under `src/`, and
+the packaged `LICENSE`, `README.md`, `SECURITY.md` and `docs/icon.png`. Nothing
+that enters a package changed. This is equivalence of inputs, not a reproducible
+build: no rebuild was measured, and `npm pack` and `vsce` embed timestamps.
+
+Additive throughout.
+
+**No rule, threshold, severity or fingerprint changed**, so the same tree reports
+the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION` is 4,
+`BINARY_CONTRACT_VERSION` is 2 and `SCOPE_CONTRACT_VERSION` is 1; schemas 1-3 and
+binary contract 1 existed only during development and were never published.
 
 ### MCP
 
@@ -413,7 +476,7 @@ and binary contract 1 existed only during development and were never published.
   - A history scan that stopped early reports **no** selection and marks its
     coverage incomplete, rather than presenting the commits it happened to read
     as the ones it selected.
-  - **Development history — superseded within this same unreleased candidate.**
+  - **Development history — superseded before this release shipped.**
     When this entry was written `schemaVersion` was **2** and the contract had
     **eight** required fields. Neither figure describes what 0.6.0 ships. The
     version reached **4** under *Coverage* above, when `binaryDigest` became the
@@ -427,12 +490,12 @@ and binary contract 1 existed only during development and were never published.
   - `root` is documented as **shared ancestry**, not repository identity and not
     anonymisation: a root commit is public, so the digest is confirmable rather
     than concealing, and a fork shares its upstream's.
-  - **Development history — superseded within this same unreleased candidate.**
+  - **Development history — superseded before this release shipped.**
     This entry originally recorded "no comparison command". `secretloop compare`
-    is implemented in this release, described under *Comparison* above; it is
-    merged and, like everything in this section, **not published**. What still
-    holds unchanged: no rename tracking, no "resolved" claim, no new detector,
-    and metadata alone does not establish that two scans are comparable.
+    is implemented and shipped in 0.6.0, described under *Comparison* above.
+    What still holds unchanged: no rename tracking, no "resolved" claim, no new
+    detector, and metadata alone does not establish that two scans are
+    comparable.
 
 ### SARIF
 

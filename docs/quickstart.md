@@ -1,6 +1,6 @@
 # Quickstart
 
-Applies to **published 0.5.1**, which is what the unversioned commands below
+Applies to **published 0.6.0**, which is what the unversioned commands below
 install. Needs Node 18 or newer: the CLI refuses to start on an older runtime
 and says so, because the liveness checks use the runtime's built-in `fetch`.
 

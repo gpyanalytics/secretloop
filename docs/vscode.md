@@ -1,9 +1,9 @@
 # VS Code extension
 
 The extension runs the same engine as the CLI on the file you are editing, on
-save, and on demand across the workspace. Applies to **published 0.5.1**, except
-for [After a redaction: what was checked](#after-a-redaction-what-was-checked),
-which is **merged on `main` and prepared as 0.6.0, not published**.
+save, and on demand across the workspace. Applies to **published 0.6.0**.
+[After a redaction: what was checked](#after-a-redaction-what-was-checked) is new
+in 0.6.0 and absent from 0.5.1.
 
 ## Findings as diagnostics
 
@@ -46,8 +46,7 @@ rewritten.
 
 ### After a redaction: what was checked
 
-**New in 0.6.0 — merged, not published.** An installed 0.5.1 performs no such
-check and says nothing about it.
+**New in 0.6.0.** 0.5.1 performs no such check and says nothing about it.
 
 Both redaction quick-fixes check, once, whether the value they removed is still
 in the document they edited, and say so in the same notification. Rotation uses

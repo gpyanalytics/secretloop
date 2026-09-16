@@ -6,10 +6,9 @@ SecretLoop**: no model, no API key, no LLM dependency. The assistant does the
 explaining; the deterministic scanner does the finding, and only the scanner
 decides what a finding is.
 
-Applies to **published 0.5.1**, except for two disclosures marked below —
-`secretloop_list_findings` returning the scan's `scope`, and
-`secretloop_history_scan` reporting inline-suppression counts. Both are **merged
-on `main` and prepared as 0.6.0, not published**: an installed 0.5.1 does neither.
+Applies to **published 0.6.0**. Two disclosures are new in 0.6.0 and absent from
+0.5.1: `secretloop_list_findings` returning the scan's `scope`, and
+`secretloop_history_scan` reporting inline-suppression counts.
 Client configurations are in [Integrations](integrations.md#mcp-clients).
 
 ## Starting it
@@ -28,7 +27,7 @@ invocation is logged there with its arguments and result counts, never a value.
 | tool | what it does |
 |---|---|
 | `secretloop_scan` | Scans the working tree of `path`. Optional `include` globs narrow it, on top of the project's own exclusions. Read-only. |
-| `secretloop_list_findings` | Filters the last scan's findings by severity, rule id or liveness. Always reports the unfiltered total beside the filtered count, and — **new in 0.6.0, not published** — the `scope` of the scan those findings came from. Refuses, rather than returning an empty list, when no scan has run. |
+| `secretloop_list_findings` | Filters the last scan's findings by severity, rule id or liveness. Always reports the unfiltered total beside the filtered count, and — **new in 0.6.0** — the `scope` of the scan those findings came from. Refuses, rather than returning an empty list, when no scan has run. |
 | `secretloop_get_finding` | One finding by fingerprint: rule metadata, location, and the surrounding source lines inside an untrusted-content block with every secret masked. |
 | `secretloop_history_scan` | Scans git history, bounded to 500 commits or 45 seconds by default (caps 5,000 and 120 seconds), returning at most 500 findings and saying when it stopped early. |
 | `secretloop_verify` | Asks a provider whether one *supported* credential is still live — only after a human approves it in a terminal. |
@@ -56,8 +55,8 @@ has no input of its own for the tier. The current count is in
   with every known secret masked, and any attempt to close the block from
   inside neutralised. Error messages quote caller-supplied and repository-chosen
   fragments — paths, fingerprints, revision ranges — inside the same wrapper.
-- **Listed findings say what was inspected to produce them.** **New in 0.6.0 —
-  merged, not published; an installed 0.5.1 returns no `scope` here.**
+- **Listed findings say what was inspected to produce them.** **New in 0.6.0**;
+  0.5.1 returns no `scope` here.
   `secretloop_list_findings` returns the `scope` of the scan behind its rows —
   the same object `secretloop_scan` returned, carried through the session cache
   rather than recomputed. Before this it returned no `scope` at all: a client
@@ -93,8 +92,8 @@ has no input of its own for the tier. The current count is in
   that found nothing answers normally, with its scope, saying what it inspected
   while finding nothing — which is a different statement.
 
-- **A history scan discloses what it suppressed, as a count.** **New in 0.6.0 —
-  merged, not published; an installed 0.5.1 discloses neither count here.** The
+- **A history scan discloses what it suppressed, as a count.** **New in 0.6.0**;
+  0.5.1 discloses neither count here. The
   scope sentence `secretloop_history_scan` returns now carries the
   inline-suppression counts the CLI's has always carried — *N finding(s)
   suppressed by inline directives, M with a recorded reason* — so a scan that
