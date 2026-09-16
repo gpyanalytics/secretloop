@@ -6,13 +6,15 @@ Nothing yet.
 
 ## 0.6.0 — 2026-09-15
 
-Published to npm, Open VSX and the VS Code Marketplace on 2026-09-15, from the
-tagged commit `v0.6.0`. Additive throughout.
+Published from the commit tagged `v0.6.0`, to all three channels within
+seventeen minutes: npm at 23:31 UTC, the VS Code Marketplace at 23:44, Open VSX
+at 23:48. The three timestamps fall on one UTC date, so the heading carries one
+date, as every heading here does. Additive throughout.
 
 **No rule, threshold, severity or fingerprint changed**, so the same tree reports
-the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION`
-is 4, `BINARY_CONTRACT_VERSION` is 2 and `SCOPE_CONTRACT_VERSION` is 1; schemas 1-3
-and binary contract 1 existed only during development and were never published.
+the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION` is 4,
+`BINARY_CONTRACT_VERSION` is 2 and `SCOPE_CONTRACT_VERSION` is 1; schemas 1-3 and
+binary contract 1 existed only during development and were never published.
 
 ### MCP
 
