@@ -30,6 +30,21 @@
   addressed here**. Nor is a descriptor a snapshot — a concurrent writer can
   still change the bytes it yields. The existing `isInsideRoot` check and the
   binary reader's non-dereferencing `lstat` gate are both unchanged.
+- **Non-regular inputs are classified before the file is opened.** `openSync` on
+  a FIFO with no writer blocks indefinitely, and `readTextFileResult` is reached
+  with caller-supplied paths — the staged set — that never went through the walk.
+  The type check therefore runs before the open, and is a **type** check only:
+  the size guard is the read loop, because using a `stat`'s size to bound a later
+  read is the defect this change removes. A regular file swapped for a FIFO
+  between that check and the open would still block; that is the same class as
+  Concern A and is not addressed here.
+- **A `maxFileSizeBytes` that is not a usable number is now refused.**
+  Configuration applies no validation to this setting, so a project file saying
+  `"maxFileSizeBytes": "abc"` reaches the reader as a string. The previous reader
+  ignored such a value and read every file **whole, uncapped**; the file is now
+  skipped as `unreadable` instead. Every value that is actually a number behaves
+  exactly as before, `Infinity` included — measured across the default, the exact
+  size, one under, zero, a negative, and fractional caps.
 - No report or digest contract changed: `REPORT_SCHEMA_VERSION` stays 4,
   `BINARY_CONTRACT_VERSION` 2, `SCOPE_CONTRACT_VERSION` 1, and no new skip reason
   was introduced — an over-cap file is still `oversized`, still counted, and

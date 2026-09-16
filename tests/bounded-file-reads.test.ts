@@ -11,6 +11,7 @@ import {
   openSync,
   closeSync,
 } from "fs";
+import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
 
@@ -222,6 +223,121 @@ test("descriptors are released on success, refusal and throw alike", () => {
       before,
       `descriptor number drifted ${before} -> ${after}; a reader is leaking`
     );
+  });
+});
+
+// --------------------------------------------------- non-regular inputs
+/**
+ * REGRESSION, found in review of this very change.
+ *
+ * The first draft opened the descriptor and THEN classified the type from
+ * `fstat`. That is the right order for a size guard and the wrong order for a
+ * type guard: `openSync` on a FIFO with no writer BLOCKS INDEFINITELY, so the
+ * reader hung where it used to answer "not-a-file" immediately. The staged-path
+ * callers hand `readTextFileResult` names that never went through the walk, so
+ * the input is not guaranteed to be a regular file.
+ *
+ * WHY A CHILD PROCESS: if this regression ever returns, an in-process call
+ * would hang the whole suite forever rather than fail it. The child carries a
+ * hard timeout, so the failure mode is a failing test with a legible message.
+ */
+test("a FIFO is refused promptly by both readers, without blocking on open", () => {
+  if (process.platform === "win32") {
+    // mkfifo is POSIX. Not skipped silently -- stated.
+    assert.ok(true, "FIFO case not applicable on win32");
+    return;
+  }
+  withLab((d) => {
+    const fifo = path.join(d, "pipe");
+    try {
+      execFileSync("mkfifo", [fifo], { stdio: "ignore" });
+    } catch {
+      assert.ok(true, "mkfifo unavailable on this host; case not run");
+      return;
+    }
+
+    const root = path.join(__dirname, "..");
+    const script = `
+      const w = require(${JSON.stringify(path.join(root, "src", "walk"))});
+      const { defaultConfig } = require(${JSON.stringify(
+        path.join(root, "src", "config")
+      )});
+      const c = Object.assign({}, defaultConfig, { maxFileSizeBytes: ${CAP} });
+      const s = (r) => (r && typeof r === "object" && "skipped" in r ? r.skipped : String(r));
+      const t = s(w.readTextFileResult(${JSON.stringify(d)}, "pipe", c));
+      const b = s(w.readBinaryCandidate(${JSON.stringify(d)}, "pipe", c));
+      process.stdout.write(JSON.stringify({ t: t, b: b }));
+    `;
+    const run = spawnSync(
+      process.execPath,
+      ["-r", "ts-node/register/transpile-only", "-e", script],
+      { cwd: root, timeout: 20000, encoding: "utf8" }
+    );
+
+    assert.ok(
+      !run.error || (run.error as NodeJS.ErrnoException).code !== "ETIMEDOUT",
+      "a reader BLOCKED on the FIFO instead of refusing it -- the open now " +
+        "precedes the type check again"
+    );
+    assert.strictEqual(
+      run.signal,
+      null,
+      `child died on ${run.signal}; stderr: ${run.stderr}`
+    );
+    assert.strictEqual(run.status, 0, `child failed: ${run.stderr}`);
+    const got = JSON.parse(run.stdout) as { t: string; b: string };
+    assert.strictEqual(got.t, "not-a-file", "text reader must refuse a FIFO");
+    assert.strictEqual(got.b, "not-a-file", "binary reader must refuse a FIFO");
+  });
+});
+
+// ------------------------------------------------------ the cap's own values
+/**
+ * `loadConfig` does NOT validate `maxFileSizeBytes`; it is
+ * `raw.maxFileSizeBytes ?? default`. So the reader must be correct for every
+ * value that can actually arrive, not for the values the type says.
+ *
+ * Measured against the previous implementation: every one of these numbers
+ * behaves identically on both. The two non-numbers are the documented
+ * difference -- the old reader ignored an unusable cap and read the file whole;
+ * this one refuses.
+ */
+test("numeric caps keep their previous meaning, including the boundaries", () => {
+  withLab((d) => {
+    const f = path.join(d, "f.txt");
+    writeFileSync(f, "A".repeat(100));
+    const skip = (limit: number) => {
+      const r = readTextFileResult(d, "f.txt", cfg(limit));
+      return "skipped" in r ? r.skipped : `read ${r.text.length}`;
+    };
+    assert.strictEqual(skip(100), "read 100", "exactly the size is allowed");
+    assert.strictEqual(skip(99), "oversized", "one under refuses");
+    assert.strictEqual(skip(0), "oversized");
+    assert.strictEqual(skip(-1), "oversized", "a negative cap refuses");
+    assert.strictEqual(skip(64.5), "oversized", "a fraction is not rounded up");
+    assert.strictEqual(skip(100.5), "read 100", "a fraction is not rounded down");
+    assert.strictEqual(
+      skip(Number.POSITIVE_INFINITY),
+      "read 100",
+      "Infinity is a legitimate way to say 'no cap' and must still read"
+    );
+  });
+});
+
+test("a cap that is not a usable number refuses instead of reading unbounded", () => {
+  withLab((d) => {
+    const f = path.join(d, "f.txt");
+    writeFileSync(f, "A".repeat(100));
+    // A string is reachable from a real `.secretloop.json`; NaN is not
+    // expressible in JSON but is reachable from an embedder calling the API.
+    for (const bad of ["abc" as unknown as number, Number.NaN]) {
+      const r = readTextFileResult(d, "f.txt", cfg(bad));
+      assert.strictEqual(
+        (r as { skipped: string }).skipped,
+        "unreadable",
+        `an unusable cap (${String(bad)}) must not read the file whole`
+      );
+    }
   });
 });
 

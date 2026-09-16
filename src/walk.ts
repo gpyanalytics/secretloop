@@ -266,6 +266,27 @@ function readBoundedFile(
     if (!st.isFile()) return { skipped: "not-a-file" };
     // Optimization only. The loop below is the guard.
     if (st.size > limit) return { skipped: "oversized" };
+
+    // THE CAP MUST BE A USABLE NUMBER FROM HERE ON, because it sizes an
+    // allocation. `loadConfig` does not validate `maxFileSizeBytes` -- it is
+    // `raw.maxFileSizeBytes ?? default` -- so a project file saying
+    // `"maxFileSizeBytes": "abc"` reaches this function as a string. JSON
+    // cannot express NaN, but an embedder calling the API directly can.
+    //
+    // Refuse rather than compute with it. Without this line `"abc" + 1` is
+    // `"abc1"`, `Math.min` of that is NaN, and `Buffer.allocUnsafe(NaN)` throws
+    // into the catch below -- the same refusal, but by accident and with no
+    // way to read the intent. Note the comparison is deliberately `>= 0` and
+    // not `Number.isFinite`: `Infinity` is a real way to say "no cap" and both
+    // the previous code and this one honour it.
+    //
+    // This is the one behaviour this change does NOT preserve: the previous
+    // reader ignored an unusable cap and read the file whole. Refusing is the
+    // fail-closed direction, it is disclosed as a skip rather than silent, and
+    // it does not invent a limit -- but it is a difference, and it is
+    // documented as one.
+    if (!(limit >= 0)) return { skipped: "unreadable" };
+
     afterOpen?.();
 
     // Bounded by the cap as well as by the chunk size, so a small configured
@@ -322,11 +343,26 @@ export function readTextFileResult(
   }
   const full = path.join(root, relPath);
   try {
-    // ONE DESCRIPTOR. `fstat` describes the opened object and every byte comes
-    // from it, with the cap enforced while reading -- see readBoundedFile. The
-    // regular-file check and the oversized/unreadable classifications are the
-    // same ones this function has always returned; what changed is that the cap
-    // now bounds the READ instead of describing a separate stat.
+    // CLASSIFY THE TYPE BEFORE OPENING. This stat is NOT the size guard -- the
+    // read loop is, and using a stat's SIZE to bound a later read is the exact
+    // defect this change removes. It is here for TYPE only, because `openSync`
+    // on a FIFO with no writer BLOCKS INDEFINITELY, and this function is reached
+    // with caller-supplied paths (the staged set) that never went through the
+    // walk. Opening first turned a prompt "not-a-file" into a hang; the binary
+    // reader never had that problem because its lstat gate already ran first.
+    //
+    // Residual, and the same class as F-1 Concern A: a regular file replaced by
+    // a FIFO between this stat and the open would still block. Closing that
+    // needs a non-blocking open, which is a platform-specific change and is not
+    // in scope here.
+    const stat = statSync(full);
+    if (!stat.isFile()) return { skipped: "not-a-file" };
+
+    // ONE DESCRIPTOR for the content. `fstat` describes the opened object and
+    // every byte comes from it, with the cap enforced while reading -- see
+    // readBoundedFile. The oversized/unreadable classifications are the same
+    // ones this function has always returned; what changed is that the cap now
+    // bounds the READ instead of describing a separate stat.
     const read = readBoundedFile(full, config.maxFileSizeBytes, afterOpen);
     if (!("bytes" in read)) return read;
     const buf = read.bytes;
