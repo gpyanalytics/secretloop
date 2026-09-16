@@ -10,9 +10,8 @@ list: those items were picked up and finished, and each one states its own
 status. Two statuses are tracked separately and never conflated — **implemented**
 (merged to `main`, with the PR that merged it) and **published** (available from
 npm, Open VSX or the Marketplace). An item can be the first without being the
-second, and several currently are: everything marked *merged, not published* is
-in the prepared **0.6.0** candidate, which is not released. Published 0.5.1 does
-not have it.
+second. Everything below marked *shipped in 0.6.0* was merged first and released
+on 2026-09-15; anything marked merged but not released would still be waiting.
 
 ## Native editor ports (demand-gated)
 
@@ -129,7 +128,7 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   CLI and MCP both report; it now
   totals them from the same per-file counters and passes them to the shared
   formatter.
-- **MCP history suppression disclosure** — **merged (PR #77), not published.**
+- **MCP history suppression disclosure** — **shipped in 0.6.0** (PR #77).
   `secretloop_history_scan` omitted the inline-suppression
   counts its scope sentence exists to carry, while the CLI reported them for the
   same selection; the tool now asks `scanHistory` for the accounting it already
@@ -139,9 +138,7 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   holds the two implementations identical. (The editor entry above really does
   use the one in `src/report.ts`, by import.) Aggregate only: counts, never
   reason text or a suppressed finding. The gap predated the suppression work.
-- **MCP finding scope** — **merged (PR #79).** Publication status, separately:
-  **not published** — it is in the prepared 0.6.0 candidate, which has not been
-  released, so an installed 0.5.1 does not have it.
+- **MCP finding scope** — **shipped in 0.6.0** (PR #79).
   `secretloop_list_findings` returned findings with no `scope` key at all (the
   earlier note that it returned `scope: null` did not describe the source), so a
   client got rows with no account of what had been inspected. The session cache
@@ -149,7 +146,7 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   returns it. Additive and response-level: the cache has one writer, so each
   entry is one working-tree scan of one root, and no per-finding field was added.
   History writes nothing to that cache, so origins cannot mix.
-- **binaryIdentity path normalization** — **merged (PR #78), not published.**
+- **binaryIdentity path normalization** — **shipped in 0.6.0** (PR #78).
   `binaryIdentity` rewrote `\` to `/`, so on POSIX a real file named
   `dir\file.png` produced the same exclusion identity as the
   unrelated path `dir/file.png`. It now takes canonical, repository-relative,

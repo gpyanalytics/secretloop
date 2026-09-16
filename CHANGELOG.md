@@ -4,13 +4,13 @@
 
 Nothing yet.
 
-## 0.6.0 — not yet published
+## 0.6.0 — 2026-09-15
 
-**Prepared, not released.** The dated heading is applied at publication; until
-then the latest published version is 0.5.1, described under that heading below.
+Published to npm, Open VSX and the VS Code Marketplace on 2026-09-15, from the
+tagged commit `v0.6.0`. Additive throughout.
 
-Additive throughout. **No rule, threshold, severity or fingerprint changed**, so
-the same tree reports the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION`
+**No rule, threshold, severity or fingerprint changed**, so the same tree reports
+the same findings it did under 0.5.1. `REPORT_SCHEMA_VERSION`
 is 4, `BINARY_CONTRACT_VERSION` is 2 and `SCOPE_CONTRACT_VERSION` is 1; schemas 1-3
 and binary contract 1 existed only during development and were never published.
 
@@ -413,7 +413,7 @@ and binary contract 1 existed only during development and were never published.
   - A history scan that stopped early reports **no** selection and marks its
     coverage incomplete, rather than presenting the commits it happened to read
     as the ones it selected.
-  - **Development history — superseded within this same unreleased candidate.**
+  - **Development history — superseded before this release shipped.**
     When this entry was written `schemaVersion` was **2** and the contract had
     **eight** required fields. Neither figure describes what 0.6.0 ships. The
     version reached **4** under *Coverage* above, when `binaryDigest` became the
@@ -427,12 +427,12 @@ and binary contract 1 existed only during development and were never published.
   - `root` is documented as **shared ancestry**, not repository identity and not
     anonymisation: a root commit is public, so the digest is confirmable rather
     than concealing, and a fork shares its upstream's.
-  - **Development history — superseded within this same unreleased candidate.**
+  - **Development history — superseded before this release shipped.**
     This entry originally recorded "no comparison command". `secretloop compare`
-    is implemented in this release, described under *Comparison* above; it is
-    merged and, like everything in this section, **not published**. What still
-    holds unchanged: no rename tracking, no "resolved" claim, no new detector,
-    and metadata alone does not establish that two scans are comparable.
+    is implemented and shipped in 0.6.0, described under *Comparison* above.
+    What still holds unchanged: no rename tracking, no "resolved" claim, no new
+    detector, and metadata alone does not establish that two scans are
+    comparable.
 
 ### SARIF
 

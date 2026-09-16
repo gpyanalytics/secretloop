@@ -162,7 +162,7 @@ reassessment.
 
 ## Open items
 
-Accurate as of the 0.6.0 release preparation (2026-09-16), except where an entry
+Accurate as of the 0.6.0 release (published 2026-09-15), except where an entry
 names an earlier release:
 
 - **F-1: `src/walk.ts` resolves the file name twice.** OPEN, **pre-existing**,
@@ -204,12 +204,18 @@ names an earlier release:
   point, so the test asserts an exact commit count and no longer depends on
   delivery timing.
 - **Live-host validation.** Real extension-host behaviour was exercised at
-  `53b5750` and passed 17/17; that is the source identity the run covers, and
-  **the published 0.5.1 VSIX was not installed into a running host**. A VS Code
-  UX review — notifications, diagnostics, prompts — needs a person at a screen
-  and has **not** been done. **Actual MCP-client validation remains NOT RUN**:
-  the stdio exchanges on record are protocol probes, not a client. Neither is a
-  release gate; `RELEASING.md` requires neither.
+  `53b5750` and passed 17/17; that is the source identity that run covers. For
+  0.5.1 the **published VSIX was never installed into a running host**. For
+  0.6.0 it was: release preparation installed the VSIX into an isolated profile
+  and qualified the installed bytes at **11 PASS, 0 FAIL, 3 INFO**, and after
+  publication the VSIXs downloaded from Open VSX and the Marketplace were each
+  installed into a throwaway profile and verified byte-identical to the frozen
+  artifact. Note the boundary: those post-publication installs verified
+  **identity**, not behaviour — no command was invoked and no scenario run. A VS
+  Code UX review — notifications, diagnostics, prompts — needs a person at a
+  screen and has **not** been done. **Actual MCP-client validation remains NOT
+  RUN**: the stdio exchanges on record are protocol probes, not a client.
+  Neither is a release gate; `RELEASING.md` requires neither.
 - **Stale strings in code.** Closed: the MCP `secretloop_scan` description no
   longer states a rule count, and SECURITY.md's supported-version line was
   corrected in the documentation consolidation. The RELEASING.md §6 count check
