@@ -2,7 +2,38 @@
 
 ## Unreleased
 
-Nothing yet.
+### Coverage
+
+- **The file-size cap now bounds the READ, not an earlier look at the name.**
+  `readTextFileResult` and `readBinaryCandidate` inspected a path with `stat` and
+  then read it with `readFileSync`, which takes no maximum-bytes option — so the
+  cap described the file `stat` happened to see, not the bytes actually read. A
+  file that grew between the two calls was read in full at whatever size it had
+  reached. Reproduced deterministically: a 64-byte cap, a 10-byte file at
+  inspection, **4096 bytes read**.
+  Both readers now open the file **once**, inspect that descriptor with `fstat`,
+  and read every byte from it with the cap enforced **during** the read. At most
+  one bounded chunk is ever read past the limit, which is what lets "exactly the
+  limit" and "one byte over" be told apart; the buffer is discarded before
+  anything classifies or scans it. The descriptor is closed in a `finally` on
+  success, refusal and throw alike.
+- **This deliberately changes one behaviour.** A file that grows beyond the
+  configured cap between inspection and read is now **refused as `oversized`**
+  where it was previously read in full. That is the point of the change. Stable,
+  supported inputs are unaffected: on a fixed corpus, builds from either side
+  produce byte-identical findings, fingerprints and report metadata.
+- **What one descriptor does not buy, stated plainly.** It fixes *which object*
+  is read. It does **not** prove that object is inside the scan root: `openSync`
+  resolves the name and follows symlinks, so a final-component or
+  parent-directory replacement between the containment check and the open is
+  still followed. That is **F-1 Concern A, which remains OPEN and is not
+  addressed here**. Nor is a descriptor a snapshot — a concurrent writer can
+  still change the bytes it yields. The existing `isInsideRoot` check and the
+  binary reader's non-dereferencing `lstat` gate are both unchanged.
+- No report or digest contract changed: `REPORT_SCHEMA_VERSION` stays 4,
+  `BINARY_CONTRACT_VERSION` 2, `SCOPE_CONTRACT_VERSION` 1, and no new skip reason
+  was introduced — an over-cap file is still `oversized`, still counted, and
+  still makes the report incomplete.
 
 ## 0.6.0 — 2026-09-15
 

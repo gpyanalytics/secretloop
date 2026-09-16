@@ -195,26 +195,42 @@ and §7 records that the tag has drifted behind `main` more than once.
 Accurate as of the 0.6.0 release (published 2026-09-15), except where an entry
 names an earlier release:
 
-- **F-1: `src/walk.ts` resolves the file name twice.** OPEN, **pre-existing**,
-  **not a demonstrated exploit**. `readTextFileResult` and `readBinaryCandidate`
-  call `isInsideRoot`, which realpaths the path and then *discards* the resolved
-  result; `readFileSync` resolves the name again. Two consequences follow by
-  source reasoning: a symlink replaced between the two would be followed by the
-  read, and the size cap describes the file `statSync` saw rather than the bytes
-  read. Found during the 0.6.0 §5 review and byte-identical at `v0.5.1`, so it is
-  **not introduced by this release**; it is recorded rather than dismissed
-  because it is reachable.
+- **F-1: `src/walk.ts` resolves the file name more than once.** Two concerns
+  were recorded under one label. **Concern B (size cap) is CORRECTED in the
+  Unreleased candidate. Concern A (containment) remains OPEN.**
 
-  **No timing harness was built and no exploitation was observed.** It needs an
-  actor with concurrent write access to the scanned tree, who can already place
-  content where the scanner will read it.
+  Both were **pre-existing** — every filesystem operation and its order was
+  identical at `v0.5.1`, `v0.6.0` and the 0.6.0 documentation merge — and both
+  were **demonstrated under controlled interleaving, not in an ordinary run**.
+  Reaching either needs an actor with concurrent write access to the scanned
+  tree, who can already place content where the scanner will read it. No
+  exploitation was observed, and no frequency is claimed.
 
-  On the fix: `src/compare.ts` shows the one-descriptor pattern that closes the
-  **size-cap** half. **A single descriptor alone does not establish root
-  containment against path replacement** — `openSync` still resolves the name and
-  follows symlinks, so closing that half needs the containment decision to be
-  made about the opened object (or the open not to follow links). Scoping and
-  implementing that is a separate task and is **not** part of the 0.6.0 release.
+  A note on an earlier wording here: this said "resolves the file name twice"
+  and "byte-identical at `v0.5.1`". Measured, the text path resolves the name
+  three times and a full `scanFiles` run performs **seven** operations on one
+  path; and the enclosing functions are *not* byte-identical at `v0.5.1` — the
+  skip-reason labels changed in 0.6.0 — though every filesystem operation and
+  its order is. "Operationally identical" is the accurate phrase.
+
+  **Concern B — CORRECTED (Unreleased).** The cap now bounds the read: one
+  descriptor, `fstat` on it, every byte from it, the limit enforced while
+  reading. Measured before: a 64-byte cap and 4096 bytes read. See the
+  Unreleased changelog entry and
+  `secretloop-benchmark/f1-bounded-file-reads/`.
+
+  **Concern A — OPEN.** A path approved by `isInsideRoot` can resolve outside
+  the root by the time the read opens it, at the final component *or through a
+  replaced parent directory*. **One descriptor does not close this**: `openSync`
+  resolves the name and follows symlinks, so the containment decision would have
+  to be made about the opened object, or the open would have to not follow
+  links. Measured on macOS: `O_NOFOLLOW` refuses a final-component symlink but
+  **does not block traversal through a symlinked parent**, so it is not
+  sufficient on its own; and Node exposes no `openat` equivalent, so
+  descriptor-relative traversal would need a native addon this product will not
+  take. The design options and their platform caveats are in
+  `secretloop-benchmark/f1-reproduction-design/`. Concern A is **not** a release
+  blocker and nothing here promotes it to one.
 
 - **0.5.1 is published.** npm, Open VSX and the VS Code Marketplace all serve
   0.5.1, released from commit `88d2197` and tagged `v0.5.1`. The published npm
