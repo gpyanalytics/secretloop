@@ -4,7 +4,7 @@ import "./stubs/install-vscode";
 import { called, calls, reset, setWorkspaceFolder } from "./stubs/vscode";
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp, hookBody } from "../src/hooks";
 import * as assert from "node:assert";
-import { test, suite, finish } from "./harness";
+import { test, suite, finish, skip } from "./harness";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync, chmodSync, unlinkSync, statSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -405,6 +405,12 @@ test("uninstalling restores the foreign hook", async () => {
 });
 
 test("the restored foreign hook is still executable", async () => {
+  // Mode bits are not represented on win32 -- stat reports no execute bit for
+  // an extensionless file whatever chmod did, and Git for Windows runs hooks
+  // through sh regardless of them. The bit this case measures does not exist
+  // there, so the case is skipped and counted as such rather than failed or
+  // passed. That the hook is restored at all is covered by the case above.
+  if (process.platform === "win32") skip("execute bits are not represented on win32; the restored mode cannot be measured");
   await withRepo(async (dir) => {
     const ext = await installOver(dir, ["#!/bin/sh", 'echo "foreign ran"']);
     try {

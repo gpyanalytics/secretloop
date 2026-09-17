@@ -120,6 +120,17 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   `record.id` is read by no caller, so nothing was reachable through it. Five
   behavioural tests in `tests/verify-consent.test.ts` pin the invariant; two
   failed before the change.
+- **Native Windows validation** — **CI jobs added (PR #84, draft).** The
+  suite and both packaging smokes run on `windows-latest` for Node 18, 20 and
+  22 beside the Linux jobs, not as required checks. At head `54787ebb`: 1,560
+  passed, 0 failed, 18 skipped per Node major, with every skip naming the
+  platform limit it hit; the four corrections were harness faults, not
+  product defects (see [development](../development.md#build-and-test)).
+  Still open, and not measured by any Windows run: F-1 Concern A and the
+  FIFO stat-to-open window; whether a non-elevated Windows user can run the
+  symlink fixtures at all; the consent record's owner-only mode, which does
+  not exist on Windows; and anything a second Windows configuration would
+  show that one hosted runner does not.
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).

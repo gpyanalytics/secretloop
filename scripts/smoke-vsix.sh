@@ -142,7 +142,13 @@ echo "smoke: checking the archive against scripts/vsix-manifest.txt, exactly"
 # manifest fails on a stray AND on a disappearance, and changing what ships now
 # requires editing a file that says what ships.
 actual="$(cd "$work/x" && find extension -type f | sort)"
-expected="$(sort "$repo/scripts/vsix-manifest.txt")"
+# The manifest is read through `tr -d '\r'` because a Windows checkout with
+# core.autocrlf=true hands this script CRLF lines, and the comparison then
+# reported every entry as different while printing two visually identical
+# lists. Measured on windows-latest under Git for Windows' bash; the archive
+# itself matched the manifest entry for entry. Line endings are not part of
+# what ships, so they are not part of what this compares.
+expected="$(tr -d '\r' < "$repo/scripts/vsix-manifest.txt" | sort)"
 if [ "$actual" != "$expected" ]; then
   echo "smoke: FAIL — VSIX contents do not match scripts/vsix-manifest.txt" >&2
   diff <(echo "$expected") <(echo "$actual") | sed 's/^/  /' >&2

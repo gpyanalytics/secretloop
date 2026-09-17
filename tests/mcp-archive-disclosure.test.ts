@@ -1,5 +1,5 @@
 import "./stubs/install-vscode";
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { mkdtempSync, mkdirSync, realpathSync, rmSync, writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
@@ -87,6 +87,15 @@ interface Fixture {
 }
 
 function fixture(): Fixture {
+  // HOSTILE_DIR carries a literal `</...>` closing tag in a DIRECTORY name.
+  // NTFS refuses `<` and `>` in names, so on win32 this fixture cannot exist
+  // (measured: mkdir ENOENT on windows-latest) and every case built on it is
+  // skipped and counted as such. The neutralisation under test is string
+  // handling and is measured on POSIX; what Windows cannot host is the
+  // container path, not the member name.
+  if (process.platform === "win32") {
+    skip("a directory named with < and > cannot exist on NTFS; the hostile container path cannot be created");
+  }
   const base = mkdtempSync(path.join(tmpdir(), "secretloop-mcp-archive-disclosure-"));
   const saved = getAllowedRoots();
   mkdirSync(path.join(base, "repo"), { recursive: true });
