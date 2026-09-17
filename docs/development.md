@@ -31,14 +31,15 @@ Windows** (`test-windows (18)`, `test-windows (20)`, `packaging-windows`;
 `windows-latest`, which resolved to Windows Server 2025 10.0.26100, image
 `windows-2025-vs2026`, Node 18.20.8, 20.20.2 and 22.23.2, x64, Git for
 Windows 2.55.0). These jobs are **not** required checks; they add beside the
-Linux jobs and take nothing away. First green run: 35272178294 at
-`8b879a47`, **1,559 passed, 0 failed, 18 skipped** per Node major, identical
-on both, from 57 files — the same 1,577 cases the suite runs on POSIX, where
-the 18 skips run (1,577 passed, 0 failed on darwin at the same source). No
-product source changed to reach that; the four corrections were all in the
-harness — a hard-coded `/tmp` in `history.test.ts`, two `.cmd`-shim spawns
-(`npx`, `node_modules/.bin/esbuild`) that a shell-less spawn cannot start on
-win32, and `smoke-vsix.sh` comparing a CRLF-converted manifest line by line.
+Linux jobs and take nothing away. Run 35275794564 at `54787ebb`:
+**1,560 passed, 0 failed, 18 skipped** per Node major, identical on both,
+from 57 files — the same 1,578 cases the suite runs on POSIX, where the 18
+skips run (1,578 passed, 0 failed on Linux in the same run and on darwin at
+the same source). No product source changed to reach that; the four
+corrections were all in the harness — a hard-coded `/tmp` in
+`history.test.ts`, two `.cmd`-shim spawns (`npx`, `node_modules/.bin/esbuild`)
+that a shell-less spawn cannot start on win32, and `smoke-vsix.sh` comparing
+a CRLF-converted manifest line by line.
 
 A skip is **counted apart from a pass**. `tests/harness.ts` gained `skip`,
 and a platform-gated case that used to return early as "ok" now prints
@@ -47,8 +48,10 @@ Windows does not run, each stated in its own output: a FIFO (no `mkfifo`
 target on win32); a name replaced under an open descriptor, in both the
 scanner and the comparator readers (Windows deletes the name only when the
 last handle closes, so re-creating it fails with `EPERM` — a platform
-property, not a reader guarantee); POSIX mode bits on the consent record and
-on a restored hook; the chmod-000 permission path; a filename carrying ESC
+property, not a reader guarantee; the skip fires only for that refusal, so a
+broken fixture still fails); POSIX mode bits on the consent record (its
+content — a commitment, never the credential — is still asserted on Windows)
+and on a restored hook; the chmod-000 permission path; a filename carrying ESC
 and newline, and a directory named with `<` and `>`, both refused by NTFS
 (seven MCP archive-disclosure cases share that container fixture); three
 backslash-in-filename cases; and a `pgrep` child count. What is **measured**

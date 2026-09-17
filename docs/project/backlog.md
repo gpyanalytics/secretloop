@@ -122,7 +122,7 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   failed before the change.
 - **Native Windows validation** — **CI jobs added (PR #84, draft).** The
   suite and both packaging smokes run on `windows-latest` for Node 18, 20 and
-  22 beside the Linux jobs, not as required checks. First green run: 1,559
+  22 beside the Linux jobs, not as required checks. At head `54787ebb`: 1,560
   passed, 0 failed, 18 skipped per Node major, with every skip naming the
   platform limit it hit; the four corrections were harness faults, not
   product defects (see [development](../development.md#build-and-test)).

@@ -56,10 +56,10 @@
   `test-windows (18)`, `test-windows (20)` and `packaging-windows` run on
   `windows-latest` beside the Linux jobs; they are not required checks and
   take nothing away from the four that are. Until now every Windows statement
-  in this repository was an inference from cross-platform Node APIs. First
-  green run: 1,559 passed, 0 failed, 18 skipped per Node major, identical on
-  18.20.8 and 20.20.2 — the same 1,577 cases POSIX runs in full. **No product
-  source changed** to reach that. Not a claim of Windows support: one hosted
+  in this repository was an inference from cross-platform Node APIs. Result:
+  1,560 passed, 0 failed, 18 skipped per Node major, identical on 18.20.8 and
+  20.20.2 — the same 1,578 cases POSIX runs in full. **No product source
+  changed** to reach that. Not a claim of Windows support: one hosted
   runner, running elevated, is one measurement.
 - **A skipped test is no longer counted as a pass.** `tests/harness.ts` gained
   `skip(reason)`; a platform-gated case prints `skip -` with its reason and a
