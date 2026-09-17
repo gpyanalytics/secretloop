@@ -1,4 +1,4 @@
-import { openSync, fstatSync, readSync, closeSync, statSync } from "fs";
+import { openSync, fstatSync, readSync, closeSync, statSync, constants as fsConstants } from "fs";
 import { REPORT_SCHEMA_VERSION, scopeIdentity } from "./report-metadata";
 import { rulesById } from "./rules";
 import { ENTROPY_RULE_ID } from "./scanner";
@@ -410,12 +410,26 @@ export function loadReport(
   // rather than before it.
   let fd: number;
   try {
-    fd = openSync(path, "r");
+    // Non-blocking where the platform defines the flag. A report path that IS
+    // a FIFO with no writer made this open wait indefinitely -- measured
+    // through the built CLI in both argument positions -- because `open` on a
+    // FIFO waits for a writer. With `O_NONBLOCK` the open returns at once and
+    // the `fstat` below refuses the non-file as it always did, before any
+    // read. A regular file is unaffected. This reader has no pre-open check,
+    // so there is no stat-to-open window here; the case is the static one.
+    //
+    // On win32 `fs.constants.O_NONBLOCK` is undefined, the flag is 0 and this
+    // is a plain read-only open -- exactly the previous behaviour, stated as a
+    // fallback and not as protection; no FIFO can exist on an NTFS path.
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
   } catch {
     // The OS message can carry the path and the reason; neither is needed.
     return { reasons: [{ code: "unreadable-input", side, detail: "could not be opened" }] };
   }
   try {
+    // Classifies the OPENED object before any byte is read; a FIFO or device
+    // that the non-blocking open let through is refused here and the
+    // descriptor is closed in the finally below.
     const st = fstatSync(fd);
     if (!st.isFile()) {
       return { reasons: [{ code: "unreadable-input", side, detail: "not a regular file" }] };

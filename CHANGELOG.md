@@ -70,6 +70,20 @@
   Concern A:** the open still resolves
   the name and follows symlinks; containment between the check and the open
   remains open and is not changed here.
+- **`secretloop compare` no longer waits indefinitely when a report path is a
+  named pipe.** The comparator opens each report file and classifies the
+  opened descriptor before reading; it has no pre-open check, so the case is
+  a path that is already a FIFO when the open runs — measured through the
+  built CLI in both argument positions, the command hung until its process was
+  killed. The report-file open now uses `O_NONBLOCK` where the platform
+  defines it, and the existing "not a regular file" refusal (exit 2, no path
+  or content echoed) is reached at once. The report-size cap, the bounded
+  single-descriptor read, strict JSON and metadata validation, comparison
+  eligibility and exit codes are unchanged. **Validated on darwin and
+  Linux.** **Windows:** the constant is undefined there, the open is a plain
+  read-only open and behaviour is what it was; no FIFO can exist on an NTFS
+  path and no Windows FIFO protection is claimed. Not a general claim about
+  non-blocking filesystem operations or denial-of-service immunity.
 
 ### Testing
 

@@ -1,7 +1,7 @@
 import { test, suite, finish, assert, skip } from "./harness";
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync, symlinkSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync, mkdirSync, appendFileSync, unlinkSync, symlinkSync, constants as fsConstants } from "fs";
 import { tmpdir } from "os";
-import { spawnSync } from "child_process";
+import { spawnSync, execFileSync } from "child_process";
 import * as path from "path";
 import {
   MAX_FINDING_DIAGNOSTICS_PER_SIDE,
@@ -990,6 +990,130 @@ test("output is stable across runs for the same input", () => {
   // Order of findings in the input must not change the output.
   const shuffled = report({}, [finding(FP1), finding(FP2)]);
   assert.strictEqual(renderJson(cmp(a, b)), renderJson(cmp(shuffled, b)));
+});
+
+// ---------------------------------------------------------------------------
+suite("\ncompare (unit) — a FIFO report path is refused, not waited on");
+
+/**
+ * THE DEMONSTRATED BLOCK. `loadReport` opens the path and classifies the
+ * descriptor with `fstat`; it has NO pre-open check, so the only FIFO case
+ * that exists is a path that IS a FIFO when the open runs. On the unchanged
+ * source that open waited for a writer indefinitely -- measured through the
+ * built CLI in both argument positions. Each case below runs in a child with a
+ * hard timeout: a child that is killed FAILS the case, never skips it. The
+ * PARENT creates and removes the lab, so a killed child leaves no FIFO behind.
+ *
+ * WIN32: no FIFO can exist on an NTFS path and `fs.constants.O_NONBLOCK` is
+ * undefined there, so the product falls back to a plain read-only open --
+ * previous behaviour, not protection. These cases skip on win32 and are
+ * counted apart from passes; every ordinary-input case in this file runs there.
+ */
+const FIFO_TIMEOUT_MS = 10000;
+
+function requireMkfifo(): void {
+  if (process.platform === "win32") skip("mkfifo is POSIX; no FIFO can be created on an NTFS path");
+  const d = mkdtempSync(path.join(tmpdir(), "secretloop-cmp-mkfifo-"));
+  try {
+    execFileSync("mkfifo", [path.join(d, "p")], { stdio: "ignore" });
+  } catch {
+    skip("mkfifo is unavailable on this host; the FIFO case did not run");
+  } finally {
+    rmSync(d, { recursive: true, force: true });
+  }
+}
+
+test("loadReport refuses a writerless FIFO promptly as 'not a regular file', and closes it", () => {
+  requireMkfifo();
+  const root = path.join(__dirname, "..");
+  const lab = mkdtempSync(path.join(tmpdir(), "secretloop-cmp-fifo-"));
+  let run: ReturnType<typeof spawnSync>;
+  try {
+    const fifo = path.join(lab, "pipe.json");
+    execFileSync("mkfifo", [fifo], { stdio: "ignore" });
+    const script = `
+      const fs = require("fs");
+      const { loadReport } = require(${JSON.stringify(path.join(root, "src", "compare"))});
+      const probe = () => { const fd = fs.openSync(${JSON.stringify(lab)}, "r"); fs.closeSync(fd); return fd; };
+      const before = probe();
+      const t0 = Date.now();
+      const r = loadReport(${JSON.stringify(fifo)}, "before");
+      const after = probe();
+      process.stdout.write(JSON.stringify({ ms: Date.now() - t0, reasons: "reasons" in r ? r.reasons : null, before, after }));
+    `;
+    run = spawnSync(process.execPath, ["-r", "ts-node/register/transpile-only", "-e", script], {
+      cwd: root,
+      timeout: FIFO_TIMEOUT_MS,
+      encoding: "utf8",
+    });
+  } finally {
+    rmSync(lab, { recursive: true, force: true });
+  }
+  // A TIMEOUT IS THE DEFECT: the open waited for a writer. It fails this case.
+  assert.ok(
+    !run.error || (run.error as NodeJS.ErrnoException).code !== "ETIMEDOUT",
+    `loadReport BLOCKED on a writerless FIFO: child killed after ${FIFO_TIMEOUT_MS} ms`
+  );
+  assert.strictEqual(run.status, 0, `child failed: ${run.stderr}`);
+  const got = JSON.parse(String(run.stdout));
+  assert.ok(Array.isArray(got.reasons), "a FIFO must be refused, not loaded");
+  assert.strictEqual(got.reasons[0].code, "unreadable-input");
+  assert.strictEqual(got.reasons[0].detail, "not a regular file", "the existing non-regular-input wording");
+  assert.strictEqual(got.after, got.before, `descriptor number drifted ${got.before} -> ${got.after}: the refused FIFO leaked`);
+});
+
+test("CLI: a FIFO in either report position exits 2 promptly with the existing input-error line", () => {
+  requireMkfifo();
+  const lab = mkdtempSync(path.join(tmpdir(), "secretloop-cmp-fifo-cli-"));
+  try {
+    const good = path.join(lab, "good.json");
+    writeFileSync(good, JSON.stringify(report()));
+    for (const position of ["before", "after"] as const) {
+      const fifo = path.join(lab, `${position}.pipe.json`);
+      execFileSync("mkfifo", [fifo], { stdio: "ignore" });
+      const args = position === "before" ? [fifo, good] : [good, fifo];
+      // Exit status read from spawnSync itself, never through a pipeline.
+      const r = spawnSync("node", [CLI, "compare", ...args], { encoding: "utf8", timeout: FIFO_TIMEOUT_MS });
+      assert.ok(
+        !r.error || (r.error as NodeJS.ErrnoException).code !== "ETIMEDOUT",
+        `compare BLOCKED with a FIFO as the ${position} report: child killed after ${FIFO_TIMEOUT_MS} ms`
+      );
+      assert.strictEqual(r.status, 2, `a FIFO ${position} report is an input error (exit 2); got ${r.status}, stderr: ${r.stderr}`);
+      assert.match(r.stderr, new RegExp(`secretloop: the ${position} report not a regular file\\.`));
+      // Exactly ONE input-error line, naming only the FIFO's side. This is what
+      // proves the other position's regular report loaded: in the after case
+      // the before report must have loaded and the FIFO open must have been
+      // reached, or a "the before report ..." line would be here too.
+      const inputLines = r.stderr.split("\n").filter((l) => /^secretloop: the (before|after) report /.test(l));
+      assert.deepStrictEqual(
+        inputLines.map((l) => l.replace(/ report .*$/, " report")),
+        [`secretloop: the ${position} report`],
+        `expected one input-error line for the ${position} side only; stderr: ${r.stderr}`
+      );
+      assert.ok(!r.stderr.includes(lab) && !(r.stdout || "").includes(lab), "no path is echoed");
+      assert.strictEqual((r.stdout || "").trim(), "", "nothing is written to stdout for an unusable input");
+    }
+  } finally {
+    rmSync(lab, { recursive: true, force: true });
+  }
+});
+
+test("the report-file open is read-only plus O_NONBLOCK exactly where the platform defines it", () => {
+  // Printed so the running platform's actual constant is in its own CI log:
+  // win32 prints "undefined", and there the open is a plain read-only open.
+  console.log(`    O_NONBLOCK on ${process.platform}: ${String(fsConstants.O_NONBLOCK)}`);
+  if (process.platform !== "win32") {
+    assert.notStrictEqual(fsConstants.O_NONBLOCK, undefined, "every supported POSIX platform is expected to define O_NONBLOCK");
+  }
+  // The ordinary-file contract survives the flag on every platform: a valid
+  // report still loads, and a regular file's bytes are read in full.
+  withDir((dir) => {
+    const p = path.join(dir, "r.json");
+    writeFileSync(p, JSON.stringify(report({}, [finding(FP1)])));
+    const res = loadReport(p, "before");
+    assert.ok("report" in res, "a regular report still loads with the non-blocking flag");
+    assert.strictEqual(res.report.findings.length, 1);
+  });
 });
 
 // ---------------------------------------------------------------------------
