@@ -141,6 +141,26 @@ process. **Uninstall Pre-commit Hook** restores it.
 **`npx -y secretloop-mcp` fails.** The command is inside the `secretloop`
 package: use `npx -y --package=secretloop secretloop-mcp`.
 
+## The extension's Details page names an older version
+
+The **Details** tab of an installed SecretLoop can show a README whose
+version line says an earlier release — for example *This README describes
+SecretLoop 0.5.1* while **Installed** says 0.6.0.
+
+That text is not in the package you installed. Measured on 2026-09-17: the
+0.6.0 VSIX served by the Marketplace and by Open VSX is byte-identical to the
+release artifact (`sha256 bc5e21d5…`), its packaged `readme.md` says *0.6.0*,
+and so does the README in the installed `gpyanalytics.secretloop-0.6.0`
+folder. The *0.5.1* line is that older version's README, which VS Code can
+still render from the previous install after an in-place update. The older
+extension folders stay on disk, marked obsolete, until VS Code removes them.
+
+Reload the window (**Developer: Reload Window**) or restart VS Code, then open
+the Details tab again. To check what is actually installed, open
+`~/.vscode/extensions/gpyanalytics.secretloop-<version>/README.md` (on
+Windows, `%USERPROFILE%\.vscode\extensions\…`): its eighth line names the
+version that README describes.
+
 ## Reporting a problem
 
 Bugs and questions: the repository's issue tracker. Vulnerabilities: the
