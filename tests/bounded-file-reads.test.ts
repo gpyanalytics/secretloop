@@ -145,7 +145,13 @@ test("REGRESSION: bytes come from the opened descriptor, not the path", () => {
         throw e;
       }
     });
-    if (refused !== null && process.platform === "win32") {
+    // Only the codes by which Windows refuses to replace a name under an open
+    // handle (measured: EPERM) qualify as the platform's answer. Any other
+    // fixture failure -- a missing file, a bad path -- falls through to the
+    // assertion below and FAILS on every platform, so a broken fixture can
+    // never masquerade as a platform limit.
+    const platformRefusal = new Set(["EPERM", "EBUSY", "EACCES"]);
+    if (refused !== null && process.platform === "win32" && platformRefusal.has((refused as { code: string }).code)) {
       // Windows would not replace the name while the descriptor was open.
       // That is a platform property, recorded with the exact call and code;
       // it is not evidence about the reader either way, so the case is

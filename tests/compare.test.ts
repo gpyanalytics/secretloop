@@ -894,7 +894,13 @@ test("replacing the path after opening does not change what is read", () => {
         }
       },
     });
-    if (refused !== null && process.platform === "win32") {
+    // Only the codes by which Windows refuses to replace a name under an open
+    // handle (measured: EPERM) qualify as the platform's answer. Any other
+    // fixture failure -- a missing file, a bad path -- falls through to the
+    // assertion below and FAILS on every platform, so a broken fixture can
+    // never masquerade as a platform limit.
+    const platformRefusal = new Set(["EPERM", "EBUSY", "EACCES"]);
+    if (refused !== null && process.platform === "win32" && platformRefusal.has((refused as { code: string }).code)) {
       // A platform that will not replace a name under an open descriptor has
       // said something about itself, not about the reader. Skipped, with the
       // call and code, rather than passed or failed.
