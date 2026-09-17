@@ -24,10 +24,18 @@ jobs:
   test-windows:
     # NATIVE WINDOWS EXECUTION. Until this job existed, every Windows claim in
     # this repository was an inference from cross-platform Node APIs, and
-    # `tests/binary-identity-paths.ts` said so in as many words: the separator
-    # conversion in walk.ts is the identity on a POSIX host, so a POSIX run
-    # cannot exercise it. This job is what makes a Windows statement a
-    # measurement instead of a reason.
+    # `tests/binary-identity-paths.test.ts` said so in as many words: the
+    # separator conversion in walk.ts is the identity on a POSIX host, so a
+    # POSIX run cannot exercise it. This job is what makes a Windows statement
+    # a measurement instead of a reason.
+    #
+    # One hosted runner is one measurement, not "Windows support". It runs
+    # elevated, so symlink creation is permitted; a non-elevated user without
+    # Developer Mode would see EPERM from the symlink fixtures, and the suite
+    # would fail there rather than skip. Cases the platform cannot host -- a
+    # FIFO, POSIX mode bits, a name under an open descriptor being replaced,
+    # filenames NTFS refuses -- are reported by the harness as skips with
+    # their reason, and a skip is counted apart from a pass.
     #
     # The same Node majors as the Linux `test` job, because the question is
     # whether the PRODUCT is portable, not whether one Node version is. The
@@ -61,12 +69,6 @@ jobs:
       # lets that guard pass.
       - run: npm run compile
       - run: npm test
-      # TEMPORARY DIAGNOSTIC -- see .github/windows-survey.js. Never decides the
-      # job's conclusion; removed once every Windows failure is classified.
-      - name: Survey every test file (diagnostic only)
-        if: always()
-        continue-on-error: true
-        run: node .github/windows-survey.js
 
   packaging-windows:
     # The same two packaging smokes as `packaging`, on a native Windows runner.
@@ -84,13 +86,6 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      # TEMPORARY DIAGNOSTIC: what line endings the checkout gave the manifest.
-      - name: Manifest line endings (diagnostic only)
-        shell: bash
-        run: |
-          git config --show-origin --get core.autocrlf || echo "core.autocrlf unset"
-          git ls-files --eol scripts/vsix-manifest.txt
-          od -c scripts/vsix-manifest.txt | head -3
       - name: Smoke the npm tarball
         shell: bash
         run: npm run smoke:tarball

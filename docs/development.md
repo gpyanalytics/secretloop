@@ -26,6 +26,48 @@ CI runs the suite on Node 18 and 20, the packaging smoke checks on Node 22
 (`smoke:tarball`, `smoke:vsix`), and a self-scan of the repository with
 `.github/secretloop.ci.json`. All four are required checks on `main`.
 
+The same suite and the same two packaging smokes also run **natively on
+Windows** (`test-windows (18)`, `test-windows (20)`, `packaging-windows`;
+`windows-latest`, which resolved to Windows Server 2025 10.0.26100, image
+`windows-2025-vs2026`, Node 18.20.8, 20.20.2 and 22.23.2, x64, Git for
+Windows 2.55.0). These jobs are **not** required checks; they add beside the
+Linux jobs and take nothing away. First green run: 35272178294 at
+`8b879a47`, **1,559 passed, 0 failed, 18 skipped** per Node major, identical
+on both, from 57 files — the same 1,577 cases the suite runs on POSIX, where
+the 18 skips run (1,577 passed, 0 failed on darwin at the same source). No
+product source changed to reach that; the four corrections were all in the
+harness — a hard-coded `/tmp` in `history.test.ts`, two `.cmd`-shim spawns
+(`npx`, `node_modules/.bin/esbuild`) that a shell-less spawn cannot start on
+win32, and `smoke-vsix.sh` comparing a CRLF-converted manifest line by line.
+
+A skip is **counted apart from a pass**. `tests/harness.ts` gained `skip`,
+and a platform-gated case that used to return early as "ok" now prints
+`skip -` with its reason and a separate count in the summary. The 18 cases
+Windows does not run, each stated in its own output: a FIFO (no `mkfifo`
+target on win32); a name replaced under an open descriptor, in both the
+scanner and the comparator readers (Windows deletes the name only when the
+last handle closes, so re-creating it fails with `EPERM` — a platform
+property, not a reader guarantee); POSIX mode bits on the consent record and
+on a restored hook; the chmod-000 permission path; a filename carrying ESC
+and newline, and a directory named with `<` and `>`, both refused by NTFS
+(seven MCP archive-disclosure cases share that container fixture); three
+backslash-in-filename cases; and a `pgrep` child count. What is **measured**
+on Windows and was not before: the walker's `path.sep` conversion into
+`binaryIdentity` through the real CLI on both the git and the fallback
+enumeration, every bounded-read case that does not need a FIFO or a name
+swap, directory removal after every reader outcome (a descriptor leak shows
+as a failed `rmSync` on Windows, where the POSIX fd-count probe cannot see
+it), and the symlink containment fixtures, which the hosted runner permits
+because it runs elevated.
+
+Two limits of that measurement. **One hosted runner is not "Windows
+support"**: a non-elevated user without Developer Mode would get `EPERM`
+from `symlinkSync`, and the containment suites would fail rather than skip.
+And **the pending consent record is not owner-only on Windows**: `mode:
+0o600` at write time has no effect there, so the record's protection is the
+ACL of the profile directory it lives under, not a mode. That is a real
+platform difference in `src/consent.ts`, disclosed here; it is not changed.
+
 ## Layout
 
 ```
@@ -231,6 +273,16 @@ names an earlier release:
   take. The design options and their platform caveats are in
   `secretloop-benchmark/f1-reproduction-design/`. Concern A is **not** a release
   blocker and nothing here promotes it to one.
+
+  **Native Windows validation does not touch either concern.** The bounded
+  readers now run on a Windows runner (see *Build and test*), which measures
+  the cap, the classifications and descriptor cleanup there. It measures
+  nothing about containment: Concern A and the stat-to-open FIFO window are
+  exactly as open on Windows as on POSIX, and the fact that Windows refuses
+  to replace a name under an open descriptor is a property of that platform's
+  delete semantics, not a containment guarantee — the open itself still
+  resolves the name. Whether device/inode checks would close Concern A is
+  likewise not established by any Windows run.
 
 - **0.5.1 is published.** npm, Open VSX and the VS Code Marketplace all serve
   0.5.1, released from commit `88d2197` and tagged `v0.5.1`. The published npm

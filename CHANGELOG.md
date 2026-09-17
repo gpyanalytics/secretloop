@@ -50,6 +50,36 @@
   was introduced — an over-cap file is still `oversized`, still counted, and
   still makes the report incomplete.
 
+### Testing
+
+- **The suite and both packaging smokes now run natively on Windows in CI.**
+  `test-windows (18)`, `test-windows (20)` and `packaging-windows` run on
+  `windows-latest` beside the Linux jobs; they are not required checks and
+  take nothing away from the four that are. Until now every Windows statement
+  in this repository was an inference from cross-platform Node APIs. First
+  green run: 1,559 passed, 0 failed, 18 skipped per Node major, identical on
+  18.20.8 and 20.20.2 — the same 1,577 cases POSIX runs in full. **No product
+  source changed** to reach that. Not a claim of Windows support: one hosted
+  runner, running elevated, is one measurement.
+- **A skipped test is no longer counted as a pass.** `tests/harness.ts` gained
+  `skip(reason)`; a platform-gated case prints `skip -` with its reason and a
+  separate count in the summary instead of returning early as `ok`. Eighteen
+  cases skip on Windows, each stating why — FIFOs, POSIX mode bits, replacing
+  a name under an open descriptor (Windows answers `EPERM` at re-creation),
+  filenames NTFS refuses, and a `pgrep` count. A file with no skips keeps the
+  two-number summary.
+- **Four harness faults corrected, found only by running on Windows:** a
+  hard-coded `/tmp` in the revRange guard test; `npx` and
+  `node_modules/.bin/esbuild` spawned as `.cmd` shims a shell-less spawn
+  cannot start; and `smoke-vsix.sh` comparing a CRLF-converted manifest line
+  by line, so two identical file lists read as a mismatch. The bundle test now
+  uses esbuild's in-process API with the same options.
+- **Two cases added that only a Windows run makes decisive:** the walker's
+  separator conversion measured into `binaryIdentity` through the real CLI on
+  both the git and the fallback enumeration, and the temporary directory
+  removed after every reader outcome, which is what a leaked descriptor looks
+  like under Windows delete semantics.
+
 ## 0.6.0 — 2026-09-15
 
 ### What you can do in 0.6.0
