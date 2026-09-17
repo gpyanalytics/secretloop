@@ -1080,6 +1080,16 @@ test("CLI: a FIFO in either report position exits 2 promptly with the existing i
       );
       assert.strictEqual(r.status, 2, `a FIFO ${position} report is an input error (exit 2); got ${r.status}, stderr: ${r.stderr}`);
       assert.match(r.stderr, new RegExp(`secretloop: the ${position} report not a regular file\\.`));
+      // Exactly ONE input-error line, naming only the FIFO's side. This is what
+      // proves the other position's regular report loaded: in the after case
+      // the before report must have loaded and the FIFO open must have been
+      // reached, or a "the before report ..." line would be here too.
+      const inputLines = r.stderr.split("\n").filter((l) => /^secretloop: the (before|after) report /.test(l));
+      assert.deepStrictEqual(
+        inputLines.map((l) => l.replace(/ report .*$/, " report")),
+        [`secretloop: the ${position} report`],
+        `expected one input-error line for the ${position} side only; stderr: ${r.stderr}`
+      );
       assert.ok(!r.stderr.includes(lab) && !(r.stdout || "").includes(lab), "no path is echoed");
       assert.strictEqual((r.stdout || "").trim(), "", "nothing is written to stdout for an unusable input");
     }
