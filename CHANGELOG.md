@@ -54,8 +54,9 @@
   classify a path before opening it, so a FIFO that is already there was always
   refused promptly. A regular file replaced by a FIFO *between* that check and
   the open reached a blocking open and the scanner hung until its process was
-  killed — measured, not assumed. Every content open (the text reader, the
-  binary reader's bulk read and its header probe) now uses `O_NONBLOCK` where
+  killed — measured, not assumed. Every content open in the scanner's readers
+  (the text reader, the binary reader's bulk read and its header probe) now
+  uses `O_NONBLOCK` where
   the platform defines it, and the opened descriptor is classified with `fstat`
   before any byte is read; a non-file is refused as the existing `not-a-file`
   reason, counted in coverage as before. Regular files, in-root symlinks, the
@@ -64,7 +65,9 @@
   it blocked before). **Windows:** `fs.constants.O_NONBLOCK` is undefined
   there, so the open falls back to a plain read-only open and behaves exactly
   as before; no FIFO can exist on an NTFS path, and no Windows FIFO protection
-  is claimed. **This does not close F-1 Concern A:** the open still resolves
+  is claimed. The comparator's reader of saved report files is a separate
+  path over user-supplied inputs and is unchanged. **This does not close F-1
+  Concern A:** the open still resolves
   the name and follows symlinks; containment between the check and the open
   remains open and is not changed here.
 

@@ -268,7 +268,8 @@ names an earlier release:
   platforms.** A regular file replaced by a FIFO between a reader's type check
   and its open blocked the open indefinitely (measured in
   `secretloop-benchmark/f1-containment-design/`, E2, darwin and Linux). Every
-  content open now uses `O_NONBLOCK` where `fs.constants` defines it and the
+  content open in the scanner's readers now uses `O_NONBLOCK` where
+  `fs.constants` defines it and the
   opened descriptor is classified with `fstat` before any read; the swap is
   refused as `not-a-file` in milliseconds on darwin and Linux. On win32 the
   constant is undefined, the open is a plain read-only open, and behaviour is
