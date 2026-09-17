@@ -21,6 +21,42 @@ jobs:
       - run: npm run compile
       - run: npm test
 
+  test-windows:
+    # NATIVE WINDOWS EXECUTION. Until this job existed, every Windows claim in
+    # this repository was an inference from cross-platform Node APIs, and
+    # `tests/binary-identity-paths.ts` said so in as many words: the separator
+    # conversion in walk.ts is the identity on a POSIX host, so a POSIX run
+    # cannot exercise it. This job is what makes a Windows statement a
+    # measurement instead of a reason.
+    #
+    # The same Node majors as the Linux `test` job, because the question is
+    # whether the PRODUCT is portable, not whether one Node version is. The
+    # Linux jobs and their check names are untouched -- this adds
+    # `test-windows (18)` and `test-windows (20)` beside them and takes nothing
+    # away, so branch protection keeps requiring exactly what it required
+    # before.
+    runs-on: windows-latest
+    strategy:
+      # Report both majors. With fail-fast, a Windows-only defect on 18 would
+      # cancel 20 and hide whether the defect is version-specific -- which is
+      # the first question asked when diagnosing one.
+      fail-fast: false
+      matrix:
+        node-version: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      # Before the suite, not after: five test files spawn `out/cli.js` as a
+      # child process, so an unbuilt or stale `out/` makes the suite a test of
+      # the wrong artifact. `pretest` guards this too; building here is what
+      # lets that guard pass.
+      - run: npm run compile
+      - run: npm test
+
   packaging:
     # The release checks, run on every change rather than only at release time.
     # 0.1.6 shipped a VSIX carrying dev dependencies because it was packaged from
