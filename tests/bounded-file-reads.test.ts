@@ -1,6 +1,6 @@
 import { readTextFileResult, readBinaryCandidate } from "../src/walk";
 import { defaultConfig } from "../src/config";
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import {
   mkdtempSync,
   mkdirSync,
@@ -10,6 +10,7 @@ import {
   unlinkSync,
   openSync,
   closeSync,
+  existsSync,
 } from "fs";
 import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
@@ -242,18 +243,16 @@ test("descriptors are released on success, refusal and throw alike", () => {
  * hard timeout, so the failure mode is a failing test with a legible message.
  */
 test("a FIFO is refused promptly by both readers, without blocking on open", () => {
-  if (process.platform === "win32") {
-    // mkfifo is POSIX. Not skipped silently -- stated.
-    assert.ok(true, "FIFO case not applicable on win32");
-    return;
-  }
+  // mkfifo is POSIX. On win32 this case is SKIPPED and counted as such -- it
+  // used to `assert.ok(true)` and return, which the summary counted as a pass
+  // for a body that never ran. A skip is not a pass; see harness.ts.
+  if (process.platform === "win32") skip("mkfifo is POSIX; no FIFO can be created here");
   withLab((d) => {
     const fifo = path.join(d, "pipe");
     try {
       execFileSync("mkfifo", [fifo], { stdio: "ignore" });
     } catch {
-      assert.ok(true, "mkfifo unavailable on this host; case not run");
-      return;
+      skip("mkfifo is unavailable on this host; the FIFO case did not run");
     }
 
     const root = path.join(__dirname, "..");
@@ -339,6 +338,56 @@ test("a cap that is not a usable number refuses instead of reading unbounded", (
       );
     }
   });
+});
+
+// ------------------------------------------- cleanup under Windows semantics
+/**
+ * DESCRIPTOR LIFECYCLE, ASKED THE WAY WINDOWS ANSWERS IT.
+ *
+ * The case above counts file-descriptor NUMBERS, which is a POSIX-shaped
+ * question. Windows answers a different and harsher one: libuv opens with
+ * FILE_SHARE_DELETE, so unlinking a file with a live handle appears to succeed,
+ * but the file is only MARKED for deletion and survives until the last handle
+ * closes -- so REMOVING ITS DIRECTORY fails while a descriptor is leaked.
+ *
+ * That makes "can the temporary directory be deleted immediately afterwards"
+ * a real leak detector on Windows, where the fd count is not. On POSIX this
+ * case passes whether or not a descriptor leaked, because unlink and rmdir do
+ * not care. It is therefore a MEASUREMENT ON WINDOWS AND A GUARD ON POSIX, and
+ * it is labelled as such rather than counted as portable proof.
+ */
+test("the lab directory can be removed right after every reader outcome", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-cleanup-"));
+  const f = path.join(dir, "f.txt");
+  writeFileSync(f, "A".repeat(100));
+  mkdirSync(path.join(dir, "sub"));
+
+  // Every outcome the readers can produce, so a leak on any path is caught.
+  readTextFileResult(dir, "f.txt", cfg(1000)); // success
+  readTextFileResult(dir, "f.txt", cfg(10)); // oversized, at the fstat
+  readTextFileResult(dir, "sub", cfg(1000)); // not-a-file, before any open
+  readTextFileResult(dir, "gone.txt", cfg(1000)); // vanished
+  readTextFileResult(dir, "f.txt", cfg("x" as unknown as number)); // unusable cap
+  readTextFileResult(dir, "f.txt", cfg(1000), () => {
+    throw new Error("injected failure between open and read");
+  }); // throw, after the descriptor is open
+  readBinaryCandidate(dir, "f.txt", cfg(1000)); // binary success
+  readBinaryCandidate(dir, "f.txt", cfg(10)); // binary oversized
+
+  let removed = true;
+  let why = "";
+  try {
+    rmSync(dir, { recursive: true });
+  } catch (e) {
+    removed = false;
+    why = String((e as NodeJS.ErrnoException).code ?? e);
+  }
+  assert.ok(
+    removed,
+    `the temporary directory could not be removed (${why}) on ${process.platform}; ` +
+      `on Windows that is what a leaked descriptor looks like`
+  );
+  assert.strictEqual(existsSync(dir), false, "the temporary directory is really gone");
 });
 
 finish();

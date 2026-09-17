@@ -20,7 +20,7 @@ function runFixture(body: string): Run {
   const file = path.join(FIXTURE_DIR, `fixture-${Math.abs(hash(body))}.ts`);
   writeFileSync(
     file,
-    `import { test, suite, finish, assert } from "../harness";\n${body}\nfinish();\n`,
+    `import { test, suite, finish, assert, skip } from "../harness";\n${body}\nfinish();\n`,
     "utf8"
   );
   const res = spawnSync("npx", ["ts-node", "--transpile-only", file], {
@@ -102,6 +102,28 @@ test("an async test is awaited before it is reported", () => {
     run.output.indexOf("[body finished]") < run.output.indexOf("ok - slow"),
     "the test body must complete before the result is reported"
   );
+});
+
+test("a skipped case is reported as not run, counted apart, and does not fail the file", () => {
+  // The contract native Windows depends on: a platform-gated case that cannot
+  // run must not surface as "ok". Before `skip` existed, such cases returned
+  // early and were counted as passes.
+  const run = runFixture(
+    `test("runs", () => {});
+     test("cannot run here", () => { skip("no such device on this host"); });`
+  );
+  assert.strictEqual(run.status, 0, "a genuine platform limit is not a failure");
+  assert.match(run.output, /skip - cannot run here/);
+  assert.match(run.output, /NOT RUN on \w+: no such device on this host/);
+  assert.doesNotMatch(run.output, /ok - cannot run here/, "a skip must never print ok");
+  assert.match(run.output, /1 passed, 0 failed, 1 skipped/, "skips are counted apart from passes");
+});
+
+test("a file with no skips keeps the two-number summary", () => {
+  const run = runFixture(`test("plain", () => {});`);
+  assert.strictEqual(run.status, 0);
+  assert.match(run.output, /1 passed, 0 failed\n/);
+  assert.doesNotMatch(run.output, /skipped/);
 });
 
 test("fixture directory is cleaned up", () => {

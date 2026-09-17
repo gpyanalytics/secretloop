@@ -6,7 +6,7 @@ import {
   InvalidRevRangeError,
 } from "../src/history";
 import { defaultConfig, mergeConfig } from "../src/config";
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -609,6 +609,10 @@ test("a parser failure rejects the promise instead of killing the process", asyn
 });
 
 test("the git process is killed when the parser throws", async () => {
+  // childCount() below asks `pgrep` through bash. On win32 there is no pgrep,
+  // the count is 0 before and 0 after, and `0 <= 0` passed without measuring
+  // anything -- a dead instrument reporting green. Said, not glossed.
+  if (process.platform === "win32") skip("pgrep is not available; the child count cannot be measured");
   await withRepo(async (dir, git) => {
     for (let i = 0; i < 3; i++) {
       writeFileSync(path.join(dir, `f${i}.js`), `const t = "${TOKEN}${i}";\n`);
@@ -716,7 +720,12 @@ test("every option-shaped range is refused before git starts", async () => {
 });
 
 test("the file git would have written does not exist", async () => {
-  const target = "/tmp/secretloop-revrange-should-not-exist";
+  // Under the host's temporary directory, not a literal `/tmp`. On Windows a
+  // literal `/tmp/x` resolves against the current drive as `D:\tmp\x`, a
+  // directory that does not exist, so git's `--output` proof write failed and
+  // this case reported "git no longer writes --output files" -- a harness
+  // defect that read as a product finding.
+  const target = path.join(mkdtempSync(path.join(tmpdir(), "secretloop-revrange-")), "should-not-exist");
   rmSync(target, { force: true });
   await withRepo(async (dir, git) => {
     writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");
@@ -740,6 +749,7 @@ test("the file git would have written does not exist", async () => {
     rmSync(`${target}.proof`, { force: true });
   });
   assert.ok(!existsSync(target), "the guard let git write a file");
+  rmSync(path.dirname(target), { recursive: true, force: true });
 });
 
 test("the shapes real rev-ranges take are still accepted", async () => {

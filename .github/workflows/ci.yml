@@ -36,6 +36,11 @@ jobs:
     # away, so branch protection keeps requiring exactly what it required
     # before.
     runs-on: windows-latest
+    # A hard ceiling, because the readers under test are exactly the code whose
+    # failure mode is an indefinite block on open. The Linux job inherits the
+    # 360-minute default; a Windows hang would otherwise hold a runner for six
+    # hours and report nothing legible.
+    timeout-minutes: 30
     strategy:
       # Report both majors. With fail-fast, a Windows-only defect on 18 would
       # cancel 20 and hide whether the defect is version-specific -- which is
@@ -56,6 +61,36 @@ jobs:
       # lets that guard pass.
       - run: npm run compile
       - run: npm test
+      # TEMPORARY DIAGNOSTIC -- see .github/windows-survey.js. Never decides the
+      # job's conclusion; removed once every Windows failure is classified.
+      - name: Survey every test file (diagnostic only)
+        if: always()
+        continue-on-error: true
+        run: node .github/windows-survey.js
+
+  packaging-windows:
+    # The same two packaging smokes as `packaging`, on a native Windows runner.
+    # Both scripts are bash; on windows-latest `shell: bash` is Git for
+    # Windows' bash, which is the only shell a Windows maintainer would run them
+    # from. Node 22 for the same reason the Linux job pins it: @vscode/vsce
+    # requires node >= 20, and the test matrix, not this job, covers 18.
+    # Not a required check; it adds beside the Linux job and takes nothing away.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Smoke the npm tarball
+        shell: bash
+        run: npm run smoke:tarball
+      - name: Smoke the VSIX
+        shell: bash
+        if: always()
+        run: npm run smoke:vsix
 
   packaging:
     # The release checks, run on every change rather than only at release time.
