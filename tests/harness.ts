@@ -21,6 +21,32 @@ type Entry = { kind: "suite"; name: string } | { kind: "test"; name: string; fn:
 const queue: Entry[] = [];
 let passed = 0;
 let failed = 0;
+let skipped = 0;
+
+/**
+ * A case that did not run on this host, and says so.
+ *
+ * Before this existed, a platform-gated case had two choices, and both lied:
+ * `return` early, which printed "ok" for a body that asserted nothing, or
+ * `assert.ok(true, "not applicable")`, which did the same with a message no
+ * one reads. Either way the summary counted a case that never ran as a pass,
+ * and a native Windows run reported the FIFO case, the chmod case and the
+ * backslash-filename cases as green when none of them had executed.
+ *
+ * A skip is its own line and its own count. It never fails the file, because a
+ * genuine platform limit is not a defect -- but it is never a pass either, so
+ * "N passed" means N bodies ran to their last assertion on this host.
+ */
+class Skip extends Error {
+  constructor(reason: string) {
+    super(reason);
+    this.name = "Skip";
+  }
+}
+
+export function skip(reason: string): never {
+  throw new Skip(reason);
+}
 
 export function suite(name: string): void {
   queue.push({ kind: "suite", name });
@@ -54,13 +80,22 @@ async function run(): Promise<void> {
       passed++;
       console.log(`  ok - ${entry.name}`);
     } catch (err: any) {
+      if (err instanceof Skip) {
+        skipped++;
+        console.log(`  skip - ${entry.name}`);
+        console.log(`    NOT RUN on ${process.platform}: ${err.message}`);
+        continue;
+      }
       failed++;
       console.log(`  FAIL - ${entry.name}`);
       console.log(`    ${err.message}`);
     }
   }
 
-  console.log(`\n${passed} passed, ${failed} failed\n`);
+  // The skipped count is printed only when it is non-zero, so a file with no
+  // platform gate keeps the two-number summary every existing check reads.
+  const skips = skipped > 0 ? `, ${skipped} skipped (not run on ${process.platform})` : "";
+  console.log(`\n${passed} passed, ${failed} failed${skips}\n`);
   process.exitCode = failed > 0 ? 1 : 0;
 }
 

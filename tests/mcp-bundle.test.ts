@@ -1,8 +1,8 @@
 import { test, suite, finish, assert } from "./harness";
-import { execFileSync } from "child_process";
 import { mkdtempSync, readFileSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import * as path from "path";
+import { buildSync } from "esbuild";
 import { rules } from "../src/rules";
 import { isVerifiable, verificationProvider, VERIFIABLE_RULE_IDS } from "../src/verify";
 import {
@@ -95,19 +95,22 @@ function verifierEndpoints(): string[] {
 
 function bundle(entry: string, outDir: string): string {
   const out = path.join(outDir, `${path.basename(entry, ".ts")}.js`);
-  execFileSync(
-    path.join(REPO, "node_modules", ".bin", "esbuild"),
-    [
-      path.join(REPO, "src", entry),
-      "--bundle",
-      `--outfile=${out}`,
-      "--external:vscode",
-      "--format=cjs",
-      "--platform=node",
-      "--minify",
-    ],
-    { stdio: "pipe" }
-  );
+  // esbuild's in-process API, with the same options the `bundle` script
+  // passes on the command line. The previous `node_modules/.bin/esbuild`
+  // spawn is a `.cmd` shim on win32, which a shell-less execFileSync cannot
+  // start (measured on windows-latest: ENOENT, both cases failed), and on
+  // POSIX esbuild's install step swaps its `bin/esbuild` for the native
+  // binary, so there is no one file to spawn on every platform. The API is.
+  buildSync({
+    entryPoints: [path.join(REPO, "src", entry)],
+    bundle: true,
+    outfile: out,
+    external: ["vscode"],
+    format: "cjs",
+    platform: "node",
+    minify: true,
+    logLevel: "silent",
+  });
   return readFileSync(out, "utf8");
 }
 

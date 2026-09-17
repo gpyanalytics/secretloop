@@ -1,4 +1,4 @@
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -19,14 +19,23 @@ import { binaryIdentity, BINARY_CONTRACT_VERSION } from "../src/report-metadata"
  *   SCANNER -- the real CLI over a real tree. These pin what a producer can
  *              actually reach, which is not the same question.
  *
- * PLATFORM. This file runs on the host that runs the suite. The separator
- * conversion for Windows producers happens in walk.ts
- * (`path.relative(...).split(path.sep).join("/")`), and on a POSIX host
- * `path.sep` is "/" so that conversion is the identity. Windows separator
- * handling is therefore asserted HERE ONLY AS THE CONTRACT THIS FUNCTION SEES --
- * a `/`-separated path -- and never as a native Windows run. Nothing in this
- * file executes on Windows, and no result here may be described as native
- * Windows validation.
+ * PLATFORM. This file runs on the host that runs the suite, and since the
+ * `test-windows` CI job exists that includes a NATIVE WINDOWS RUNNER. The
+ * statement this comment used to make -- "nothing in this file executes on
+ * Windows" -- is no longer true and has been corrected rather than left to rot.
+ *
+ * The separator conversion for Windows producers happens in walk.ts
+ * (`path.relative(...).split(path.sep).join("/")`). On a POSIX host `path.sep`
+ * is "/" and that conversion is the identity, so a POSIX run cannot exercise
+ * it; the HELPER cases below therefore still assert only the contract the
+ * function SEES, a `/`-separated path, and a POSIX result still may not be
+ * described as Windows validation.
+ *
+ * What changed is that one SCANNER case -- "the walker hands binaryIdentity a
+ * /-separated path on THIS platform" -- is now decisive on Windows, because
+ * there `path.relative` really does return `dir\file.png` and the conversion
+ * really is load-bearing. On POSIX that same case is a weaker guard that still
+ * passes. Its comment says which it is on the platform it ran on.
  */
 
 const CLI = path.join(__dirname, "..", "out", "cli.js");
@@ -200,8 +209,74 @@ test("SCANNER: two unchanged legitimate exclusion sets keep one identity", () =>
   });
 });
 
+test("SCANNER: the walker hands binaryIdentity a /-separated path on THIS platform", () => {
+  // THE ONE CASE IN THIS FILE THAT NATIVE WINDOWS MAKES DECISIVE.
+  //
+  // `binaryIdentity` refuses any path containing a backslash and withholds the
+  // WHOLE digest -- measured, not assumed: binaryIdentity(["dir\\file.png"])
+  // returns undefined, while binaryIdentity(["dir/file.png"]) returns
+  // binary:740fbb683ea4351d.
+  //
+  // On Windows `path.relative(root, full)` returns `dir\file.png`, so the only
+  // thing standing between the walker and a permanently withheld digest is
+  // walk.ts's `.split(path.sep).join("/")`. Asserting the EXACT documented
+  // identity here means: if that conversion is ever removed, this case fails on
+  // Windows with `undefined` instead of quietly producing a different digest.
+  //
+  // On POSIX path.sep is "/" and the conversion is the identity, so this case
+  // passes without proving anything about separators. That is stated rather
+  // than glossed: it is a guard on POSIX and a measurement on Windows.
+  withDir((dir) => {
+    gitInit(dir);
+    mkdirSync(path.join(dir, "dir"));
+    writeBinary(path.join(dir, "dir", "file.png"));
+    const d = json(dir);
+    assert.strictEqual(
+      d.binaryDigest,
+      "binary:740fbb683ea4351d",
+      `the walker must emit dir/file.png on ${process.platform}; a withheld ` +
+        `(undefined) digest here means a native separator reached binaryIdentity`
+    );
+    assert.strictEqual(d.incomplete, false, "a plain nested binary is not a coverage failure");
+  });
+});
+
+test("SCANNER: the FALLBACK walk hands binaryIdentity a /-separated path on THIS platform", () => {
+  // The case above goes through `git ls-files`, and git prints `/` on every
+  // platform -- so on Windows that route never exercises walk.ts's conversion.
+  // This tree is NOT a repository, so `listFilesWithExclusions` falls back to
+  // `walkDirectory`, whose paths come from `path.relative` and are `dir\file.png`
+  // on win32 until `.split(path.sep).join("/")` converts them. That line is the
+  // only thing between this producer and a permanently withheld digest, and it
+  // is exercised here natively on Windows. On POSIX the conversion is the
+  // identity and this is a guard, not a measurement.
+  //
+  // WHY THE TREE MUST NOT BE INSIDE A REPOSITORY: the fallback is taken only
+  // when git fails. The temporary directory is outside any checkout on the CI
+  // runners and on the development hosts this suite runs on; if it ever is
+  // not, the assertion below on `route` says so instead of passing on the git
+  // route by accident.
+  withDir((dir) => {
+    mkdirSync(path.join(dir, "dir"));
+    writeBinary(path.join(dir, "dir", "file.png"));
+    const probe = spawnSync("git", ["-C", dir, "ls-files", "--cached", "--others", "--exclude-standard"], {
+      encoding: "utf8",
+    });
+    const route = probe.status === 0 ? "git" : "fallback";
+    assert.strictEqual(route, "fallback", "the temporary tree must not be inside a git repository");
+    const d = json(dir);
+    assert.strictEqual(
+      d.binaryDigest,
+      "binary:740fbb683ea4351d",
+      `the fallback walk must emit dir/file.png on ${process.platform}; a withheld ` +
+        `(undefined) digest here means a native separator reached binaryIdentity`
+    );
+    assert.strictEqual(d.incomplete, false, "a plain nested binary is not a coverage failure");
+  });
+});
+
 test("SCANNER: git enumeration refuses a backslash-named file and reports incomplete", () => {
-  if (!POSIX) return; // such a name cannot exist on Windows
+  if (!POSIX) skip("a file named dir\\file.png cannot exist on win32; the case did not run");
   withDir((dir) => {
     gitInit(dir);
     writeBinary(path.join(dir, "dir\\file.png"));
@@ -224,7 +299,7 @@ test("SCANNER: git enumeration refuses a backslash-named file and reports incomp
 });
 
 test("SCANNER: THE GUARD REGRESSION — the fallback enumeration admits it, and metadata must not collapse it", () => {
-  if (!POSIX) return;
+  if (!POSIX) skip("a file named dir\\file.png cannot exist on win32; the case did not run");
   // This is the combination that makes the collision REACHABLE: an enumeration
   // that admits the ambiguous path. Without git, listFilesWithExclusions falls
   // back to walkDirectory, which returns the real on-disk name and whose
@@ -260,7 +335,7 @@ test("SCANNER: THE GUARD REGRESSION — the fallback enumeration admits it, and 
 });
 
 test("SCANNER: withholding leaves the rest of the report intact and findings unchanged", () => {
-  if (!POSIX) return;
+  if (!POSIX) skip("a file named dir\\file.png cannot exist on win32; the case did not run");
   withDir((dir) => {
     writeBinary(path.join(dir, "dir\\file.png"));
     writeFileSync(path.join(dir, "app.js"), "const a = 1;\n");

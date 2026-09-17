@@ -1,4 +1,4 @@
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync, chmodSync, symlinkSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -175,8 +175,9 @@ test("permission failure is a limitation — skipped when the user can read anyt
     // one only adds the permission path where it actually applies.
     const readable = spawnSync("node", ["-e", `require("fs").readFileSync(${JSON.stringify(secret)})`]);
     if (readable.status === 0) {
-      assert.ok(true, "running privileged: chmod 000 is not enforced, case not applicable");
-      return;
+      // Root on POSIX, and every user on win32 where mode bits are advisory.
+      // A skip, not a pass: the permission path did not run here.
+      skip("chmod 000 is not enforced on this host (privileged, or win32); the permission path did not run");
     }
     const d = json(dir);
     assert.strictEqual(d.incomplete, true, "an unreadable file must still make the report incomplete");
