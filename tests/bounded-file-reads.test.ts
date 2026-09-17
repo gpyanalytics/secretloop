@@ -1,4 +1,5 @@
-import { readTextFileResult, readBinaryCandidate } from "../src/walk";
+import { readTextFileResult, readBinaryCandidate, READ_OPEN_FLAGS, NONBLOCKING_OPEN_SUPPORTED } from "../src/walk";
+import { constants as fsConstants } from "fs";
 import { defaultConfig } from "../src/config";
 import { test, suite, finish, assert, skip } from "./harness";
 import {
@@ -319,6 +320,127 @@ test("a FIFO is refused promptly by both readers, without blocking on open", () 
     assert.strictEqual(got.t, "not-a-file", "text reader must refuse a FIFO");
     assert.strictEqual(got.b, "not-a-file", "binary reader must refuse a FIFO");
   });
+});
+
+// ------------------------------------- the FIFO OPEN WINDOW (slice 1 of F-1)
+/**
+ * THE DEMONSTRATED BLOCK, AND ITS CORRECTION.
+ *
+ * Both readers classify a path BEFORE opening it, so a FIFO that is already
+ * there is refused promptly (the case above). But the classification and the
+ * open are two resolutions of the same name, and a regular file replaced by a
+ * FIFO between them reached a blocking open: measured on the unchanged source
+ * (f1-containment-design, E2), the reader hung until its process was killed.
+ *
+ * These cases replace the file INSIDE the product's own pre-open type check --
+ * a wrapper around fs.statSync (text) or fs.lstatSync (binary), fired once,
+ * after the real call -- so the replacement lands exactly in the window, on
+ * the unchanged source and on the corrected one alike. That is what makes the
+ * result discriminating: the trigger reaches the same operation in both
+ * builds, and a build that blocks fails on the TIMEOUT below rather than
+ * skipping. Each child also counts its descriptors before and after, and
+ * removes its own lab directory, so a refusal that leaked a handle fails too.
+ *
+ * WIN32: no FIFO can exist on an NTFS path, and fs.constants.O_NONBLOCK is
+ * undefined there, so the product falls back to a plain read-only open. These
+ * cases SKIP on win32 and are counted as such; the ordinary-file cases in this
+ * file are what Windows CI measures.
+ */
+const FIFO_CHILD_TIMEOUT_MS = 10000;
+
+function fifoSwapChild(mode: "text" | "binary" | "header"): { run: ReturnType<typeof spawnSync>; got: any } {
+  const root = path.join(__dirname, "..");
+  const script = `
+    const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
+    const w = require(${JSON.stringify(path.join(root, "src", "walk"))});
+    const { defaultConfig } = require(${JSON.stringify(path.join(root, "src", "config"))});
+    const c = Object.assign({}, defaultConfig, { maxFileSizeBytes: 1000000 });
+    const lab = fs.mkdtempSync(path.join(os.tmpdir(), "secretloop-fifoswap-"));
+    const p = path.join(lab, "f.txt");
+    fs.writeFileSync(p, "REGULAR");
+    const probe = () => { const fd = fs.openSync(lab, "r"); fs.closeSync(fd); return fd; }; // the lab directory: present before and after, never the swapped path
+    const before = probe();
+    // Fire once, after the product's own pre-open type check on THIS path.
+    const name = ${JSON.stringify(mode === "text" ? "statSync" : "lstatSync")};
+    const real = fs[name]; let fired = false;
+    fs[name] = function (...a) {
+      const r = real.apply(this, a);
+      if (!fired && String(a[0]) === p) { fired = true; fs.unlinkSync(p); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); }
+      return r;
+    };
+    const s = (r) => (r && typeof r === "object" && "skipped" in r ? r.skipped : ("text" in r ? "TEXT" : "BYTES"));
+    let result;
+    try {
+      result = ${mode === "text"
+        ? `s(w.readTextFileResult(lab, "f.txt", c))`
+        : mode === "binary"
+          ? `s(w.readBinaryCandidate(lab, "f.txt", c))`
+          : `s(w.readBinaryCandidate(lab, "f.txt", c, () => true, 16))`};
+    } finally { fs[name] = real; }
+    const after = probe();
+    let removed = true; try { fs.rmSync(lab, { recursive: true }); } catch { removed = false; }
+    process.stdout.write(JSON.stringify({ fired, result, before, after, removed }));
+  `;
+  const run = spawnSync(process.execPath, ["-r", "ts-node/register/transpile-only", "-e", script], {
+    cwd: root,
+    timeout: FIFO_CHILD_TIMEOUT_MS,
+    encoding: "utf8",
+  });
+  let got: any = null;
+  try { got = JSON.parse(run.stdout); } catch { /* reported below */ }
+  return { run, got };
+}
+
+function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
+  if (process.platform === "win32") skip("mkfifo is POSIX; no FIFO can be created on an NTFS path");
+  try {
+    execFileSync("mkfifo", ["--version"], { stdio: "ignore" });
+  } catch {
+    // GNU mkfifo answers --version; BSD mkfifo exits non-zero on it. Probe by
+    // making one instead, so the skip fires only when mkfifo truly is absent.
+    const d = mkdtempSync(path.join(tmpdir(), "secretloop-mkfifo-"));
+    try { execFileSync("mkfifo", [path.join(d, "p")], { stdio: "ignore" }); }
+    catch { skip("mkfifo is unavailable on this host; the FIFO swap case did not run"); }
+    finally { rmSync(d, { recursive: true, force: true }); }
+  }
+  const { run, got } = fifoSwapChild(mode);
+  // A TIMEOUT IS THE DEFECT. It is a failure of this case, never a skip.
+  assert.ok(
+    !run.error || (run.error as NodeJS.ErrnoException).code !== "ETIMEDOUT",
+    `${what} BLOCKED on a FIFO swapped in after its type check: child killed after ${FIFO_CHILD_TIMEOUT_MS} ms`
+  );
+  assert.strictEqual(run.signal, null, `child died on ${run.signal}; stderr: ${run.stderr}`);
+  assert.strictEqual(run.status, 0, `child failed: ${run.stderr}`);
+  assert.ok(got, `child produced no result: ${run.stdout} ${run.stderr}`);
+  assert.strictEqual(got.fired, true, "the replacement trigger did not fire: this run measured nothing");
+  assert.strictEqual(got.result, "not-a-file", `${what} must refuse the swapped-in FIFO as not-a-file`);
+  assert.strictEqual(got.after, got.before, `descriptor number drifted ${got.before} -> ${got.after}: a handle leaked on the refusal`);
+  assert.strictEqual(got.removed, true, "the child's lab directory could not be removed after the refusal");
+}
+
+test("REGRESSION: the text reader no longer blocks on a file replaced by a FIFO after its stat", () => {
+  fifoSwapCase("text", "readTextFileResult");
+});
+
+test("REGRESSION: the binary reader no longer blocks on a file replaced by a FIFO after its lstat", () => {
+  fifoSwapCase("binary", "readBinaryCandidate (bulk read)");
+});
+
+test("REGRESSION: the binary HEADER PROBE no longer blocks on a file replaced by a FIFO after its lstat", () => {
+  fifoSwapCase("header", "readBinaryCandidate (header probe)");
+});
+
+test("the content-open flags are read-only plus O_NONBLOCK exactly where the platform defines it", () => {
+  // Pins the guard rather than assuming it. Printed so a platform's actual
+  // constant is on record in its own CI log: win32 is expected to print
+  // "undefined", and there the flags are a plain read-only open -- a fallback,
+  // not protection.
+  console.log(`    O_NONBLOCK on ${process.platform}: ${String(fsConstants.O_NONBLOCK)}; READ_OPEN_FLAGS=${READ_OPEN_FLAGS}; nonblocking-open supported=${NONBLOCKING_OPEN_SUPPORTED}`);
+  assert.strictEqual(READ_OPEN_FLAGS, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  assert.strictEqual(NONBLOCKING_OPEN_SUPPORTED, fsConstants.O_NONBLOCK !== undefined);
+  if (process.platform !== "win32") {
+    assert.ok(NONBLOCKING_OPEN_SUPPORTED, "every supported POSIX platform is expected to define O_NONBLOCK");
+  }
 });
 
 // ------------------------------------------------------ the cap's own values

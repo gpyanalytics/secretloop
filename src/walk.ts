@@ -8,6 +8,7 @@ import {
   closeSync,
   realpathSync,
   existsSync,
+  constants as fsConstants,
 } from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
@@ -18,6 +19,44 @@ import { SecretLoopConfig, classifyPath, isPathExcluded } from "./config";
  * proportion to the file: at most this much is held past the cap.
  */
 const READ_CHUNK_BYTES = 64 * 1024;
+
+/**
+ * Whether this host's `fs.constants` defines `O_NONBLOCK`. On POSIX it does;
+ * on win32 it does not, and nothing here pretends otherwise.
+ */
+export const NONBLOCKING_OPEN_SUPPORTED = fsConstants.O_NONBLOCK !== undefined;
+
+/**
+ * The flags for EVERY content open in this module.
+ *
+ * WHY. Both readers classify a path before opening it -- `statSync` in the
+ * text reader, the non-dereferencing `lstatSync` in the binary reader -- so a
+ * FIFO that is already there is refused without any open. But the check and
+ * the open are two resolutions of the same name, and a regular file replaced
+ * by a FIFO between them reached `openSync(full, "r")`, which on a FIFO with
+ * no writer BLOCKS INDEFINITELY. Measured (f1-containment-design, E2): the
+ * scanner hung until its process was killed, on darwin and Linux alike.
+ *
+ * WHAT THIS DOES. `O_NONBLOCK` makes the open of a FIFO (or a device) return
+ * at once instead of waiting for a writer; `fstat` on the descriptor then says
+ * what was opened, and a non-file is refused before a byte is read. For a
+ * regular file the flag changes nothing: reads are unaffected and the cap and
+ * classification below run exactly as before (measured, same record, E3).
+ *
+ * WHAT THIS DOES NOT DO. It is the narrow answer to the demonstrated FIFO
+ * block. It is not a containment check -- the open still resolves the name and
+ * follows symlinks, and F-1 Concern A remains OPEN -- and it does not make
+ * every filesystem operation non-blocking or the scanner immune to a hostile
+ * tree. The pre-open type checks stay, because they refuse a static FIFO
+ * cheaply and, in the binary reader, refuse a final-component symlink without
+ * dereferencing it.
+ *
+ * WIN32. `fs.constants.O_NONBLOCK` is undefined there, so the flag falls back
+ * to a plain read-only open: no FIFO can exist on an NTFS path, and the
+ * behaviour on Windows is exactly what it was before this constant existed.
+ * That fallback is stated, not described as protection.
+ */
+export const READ_OPEN_FLAGS: number = fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0);
 
 /**
  * Enumerates candidate files. Prefers `git ls-files` when available so
@@ -255,13 +294,18 @@ function readBoundedFile(
 ): { bytes: Buffer } | { skipped: SkipReason } {
   let fd: number;
   try {
-    fd = openSync(full, "r");
+    // Non-blocking where the platform has the flag (see READ_OPEN_FLAGS): a
+    // FIFO swapped in since the caller's type check no longer holds the open.
+    fd = openSync(full, READ_OPEN_FLAGS);
   } catch {
     // Matches the previous classification: a name that cannot be opened is not
     // distinguishable here from one that cannot be read.
     return { skipped: "unreadable" };
   }
   try {
+    // The OPENED object is classified here, whatever the name resolved to
+    // between the caller's check and this open. A FIFO or device that got
+    // through is refused before any read, and the descriptor is closed below.
     const st = fstatSync(fd);
     if (!st.isFile()) return { skipped: "not-a-file" };
     // Optimization only. The loop below is the guard.
@@ -351,10 +395,11 @@ export function readTextFileResult(
     // walk. Opening first turned a prompt "not-a-file" into a hang; the binary
     // reader never had that problem because its lstat gate already ran first.
     //
-    // Residual, and the same class as F-1 Concern A: a regular file replaced by
-    // a FIFO between this stat and the open would still block. Closing that
-    // needs a non-blocking open, which is a platform-specific change and is not
-    // in scope here.
+    // A regular file replaced by a FIFO between this stat and the open used to
+    // block the open indefinitely; the open is now non-blocking where the
+    // platform supports it (READ_OPEN_FLAGS) and the opened object is
+    // classified again from its descriptor. Containment between this check and
+    // the open -- F-1 Concern A -- is a separate question and remains OPEN.
     const stat = statSync(full);
     if (!stat.isFile()) return { skipped: "not-a-file" };
 
@@ -454,8 +499,14 @@ export function readBinaryCandidate(
     if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
     if (headerAccepts) {
       const head = Buffer.alloc(Math.min(headerBytes, stat.size));
-      const fd = openSync(full, "r");
+      // The same non-blocking open as the bulk read, for the same reason: this
+      // probe is a second resolution of the name after the lstat gate, and a
+      // FIFO swapped in between them blocked here too (measured). The opened
+      // object is classified before its head is read; the descriptor is closed
+      // on every path.
+      const fd = openSync(full, READ_OPEN_FLAGS);
       try {
+        if (!fstatSync(fd).isFile()) return { skipped: "not-a-file" };
         readSync(fd, head, 0, head.length, 0);
       } finally {
         closeSync(fd);

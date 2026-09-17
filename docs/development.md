@@ -264,6 +264,20 @@ names an earlier release:
   Unreleased changelog entry and
   `secretloop-benchmark/f1-bounded-file-reads/`.
 
+  **The stat-to-open FIFO window — CORRECTED (Unreleased), on validated
+  platforms.** A regular file replaced by a FIFO between a reader's type check
+  and its open blocked the open indefinitely (measured in
+  `secretloop-benchmark/f1-containment-design/`, E2, darwin and Linux). Every
+  content open now uses `O_NONBLOCK` where `fs.constants` defines it and the
+  opened descriptor is classified with `fstat` before any read; the swap is
+  refused as `not-a-file` in milliseconds on darwin and Linux. On win32 the
+  constant is undefined, the open is a plain read-only open, and behaviour is
+  what it was; no FIFO can exist on an NTFS path and no Windows FIFO
+  protection is claimed. Narrow claim: the demonstrated FIFO-open block is
+  avoided on validated platforms. Not claimed: that filesystem operations are
+  non-blocking in general, or that the scanner is immune to a hostile tree.
+  Record: `secretloop-benchmark/f1-fifo-nonblocking-open/`.
+
   **Concern A — OPEN.** A path approved by `isInsideRoot` can resolve outside
   the root by the time the read opens it, at the final component *or through a
   replaced parent directory*. **One descriptor does not close this**: `openSync`

@@ -120,6 +120,12 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   `record.id` is read by no caller, so nothing was reachable through it. Five
   behavioural tests in `tests/verify-consent.test.ts` pin the invariant; two
   failed before the change.
+- **F-1 FIFO open window** — **corrected in the Unreleased candidate**
+  (slice 1 of `f1-containment-design`). Non-blocking content opens plus
+  post-open classification; validated on darwin and Linux, a plain read-only
+  fallback on win32 stated as such. Concern A (containment between the
+  check and the open) is slice 2 and remains open; its Windows evidence
+  (probes W1–W4 in the design record) is still NOT RUN.
 - **Native Windows validation** — **CI jobs added (PR #84, draft).** The
   suite and both packaging smokes run on `windows-latest` for Node 18, 20 and
   22 beside the Linux jobs, not as required checks. At head `54787ebb`: 1,560
