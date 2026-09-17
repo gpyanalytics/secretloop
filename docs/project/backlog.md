@@ -126,6 +126,11 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   fallback on win32 stated as such. Concern A (containment between the
   check and the open) is slice 2 and remains open; its Windows evidence
   (probes W1–W4 in the design record) is still NOT RUN.
+- **Comparator FIFO input** — **corrected in the Unreleased candidate.**
+  `secretloop compare` given a report path that is a named pipe waited for a
+  writer indefinitely; the report-file open is now non-blocking where the
+  platform defines the flag and the existing not-a-regular-file refusal
+  applies. darwin and Linux validated; win32 unchanged (flag undefined).
 - **Native Windows validation** — **CI jobs added (PR #84, draft).** The
   suite and both packaging smokes run on `windows-latest` for Node 18, 20 and
   22 beside the Linux jobs, not as required checks. At head `54787ebb`: 1,560

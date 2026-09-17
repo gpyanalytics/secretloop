@@ -278,6 +278,11 @@ names an earlier release:
   avoided on validated platforms. Not claimed: that filesystem operations are
   non-blocking in general, or that the scanner is immune to a hostile tree.
   Record: `secretloop-benchmark/f1-fifo-nonblocking-open/`.
+  The comparator's report-file reader (`src/compare.ts`) received the same
+  narrow correction separately: a report path that is a FIFO no longer blocks
+  `secretloop compare` on darwin and Linux (exit 2, "not a regular file");
+  on win32 the flag is undefined and the open is unchanged. Record:
+  `secretloop-benchmark/compare-fifo-nonblocking-open/`.
 
   **Concern A — OPEN.** A path approved by `isInsideRoot` can resolve outside
   the root by the time the read opens it, at the final component *or through a
