@@ -84,6 +84,13 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      # TEMPORARY DIAGNOSTIC: what line endings the checkout gave the manifest.
+      - name: Manifest line endings (diagnostic only)
+        shell: bash
+        run: |
+          git config --show-origin --get core.autocrlf || echo "core.autocrlf unset"
+          git ls-files --eol scripts/vsix-manifest.txt
+          od -c scripts/vsix-manifest.txt | head -3
       - name: Smoke the npm tarball
         shell: bash
         run: npm run smoke:tarball

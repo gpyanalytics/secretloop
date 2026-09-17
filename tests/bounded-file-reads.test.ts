@@ -125,10 +125,35 @@ test("REGRESSION: bytes come from the opened descriptor, not the path", () => {
     const other = path.join(d, "other.txt");
     writeFileSync(f, "ORIGINAL");
     writeFileSync(other, "REPLACEMENT");
+    // The replacement is the FIXTURE, not the subject. The reader swallows a
+    // throw from the seam as `unreadable`, which on the first native Windows
+    // run read as "actual: undefined" with no way to tell a reader defect from
+    // a platform refusing to replace a name under an open descriptor. So the
+    // fixture records its own failure, by call and code, and reports it.
+    let refused: { call: string; code: string } | null = null;
     const r = readTextFileResult(d, "orig.txt", cfg(CAP), () => {
-      unlinkSync(f);
-      symlinkSync(other, f);
+      try {
+        unlinkSync(f);
+      } catch (e) {
+        refused = { call: "unlink", code: String((e as NodeJS.ErrnoException).code) };
+        throw e;
+      }
+      try {
+        symlinkSync(other, f);
+      } catch (e) {
+        refused = { call: "symlink", code: String((e as NodeJS.ErrnoException).code) };
+        throw e;
+      }
     });
+    if (refused !== null && process.platform === "win32") {
+      // Windows would not replace the name while the descriptor was open.
+      // That is a platform property, recorded with the exact call and code;
+      // it is not evidence about the reader either way, so the case is
+      // skipped, not passed.
+      const { call, code } = refused as { call: string; code: string };
+      skip(`win32 refused to replace an open file's name at ${call} (${code}); the property cannot be exercised here`);
+    }
+    assert.strictEqual(refused, null, `the fixture failed at ${JSON.stringify(refused)}`);
     assert.strictEqual((r as { text: string }).text, "ORIGINAL");
   });
 });

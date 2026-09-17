@@ -23,11 +23,19 @@ function runFixture(body: string): Run {
     `import { test, suite, finish, assert, skip } from "../harness";\n${body}\nfinish();\n`,
     "utf8"
   );
-  const res = spawnSync("npx", ["ts-node", "--transpile-only", file], {
-    cwd: path.join(__dirname, ".."),
-    encoding: "utf8",
-    timeout: 60_000,
-  });
+  // ts-node is started through this node binary, not through `npx`. On win32
+  // `npx` is `npx.cmd`, which a shell-less spawnSync cannot start: measured on
+  // windows-latest as ENOENT for every fixture, so all seven contract cases
+  // failed on a harness fault rather than a harness finding.
+  const res = spawnSync(
+    process.execPath,
+    [require.resolve("ts-node/dist/bin.js"), "--transpile-only", file],
+    {
+      cwd: path.join(__dirname, ".."),
+      encoding: "utf8",
+      timeout: 60_000,
+    }
+  );
   return { status: res.status, output: `${res.stdout ?? ""}${res.stderr ?? ""}` };
 }
 
