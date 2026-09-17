@@ -147,13 +147,21 @@ The **Details** tab of an installed SecretLoop can show a README whose
 version line says an earlier release — for example *This README describes
 SecretLoop 0.5.1* while **Installed** says 0.6.0.
 
-That text is not in the package you installed. Measured on 2026-09-17: the
-0.6.0 VSIX served by the Marketplace and by Open VSX is byte-identical to the
-release artifact (`sha256 bc5e21d5…`), its packaged `readme.md` says *0.6.0*,
-and so does the README in the installed `gpyanalytics.secretloop-0.6.0`
-folder. The *0.5.1* line is that older version's README, which VS Code can
-still render from the previous install after an in-place update. The older
-extension folders stay on disk, marked obsolete, until VS Code removes them.
+Three things can differ here, and only the third did. Measured on
+2026-09-17:
+
+- **What is published.** The 0.6.0 VSIX served by the Marketplace and by Open
+  VSX is byte-identical to the release artifact (`sha256 bc5e21d5…`), and its
+  packaged `readme.md` says *0.6.0*.
+- **What is installed.** The README in the installed
+  `gpyanalytics.secretloop-0.6.0` folder is that same file, and says *0.6.0*.
+- **What the Details view displayed.** The *0.5.1* line is the README of the
+  previously installed 0.5.1, whose folder stays on disk, marked obsolete,
+  until VS Code removes it.
+
+So the stale sentence is not shipped documentation. Which cached or leftover
+copy the Details view rendered was not reproduced and is not claimed; what is
+established is that it is not the README of the package you installed.
 
 Reload the window (**Developer: Reload Window**) or restart VS Code, then open
 the Details tab again. To check what is actually installed, open
