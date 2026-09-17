@@ -348,14 +348,19 @@ test("a FIFO is refused promptly by both readers, without blocking on open", () 
  */
 const FIFO_CHILD_TIMEOUT_MS = 10000;
 
-function fifoSwapChild(mode: "text" | "binary" | "header"): { run: ReturnType<typeof spawnSync>; got: any } {
+function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: ReturnType<typeof spawnSync>; got: any } {
   const root = path.join(__dirname, "..");
+  // The lab directory is created by the PARENT and handed in, so that a child
+  // killed on the timeout -- the defect this case exists to catch -- cannot
+  // leave a directory holding a FIFO behind in the temporary directory. The
+  // child still removes it itself on the way out (the Windows-shaped leak
+  // detector below); the parent's own removal is the backstop.
   const script = `
     const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
     const w = require(${JSON.stringify(path.join(root, "src", "walk"))});
     const { defaultConfig } = require(${JSON.stringify(path.join(root, "src", "config"))});
     const c = Object.assign({}, defaultConfig, { maxFileSizeBytes: 1000000 });
-    const lab = fs.mkdtempSync(path.join(os.tmpdir(), "secretloop-fifoswap-"));
+    const lab = ${JSON.stringify(lab)};
     const p = path.join(lab, "f.txt");
     fs.writeFileSync(p, "REGULAR");
     const probe = () => { const fd = fs.openSync(lab, "r"); fs.closeSync(fd); return fd; }; // the lab directory: present before and after, never the swapped path
@@ -403,7 +408,17 @@ function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
     catch { skip("mkfifo is unavailable on this host; the FIFO swap case did not run"); }
     finally { rmSync(d, { recursive: true, force: true }); }
   }
-  const { run, got } = fifoSwapChild(mode);
+  const lab = mkdtempSync(path.join(tmpdir(), "secretloop-fifoswap-"));
+  let run: ReturnType<typeof spawnSync>;
+  let got: any;
+  try {
+    ({ run, got } = fifoSwapChild(mode, lab));
+  } finally {
+    // Backstop for a child that was killed: spawnSync's timeout terminates it,
+    // and this removes whatever it left. On the corrected source the child has
+    // already removed the directory and this is a no-op.
+    rmSync(lab, { recursive: true, force: true });
+  }
   // A TIMEOUT IS THE DEFECT. It is a failure of this case, never a skip.
   assert.ok(
     !run.error || (run.error as NodeJS.ErrnoException).code !== "ETIMEDOUT",
