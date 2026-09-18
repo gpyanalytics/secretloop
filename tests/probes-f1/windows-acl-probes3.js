@@ -15,7 +15,7 @@
  *   chain        --path P                    the ancestor-chain rule over a real path, component by component
  *   inspect      --path P [--as-store]       one object under the ancestor rule or the store rule
  *   create       --root R                    the full creation sequence (C1-C7)
- *   operate      --root R [--record ID]      the full per-operation sequence (D1-D6), no product calls
+ *   operate      --root R [--try-write]      the full per-operation sequence (D1-D6); --try-write binds it to real access
  *   legit        --out O --root R --repo D   create, then the REAL product: call 1, approve, replace, claim, call 2
  *   attack-open  --store S                   attacker: can a handle be opened here at all?
  *   attack-swap  --path P                    attacker: rename/replace an inspected component
@@ -404,7 +404,14 @@ function createMode() {
 }
 function operateMode() {
   const root = opt("--root"); const sid = currentSid();
-  log("operate.result", operateSequence(root, sid));
+  const r = operateSequence(root, sid);
+  log("operate.result", r);
+  if (has("--try-write")) {
+    // Binds the decision to real access: parsing a descriptor is not proof that the operation works.
+    let write; const t = path.join(root, "pending", "write-probe.tmp");
+    try { fs.writeFileSync(t, "{}\n"); fs.unlinkSync(t); write = "WROTE"; } catch (e) { write = "error:" + code(e); }
+    log("operate.real-write-attempt", { decision: r.reason, write });
+  }
 }
 function attackOpen() {
   const store = opt("--store"); const res = { attackerSid: currentSid() };
@@ -420,7 +427,9 @@ function attackSwap() {
   const attempt = (n, f) => { try { const r = f(); res[n] = r === undefined ? "ok" : r; } catch (e) { res[n] = "error:" + code(e); } };
   attempt("rename.component", () => { fs.renameSync(p, p + ".moved"); fs.renameSync(p + ".moved", p); return "RENAMED AND RESTORED"; });
   attempt("delete.component", () => { fs.rmdirSync(p); return "DELETED"; });
-  attempt("junction.beside", () => { const j = p + "-sub"; fs.symlinkSync(os.tmpdir(), j, "junction"); fs.rmSync(j, { recursive: true, force: true }); return "JUNCTION CREATED"; });
+  // A SIBLING of the inspected component, not a child of it: creating one does not affect the chain,
+  // and the label says so to keep the evidence unambiguous.
+  attempt("junction.sibling-not-in-chain", () => { const j = p + "-sibling"; fs.symlinkSync(os.tmpdir(), j, "junction"); fs.rmSync(j, { recursive: true, force: true }); return "CREATED (sibling; the chain is unaffected)"; });
   log("attack.swap", res);
 }
 function plant() {

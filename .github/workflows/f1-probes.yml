@@ -583,6 +583,14 @@ jobs:
           RunAs $c1 "P8b the store itself is a junction" (@("operate","--root","$LAB\priv\store6") + $T1) | Out-Null
 
           # ---- P10 tooling failures refuse and never fall through ----------------------
-          RunAs $c1 "P10 inspection helper absent" (@("toolfail","--root","$LAB\tmp1\tf1","--ps","C:\nonexistent\powershell.exe") + $T1) | Out-Null
-          RunAs $c1 "P10b enforcement tooling absent" (@("toolfail","--root","$LAB\tmp1\tf2","--icacls","C:\nonexistent\icacls.exe") + $T1) | Out-Null
+          # both tool-failure cases must sit under a TRUSTED parent, or the chain refuses first and the tooling
+          # behaviour is never reached -- that would be a non-measurement, not a pass
+          RunAs $c1 "P10 inspection helper absent" (@("toolfail","--root","$LAB\priv\tf1","--ps","C:\nonexistent\powershell.exe") + $T1) | Out-Null
+          RunAs $c1 "P10b enforcement tooling absent" (@("toolfail","--root","$LAB\priv\tf2","--icacls","C:\nonexistent\icacls.exe") + $T1) | Out-Null
+
+          # ---- P11 allowed principals but insufficient rights: the rule must match REAL access -------------
+          RunAs $c1 "fresh private store for the insufficient-rights case" (@("create","--root","$LAB\priv\store7") + $T1) | Out-Null
+          icacls "$LAB\priv\store7\pending" /inheritance:r /grant:r "*$($env:SID1):(OI)(CI)RX" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          RunAs $c1 "P11 owner holds only read+execute on pending" (@("operate","--root","$LAB\priv\store7","--try-write") + $T1) | Out-Null
+          RunAs $c1 "P11b control: the same check with full rights" (@("operate","--root","$LAB\priv\store4","--try-write") + $T1) | Out-Null
           Write-Host "all revised-sequence cases completed"
