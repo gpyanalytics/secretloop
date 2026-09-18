@@ -36,11 +36,13 @@
   never runs these readers and omits the block. `unavailable` is disclosed but
   is **not** a coverage limitation.
 - **The guarantee, stated exactly, and its limits.** On Linux with a readable
-  `/proc/self/fd`: no bytes are read from an object whose kernel-recorded
-  location, *at the check that immediately precedes its first read*, lies
-  outside the root. Every platform: no bytes are read from an object other
-  than the one inspected one syscall before the open, where that object had an
-  identity. It does **not** establish containment at the moment of the open,
+  `/proc/self/fd`, for every descriptor the block records as `kernelPath:
+  verified`: no bytes are read from an object whose kernel-recorded location,
+  *at the check that immediately precedes its first read*, lies outside the
+  root. Every platform, for every descriptor recorded `identity: verified`: no
+  bytes are read from an object other than the one inspected one syscall
+  before the open. A descriptor recorded `unavailable` for a check **is read
+  without that check**, and the block says so; neither claim extends to it. It does **not** establish containment at the moment of the open,
   throughout the read, or against every filesystem race — measured, not
   supposed: an outside object moved under the root after the open and before
   the check is accepted with its outside-origin bytes read; an inside object

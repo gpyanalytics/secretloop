@@ -269,6 +269,37 @@ test("text and SARIF: the same refusal, the same clause, the same block", () => 
   });
 });
 
+test("a refused file cannot read as a removed finding: the comparator refuses the pair on `incomplete`, computing no difference", () => {
+  // The contract end to end through the built CLI: a clean report of the tree
+  // and one in which the same file was refused as `replaced`. The finding that
+  // the substitute would have contributed is not "gone" -- the pair is
+  // ineligible, the reason names the after side's coverage, and nothing from
+  // the outside object appears in either output.
+  withLab((lab) => {
+    // A repository, so the reports carry `root` and the only reason left to
+    // refuse the pair is the coverage. Enumeration then goes through git, and
+    // the readers' lstat order is unchanged.
+    gitInit(lab.root);
+    fs.writeFileSync(path.join(lab.dir, "before.json"), cli(["scan", "--format", "json"], lab.root).stdout);
+    const refused = refusalOnProbe(lab, ["--format", "json"]).run;
+    fs.writeFileSync(path.join(lab.dir, "after.json"), refused.stdout);
+    const before = JSON.parse(fs.readFileSync(path.join(lab.dir, "before.json"), "utf8"));
+    const after = JSON.parse(refused.stdout);
+    assert.strictEqual(before.incomplete, false);
+    assert.strictEqual(after.incomplete, true);
+    for (const field of ["toolVersion", "root", "configDigest", "ruleSetDigest", "scopeDigest", "binaryDigest"]) {
+      assert.strictEqual(before[field], after[field], `${field} must not move on a refusal; it is the coverage that changed`);
+    }
+    const r = spawnSync("node", [CLI, "compare", path.join(lab.dir, "before.json"), path.join(lab.dir, "after.json"), "--format", "json"], { encoding: "utf8", timeout: 30000 });
+    assert.strictEqual(r.status, 3, `an ineligible pair exits 3: ${r.stderr}`);
+    const c = JSON.parse(r.stdout);
+    assert.strictEqual(c.comparable, false);
+    assert.deepStrictEqual(c.reasons.map((x: { code: string; side: string; field?: string }) => [x.code, x.side, x.field]), [["incomplete-coverage", "after", "incomplete"]]);
+    assert.ok(!("noLongerObserved" in c) && !("new" in c), "no difference keys at all beside an incomparable verdict");
+    assert.ok(!(r.stdout + r.stderr).includes(lab.cred) && !(r.stdout + r.stderr).includes(OUTSIDE_MARKER));
+  });
+});
+
 test("separate opens are checked separately: probes that verified do not vouch for the text reader's own descriptor", () => {
   // The swap lands after the THIRD lstat of the target: the text reader's
   // identity capture. The two probes before it verified their own descriptors

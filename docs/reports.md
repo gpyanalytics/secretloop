@@ -293,9 +293,20 @@ open, or a run that was stopped. **Unreleased:** also a file whose opened
 descriptor was not the object just inspected (`replaced`), or whose
 kernel-recorded location was outside the root at the check before its first
 read (`outside`), or whose check evidence could not be obtained (`unreadable`).
-These add causes without changing what the boolean means, in the conservative
-direction — a report that would once have read a substituted object and said
-`incomplete: false` now says `true` — so `REPORT_SCHEMA_VERSION` stays 4. A
+These add causes without changing what the boolean means — "the scan could not
+cover what it set out to" — in the conservative direction: a report that would
+once have read a substituted object and said `incomplete: false` now says
+`true`. The rule above names "changing what `incomplete` counts" as a bump
+trigger; it was applied at 2 → 3, where a *class* of input stopped counting and
+a version-2 `true` could mean a version-3 `false` for the same tree. Here no
+class stops counting and no version-4 `false` becomes a `true` for an unchanged
+tree: two reports of a stable tree from either side of this change carry equal
+identities and equal `incomplete`, and only under a substitution does the newer
+report say `true`, which is the refusal a comparison should get. On that reading
+`REPORT_SCHEMA_VERSION` stays 4. It is a reading of the rule, recorded here so a
+maintainer who reads the rule literally can bump instead; a bump would make every
+existing report ineligible against new ones, which is the documented cost of a
+bump and not a safety gain here. A
 check that was **unavailable** on the platform is disclosed in
 `summary.coverage.openedFileChecks` and does **not** make the report incomplete.
 

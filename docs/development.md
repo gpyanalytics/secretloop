@@ -299,11 +299,12 @@ names an earlier release:
   whatever that open resolved to. Every descriptor's outcome is disclosed
   (`openedFileChecks`, see [coverage](coverage.md#opened-file-checks)).
 
-  **What that establishes, and what it does not.** Linux with procfs: no bytes
-  are read from an object whose kernel-recorded location, *at the check that
-  immediately precedes its first read*, is outside the root. Everywhere: no
-  bytes from an object other than the one inspected one syscall before the
-  open. Measured and recorded (`f1-containment-design-review` and its timing
+  **What that establishes, and what it does not.** Per descriptor, as the
+  block records it: `kernelPath: verified` means no bytes were read before the
+  kernel-recorded location, *at the check that immediately precedes the first
+  read*, was found inside the root; `identity: verified` means every byte came
+  from the object inspected one syscall before the open; `unavailable` means
+  the descriptor was read without that check, and is disclosed as such. Measured and recorded (`f1-containment-design-review` and its timing
   addendum), the limits are: an outside object moved under the root after the
   open and before the check is accepted and read (MI1/MI2); an inside object
   moved out after the check is still read (MO1); the identity check alone

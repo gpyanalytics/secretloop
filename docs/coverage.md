@@ -159,11 +159,15 @@ all — an absence, in the sense the report format gives it.
 limitation. `unavailable` is disclosed and is **not** a limitation: the read
 happened under the checks that were possible, and the block says which.
 
-**What the checks establish, exactly.** On Linux with procfs: no bytes are read
-from an object whose kernel-recorded location, at the check that immediately
-precedes its first read, lies outside the root. Everywhere: no bytes are read
-from an object other than the one inspected one syscall before the open, where
-that object had an identity. **What they do not establish:** containment at
+**What the checks establish, exactly — per descriptor, as recorded.** For a
+descriptor recorded `kernelPath: verified`: no bytes were read from it before its
+kernel-recorded location, at the check that immediately precedes its first read,
+was found inside the root. For a descriptor recorded `identity: verified`: every
+byte read came from the object inspected one syscall before the open. A
+descriptor recorded `unavailable` for a check **was read without that check** —
+on darwin and Windows that is every descriptor for the kernel path, and on a
+volume that reports no inode it is every descriptor for identity — and the block
+is where that is said; nothing is claimed for it. **What they do not establish:** containment at
 the moment of the open (an outside object moved under the root after the open
 and before the check is accepted, and its bytes are read), containment
 throughout the read (an inside object moved out after the check is still read),

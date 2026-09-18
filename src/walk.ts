@@ -469,11 +469,15 @@ interface ObjectIdentity {
  *   9  the reads -- the optional header probe and then the bulk read -- from
  *      THIS descriptor, positionally, with the cap enforced in the loop.
  *
- * WHAT THIS ESTABLISHES, EXACTLY. On Linux with procfs: no bytes are read from
- * an object whose kernel-recorded location, AT THE INSTANT OF THE CHECK THAT
- * IMMEDIATELY PRECEDES THE FIRST READ, lies outside the root. On every
- * platform: no bytes are read from an object other than the one inspected
- * one syscall before the open, where that object had an identity.
+ * WHAT THIS ESTABLISHES, EXACTLY -- PER DESCRIPTOR, AS RECORDED. For a
+ * descriptor the record says `kernelPath: verified`: its kernel-recorded
+ * location, AT THE INSTANT OF THE CHECK THAT IMMEDIATELY PRECEDES THE FIRST
+ * READ, lay inside the root, and no byte was read before that check. For a
+ * descriptor the record says `identity: verified`: every byte read came from
+ * the object inspected one syscall before the open. Neither claim extends to
+ * a descriptor recorded `unavailable`: such a descriptor IS READ, under the
+ * remaining checks only, and the accounting says so; nothing is inferred for
+ * it. A descriptor recorded `refused` or `failed` yields no byte at all.
  *
  * WHAT IT DOES NOT ESTABLISH, stated so nothing above is read as more:
  *   - location AT THE OPEN. An outside object opened through a replaced parent
