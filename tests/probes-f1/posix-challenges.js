@@ -91,6 +91,16 @@ console.log(`POSIX CHALLENGES platform=${process.platform} ${os.release()} ${pro
 { const L = lab(false); run("R3 ", "root dir RENAMED (moved) after open", L, () => [trig("fstatSync", 1, () => fs.renameSync(L.root, L.root + ".moved"))], "kp-only"); }
 // Component boundary: sibling directory whose name has the root as a string prefix
 { const L = lab(true); const sib = L.root + "2"; fs.mkdirSync(sib); fs.writeFileSync(path.join(sib, "t.txt"), MARK); run("B1 ", "parent swapped to symlink -> SIBLING dir named <root>2 (prefix trap)", L, () => [trig("realpathSync", 2, () => { fs.rmSync(path.join(L.root, "sub"), { recursive: true, force: true }); fs.symlinkSync(sib, path.join(L.root, "sub")); })], true); }
+// TIMING GAP: the opened object is OUTSIDE at open, then MOVED UNDER THE ROOT before the check runs.
+// Set-up: parent swapped to an outside symlink between realpath #2 and lstat (so the captured identity is
+// the outside object's), the open follows it; then, after the open, the symlink is removed, the directory
+// is recreated and the OUTSIDE FILE ITSELF is renamed to <root>/sub/t.txt. The descriptor already refers
+// to that object; the kernel path then reports its NEW location.
+const moveIn = (L) => { fs.unlinkSync(path.join(L.root, "sub")); fs.mkdirSync(path.join(L.root, "sub")); fs.renameSync(path.join(L.out, "t.txt"), L.v); };
+{ const L = lab(true); run("MI1", "parent swap before capture; opened object MOVED IN after open, before fstat", L, () => [trig("realpathSync", 2, () => swapParent(L)), trig("openSync", 1, () => moveIn(L))], "?"); }
+{ const L = lab(true); run("MI2", "parent swap before capture; opened object MOVED IN after fstat, before kernel-path check", L, () => [trig("realpathSync", 2, () => swapParent(L)), trig("fstatSync", 1, () => moveIn(L))], "?"); }
+// MOVE-OUT AFTER THE CHECK: an inside object passes the kernel-path check, then its parent is moved out before the read.
+{ const L = lab(true); run("MO1", "inside file passes checks; parent MOVED OUT after the kernel-path check, before read", L, () => [trig(process.platform === "linux" && KP ? "readlinkSync" : "fstatSync", 1, () => fs.renameSync(path.join(L.root, "sub"), path.join(L.out, "moved")))], "?"); }
 // /proc behaviour probes (linux only; informational)
 if (process.platform === "linux") {
   const L = lab(false); const fd = fs.openSync(L.v, "r"); const kp1 = fs.readlinkSync("/proc/self/fd/" + fd); fs.unlinkSync(L.v); const kp2 = fs.readlinkSync("/proc/self/fd/" + fd); fs.closeSync(fd);
