@@ -290,3 +290,150 @@ jobs:
           RunHere "C.other-user.administrator" @("other-user","--store","$LAB\permissive\full\proto-store","--target",$C) | Out-Null
           RunAs $c1 "C.inspect-after-admin" (@("inspect","--path",$C) + $T1) | Out-Null
           "--- final ACLs"; icacls "$LAB\permissive\full\proto-store"; icacls "$LAB\permissive\full\proto-store\pending"; icacls $C
+
+  # ---------------------------------------------------------------------------
+  # WINDOWS ACL ADDENDUM (evidence-only, never merge). Closes the gaps the first
+  # prototype left: the creation window, handles retained ACROSS the protection,
+  # object OWNERSHIP versus process identity, and DACL semantics (NULL, empty,
+  # insufficient rights, inherit-only). The window is not raced: it is HELD OPEN
+  # by decomposing the sequence into steps, so every measurement is deterministic.
+  # No continue-on-error anywhere: a probe that cannot run fails the job and is
+  # reported as a non-measurement, never as a security pass.
+  # ---------------------------------------------------------------------------
+  acl-addendum-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the product (tsc), no bundle
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compile
+      - name: Provision two ordinary users and the addendum lab
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe groups:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2 groups:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          "owner(victim) SID $sid1 / attacker SID $sid2"
+          $LAB = "$env:RUNNER_TEMP\acl2"
+          New-Item -ItemType Directory -Force $LAB, "$LAB\tmp1", "$LAB\tmp2", "$LAB\permissive" | Out-Null
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          icacls "$LAB\tmp1" /grant "*${sid1}:(OI)(CI)F" /q | Out-Null
+          icacls "$LAB\tmp2" /grant "*${sid2}:(OI)(CI)F" /q | Out-Null
+          # The precondition the policy is meant to catch: a parent that grants BOTH accounts.
+          icacls "$LAB\permissive" /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("$PWD\out", "$PWD\node_modules")) { icacls $d /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null }
+          Copy-Item tests\probes-f1\windows-acl-probes2.js "$LAB\p2.js"
+          "--- lab ACLs"; icacls $LAB; icacls "$LAB\permissive"
+          $pw1 | Out-File -NoNewline "$env:RUNNER_TEMP\a2pw1.txt"; $pw2 | Out-File -NoNewline "$env:RUNNER_TEMP\a2pw2.txt"
+          "LAB2=$LAB" >> $env:GITHUB_ENV; "SID1=$sid1" >> $env:GITHUB_ENV; "SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Environment, decision table, save shape and DACL semantics
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:LAB2; $probe = "$LAB\p2.js"; $nodeExe = (Get-Command node).Source
+          $c1 = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\a2pw1.txt") -AsPlainText -Force))
+          $script:n = 0
+          function RunAs($cred, $tag, $argList) {
+            $script:n++; $o = "$env:RUNNER_TEMP\a2-$($script:n).out"; $e = "$env:RUNNER_TEMP\a2-$($script:n).err"
+            $p = Start-Process -FilePath $nodeExe -ArgumentList (@($probe) + $argList) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            Write-Host "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"
+            $out = @(Get-Content $o); $out | ForEach-Object { Write-Host $_ }
+            if (Test-Path $e) { Get-Content $e | ForEach-Object { Write-Host "stderr: $_" } }
+            if ($p.ExitCode -ne 0) { throw "probe [$tag] exited $($p.ExitCode)" }
+            return $out
+          }
+          RunAs $c1 "facts (ordinary owner)" (@("facts","--root",$LAB,"--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c1 "decision table (offline)" (@("parser")) | Out-Null
+          RunAs $c1 "what icacls /save exposes" (@("save-shape","--path","$LAB\permissive","--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c1 "DACL semantics: rights, inherit-only, empty DACL, tooling errors" (@("rights","--root","$LAB\tmp1\rights","--tmp","$LAB\tmp1")) | Out-Null
+      - name: Identity — process user versus object owner
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:LAB2; $probe = "$LAB\p2.js"; $nodeExe = (Get-Command node).Source
+          $c1 = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\a2pw1.txt") -AsPlainText -Force))
+          $c2 = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\a2pw2.txt") -AsPlainText -Force))
+          $script:n = 100
+          function RunAs($cred, $tag, $argList) {
+            $script:n++; $o = "$env:RUNNER_TEMP\a2-$($script:n).out"; $e = "$env:RUNNER_TEMP\a2-$($script:n).err"
+            $p = Start-Process -FilePath $nodeExe -ArgumentList (@($probe) + $argList) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            Write-Host "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"
+            $out = @(Get-Content $o); $out | ForEach-Object { Write-Host $_ }
+            if (Test-Path $e) { Get-Content $e | ForEach-Object { Write-Host "stderr: $_" } }
+            if ($p.ExitCode -ne 0) { throw "probe [$tag] exited $($p.ExitCode)" }
+            return $out
+          }
+          # A directory the victim owns, for comparison
+          New-Item -ItemType Directory -Force "$LAB\tmp1\own" | Out-Null
+          RunAs $c1 "owner-of a directory the victim owns" (@("owner-of","--path","$LAB\tmp1\own","--tmp","$LAB\tmp1")) | Out-Null
+          # THE CASE: an object the ATTACKER owns whose DACL names only the principals the policy allows
+          $oc = RunAs $c2 "attacker builds an object it owns with a policy-clean DACL" (@("own-clean","--dir","$LAB\tmp2","--owner-sid",$env:SID1,"--tmp","$LAB\tmp2"))
+          $P = (($oc | Select-String -Pattern '^ATTACKER-OWNED-PATH: ').Line -replace '^ATTACKER-OWNED-PATH: ','')
+          if (-not $P) { throw "the attacker-owned object was not constructed -- NON-MEASUREMENT" }
+          icacls "$LAB\tmp2" /grant "*$($env:SID1):(OI)(CI)RX" /q | Out-Null
+          RunAs $c1 "victim runs the policy decision on the attacker-owned object" (@("inspect","--path",$P,"--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c1 "victim tries to read the owner of that object" (@("owner-of","--path",$P,"--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c2 "attacker re-grants itself through implicit WRITE_DAC and rewrites the record" (@("own-regain","--path",$P,"--tmp","$LAB\tmp2")) | Out-Null
+          RunAs $c1 "victim re-runs the policy decision afterwards" (@("inspect","--path",$P,"--tmp","$LAB\tmp1")) | Out-Null
+      - name: Creation window — plant, retain handles across the protection, then ask the product
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:LAB2; $probe = "$LAB\p2.js"; $OUT = "$PWD\out"; $nodeExe = (Get-Command node).Source
+          $STORE = "$LAB\permissive\win-store"; $REPO = "$LAB\permissive\repo"
+          $c1 = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\a2pw1.txt") -AsPlainText -Force))
+          $c2 = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\a2pw2.txt") -AsPlainText -Force))
+          $script:n = 200
+          function RunAs($cred, $tag, $argList) {
+            $script:n++; $o = "$env:RUNNER_TEMP\a2-$($script:n).out"; $e = "$env:RUNNER_TEMP\a2-$($script:n).err"
+            $p = Start-Process -FilePath $nodeExe -ArgumentList (@($probe) + $argList) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            Write-Host "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"
+            $out = @(Get-Content $o); $out | ForEach-Object { Write-Host $_ }
+            if (Test-Path $e) { Get-Content $e | ForEach-Object { Write-Host "stderr: $_" } }
+            if ($p.ExitCode -ne 0) { throw "probe [$tag] exited $($p.ExitCode)" }
+            return $out
+          }
+          $line = { param($o,$k) (($o | Select-String -Pattern "^$k`: ").Line -replace "^$k`: ","") }
+          # 0. the synthetic repository, and the record id the product will look for
+          RunAs $c1 "synthetic repository" (@("make-repo","--repo",$REPO)) | Out-Null
+          $idOut = RunAs $c1 "the id the product will look for (no consent record touched)" (@("record-id","--out",$OUT,"--repo",$REPO))
+          $ID = & $line $idOut "RECORD-ID"; $FP = & $line $idOut "FINGERPRINT"; $ROOT = & $line $idOut "ROOT"; $FILE = & $line $idOut "FILE"
+          if (-not $ID) { throw "could not compute the record id -- NON-MEASUREMENT" }
+          Write-Host "record id in play: $ID"
+          # 1. the owner opens the creation window: the directory exists, its private DACL is not applied yet
+          RunAs $c1 "creation window OPEN (mkdir only)" (@("create-open","--root",$STORE,"--tmp","$LAB\tmp1")) | Out-Null
+          # 2. the attacker acts inside the window
+          RunAs $c2 "attacker plants inside the window" (@("plant","--store",$STORE,"--id",$ID,"--fingerprint",$FP,"--root-canonical",$ROOT,"--file",$FILE,"--approved","--out",$OUT,"--repo",$REPO,"--tmp","$LAB\tmp2")) | Out-Null
+          # 3. the attacker opens handles and RETAINS them across the protection (background, bounded)
+          $ready = "$LAB\tmp2\ready.txt"; $go = "$LAB\tmp2\go.txt"
+          Remove-Item -Force $ready, $go -ErrorAction SilentlyContinue
+          $ho = "$env:RUNNER_TEMP\a2-hold.out"; $he = "$env:RUNNER_TEMP\a2-hold.err"
+          $hold = Start-Process -FilePath $nodeExe -ArgumentList @($probe,"hold","--file","$STORE\pending\$ID.json","--dir","$STORE\pending","--ready",$ready,"--go",$go,"--wait","240","--tmp","$LAB\tmp2") -Credential $c2 -WorkingDirectory $LAB -RedirectStandardOutput $ho -RedirectStandardError $he -PassThru -NoNewWindow
+          $deadline = (Get-Date).AddSeconds(120)
+          while (-not (Test-Path $ready) -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 500 }
+          if (-not (Test-Path $ready)) { Get-Content $ho, $he -ErrorAction SilentlyContinue; throw "the attacker never retained a handle inside the window -- NON-MEASUREMENT, not a security pass" }
+          Write-Host "attacker reports handles retained; closing the window now"
+          # 4. the owner closes the window: apply the protected DACL, then inspect what was planted
+          RunAs $c1 "creation window CLOSE (protect) and inspect the planted children" (@("create-close","--root",$STORE,"--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c1 "who OWNS the planted record after protection" (@("owner-of","--path","$STORE\pending\$ID.json","--tmp","$LAB\tmp1")) | Out-Null
+          # 5. release the retained-handle process and read what it could still do
+          New-Item -ItemType File $go -Force | Out-Null
+          $hold | Wait-Process -Timeout 180
+          Write-Host "=== [retained handles across the protection] as slprobe2: exit $($hold.ExitCode)"
+          Get-Content $ho | ForEach-Object { Write-Host $_ }
+          if (Test-Path $he) { Get-Content $he | ForEach-Object { Write-Host "stderr: $_" } }
+          if ($hold.ExitCode -ne 0) { throw "the retained-handle probe exited $($hold.ExitCode) -- NON-MEASUREMENT" }
+          # 6. the decisive question: does the merged product trust the pre-planted approval?
+          RunAs $c1 "does the product trust the pre-planted approval" (@("trust","--out",$OUT,"--root",$STORE,"--repo",$REPO,"--tmp","$LAB\tmp1")) | Out-Null
+          "--- final ACLs of the window store"; icacls $STORE; icacls "$STORE\pending"; icacls "$STORE\pending\$ID.json"
