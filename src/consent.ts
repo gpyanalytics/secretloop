@@ -486,7 +486,7 @@ export function writeRecord(record: ConsentRecord): void {
   // Replacing a record that fails the checks would quietly repair unsafe state. Refuse instead,
   // so the user is told. On POSIX this scope carries no record checks and the call is a no-op
   // beyond the directory rules already applied by ensureDir.
-  if (existsSync(target)) assertStoreScope({ includePending: true, records: [target] });
+  assertStoreScope({ includePending: true, records: [target] });
   // Written to a temp name and renamed, so a reader never sees a half-written
   // record — and created with the mode rather than chmod'ed afterwards, which
   // would leave a window where it is world-readable.
@@ -548,10 +548,10 @@ export function readRecord(id: string): ConsentRecord | null {
   const pendingAbsent = absent(pendingDir());
   const file = recordPath(id);
   // The store is checked even when the pending directory is gone: absence never means safe.
-  assertStoreScope({
-    includePending: !pendingAbsent,
-    records: !pendingAbsent && existsSync(file) ? [file] : [],
-  });
+  // The record is named unconditionally. Deciding whether to check it by whether it exists a
+  // moment earlier would leave a record that appeared in between unchecked; an absent target is
+  // simply skipped by the check itself, so naming it always costs nothing and closes that gap.
+  assertStoreScope({ includePending: !pendingAbsent, records: pendingAbsent ? [] : [file] });
   if (pendingAbsent) return null;
   if (!existsSync(file)) return null;
   const parsed = parseRecord(file);
@@ -609,7 +609,7 @@ function isSymlink(p: string): boolean {
 
 export function deleteRecord(id: string): void {
   const target = recordPath(id);
-  assertStoreScope({ includePending: true, records: existsSync(target) ? [target] : [] });
+  assertStoreScope({ includePending: true, records: [target] });
   rmSync(target, { force: true });
 }
 
@@ -635,7 +635,7 @@ export function consumeRecord(id: string): boolean {
   const from = recordPath(id);
   // The claim happens before the credential is transmitted, so the record it claims is checked
   // here too, not only the directories around it.
-  assertStoreScope({ includePending: true, records: existsSync(from) ? [from] : [] });
+  assertStoreScope({ includePending: true, records: [from] });
   const to = `${from}.consumed.${process.pid}.${randomBytes(6).toString("hex")}`;
   try {
     renameSync(from, to);
