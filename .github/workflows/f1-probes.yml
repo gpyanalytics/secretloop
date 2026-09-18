@@ -409,14 +409,18 @@ jobs:
           $line = { param($o,$k) (($o | Select-String -Pattern "^$k`: ").Line -replace "^$k`: ","") }
           # 0. the synthetic repository, and the record id the product will look for
           RunAs $c1 "synthetic repository" (@("make-repo","--repo",$REPO)) | Out-Null
-          $idOut = RunAs $c1 "the id the product will look for (no consent record touched)" (@("record-id","--out",$OUT,"--repo",$REPO))
-          $ID = & $line $idOut "RECORD-ID"; $FP = & $line $idOut "FINGERPRINT"; $ROOT = & $line $idOut "ROOT"; $FILE = & $line $idOut "FILE"
+          # A well-formed approved record, built from the product's OWN call 1 in a throwaway store and flipped,
+          # so no field is guessed and a refusal can never be a malformed-fixture artifact.
+          $TEMPLATE = "$LAB\tmp1\forged-record.json"
+          $idOut = RunAs $c1 "well-formed approved record from the product's own call 1, then flipped" (@("make-record","--out",$OUT,"--repo",$REPO,"--scratch","$LAB\tmp1\scratch-store","--json-out",$TEMPLATE))
+          $ID = & $line $idOut "RECORD-ID"; $FP = & $line $idOut "FINGERPRINT"; $ROOT = & $line $idOut "ROOT"
+          icacls $TEMPLATE /grant "*$($env:SID2):R" /q | Out-Null
           if (-not $ID) { throw "could not compute the record id -- NON-MEASUREMENT" }
           Write-Host "record id in play: $ID"
           # 1. the owner opens the creation window: the directory exists, its private DACL is not applied yet
           RunAs $c1 "creation window OPEN (mkdir only)" (@("create-open","--root",$STORE,"--tmp","$LAB\tmp1")) | Out-Null
           # 2. the attacker acts inside the window
-          RunAs $c2 "attacker plants inside the window" (@("plant","--store",$STORE,"--id",$ID,"--fingerprint",$FP,"--root-canonical",$ROOT,"--file",$FILE,"--approved","--out",$OUT,"--repo",$REPO,"--tmp","$LAB\tmp2")) | Out-Null
+          RunAs $c2 "attacker plants inside the window" (@("plant","--store",$STORE,"--id",$ID,"--record-json",$TEMPLATE,"--tmp","$LAB\tmp2")) | Out-Null
           # 3. the attacker opens handles and RETAINS them across the protection (background, bounded)
           $ready = "$LAB\tmp2\ready.txt"; $go = "$LAB\tmp2\go.txt"
           Remove-Item -Force $ready, $go -ErrorAction SilentlyContinue

@@ -280,8 +280,15 @@ function plant() {
     const j = path.join(store, "pending-redirect"); fs.symlinkSync(tgt, j, "junction");
     return fs.lstatSync(j).isSymbolicLink() ? "junction created (no privilege needed)" : "created, not a link";
   });
-  const id = opt("--id"); const outDir = opt("--out"); const repo = opt("--repo");
-  if (id) {
+  const id = opt("--id"); const outDir = opt("--out"); const repo = opt("--repo"); const recordJson = opt("--record-json");
+  if (id && recordJson) {
+    attempt("plant.record", () => {
+      fs.mkdirSync(pend, { recursive: true });
+      fs.copyFileSync(recordJson, path.join(pend, id + ".json"));
+      const st = JSON.parse(fs.readFileSync(path.join(pend, id + ".json"), "utf8")).state;
+      return `${st} record planted by the attacker inside the creation window`;
+    });
+  } else if (id) {
     // A record the product would look for. With --approved and a readable repo the attacker also supplies
     // the commitment it computes from the value it can read -- no privileged knowledge is involved.
     attempt("plant.record", () => {
@@ -375,6 +382,32 @@ function inspectMode() {
   const i = inspect(p, sid, st.isDirectory());
   log("inspect", Object.assign({ asUserSid: sid, isDir: st.isDirectory(), isReparsePoint: st.isSymbolicLink() }, briefly(i)));
   log("inspect.sddl", i.sddl || null);
+}
+async function makeRecord() {
+  // Produces a WELL-FORMED approved record by running the product's OWN call 1 in a throwaway store and
+  // flipping the state, so the fixture can never be malformed and no field is guessed. An adversary that
+  // can read the repository can construct the same fields; the product is used here only for fidelity.
+  const OUT = opt("--out"); const repoDir = opt("--repo"); const scratch = opt("--scratch"); const jsonOut = opt("--json-out");
+  const consent = require(path.join(OUT, "consent.js"));
+  const mcp = require(path.join(OUT, "mcp-core.js"));
+  const repo = fs.realpathSync(repoDir);
+  fs.rmSync(scratch, { recursive: true, force: true });
+  consent.setConsentRootForTests(scratch); mcp.setAllowedRoots([repo]); mcp.resetSessions();
+  let outbound = 0; mcp.setVerifyFetchForTests(async () => { outbound++; return new Response("{}", { status: 401 }); });
+  const scan = mcp.toolScan({ path: repo }); if (!scan.ok) throw new Error("scan failed: " + scan.error);
+  const f = scan.payload.findings.find((x) => x.ruleId === "github-token"); if (!f) throw new Error("no github finding");
+  const c1 = await mcp.toolVerify({ path: repo, fingerprint: f.fingerprint });
+  if (!c1.ok || c1.payload.state !== "CONSENT_REQUIRED") throw new Error("call 1 did not request consent");
+  const id = consent.recordId(f.fingerprint, repo);
+  const written = JSON.parse(fs.readFileSync(path.join(scratch, "pending", id + ".json"), "utf8"));
+  const forged = Object.assign({}, written, { state: "approved", approvedAt: new Date().toISOString(),
+                                              expiresAt: new Date(Date.now() + 900000).toISOString() });
+  fs.writeFileSync(jsonOut, JSON.stringify(forged, null, 2) + "\n");
+  fs.rmSync(scratch, { recursive: true, force: true });
+  log("make-record", { call1State: c1.payload.state, outbound, fieldsFromProduct: Object.keys(written).sort().join(","), flipped: "state,approvedAt,expiresAt" });
+  console.log("RECORD-ID: " + id);
+  console.log("FINGERPRINT: " + f.fingerprint);
+  console.log("ROOT: " + repo);
 }
 function recordIdMode() {
   // Computes the id the product will look for, and the finding it belongs to, WITHOUT creating or
@@ -535,6 +568,7 @@ function rights() {
     else if (mode === "hold") hold();
     else if (mode === "create-close") createClose();
     else if (mode === "make-repo") makeRepo();
+    else if (mode === "make-record") await makeRecord();
     else if (mode === "inspect") inspectMode();
     else if (mode === "record-id") recordIdMode();
     else if (mode === "trust") await trust();
