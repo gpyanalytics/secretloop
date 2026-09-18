@@ -84,6 +84,13 @@ code already running as you. A store under a folder that grants other accounts i
 now refused and will not be created, and a store on a network or UNC path is
 refused because these checks have not been established for that kind of location.
 
+Where this was exercised: local accounts on one hosted Windows Server 2025 image
+with an NTFS volume, in English, with the checks driven by an ordinary account
+against a second ordinary account. That is one environment, not a statement that
+Windows is supported everywhere. Domain accounts and domain groups, profiles that
+are roamed, redirected or otherwise managed, non-NTFS volumes, non-English hosts
+and ARM64 have not been exercised, so nothing is claimed about them.
+
 Eighteen of the rules have a verifier, covering fifteen providers. A credential
 matched by any other rule is never transmitted, whatever the flag says. One of
 those eighteen never transmits either: `sk_live_`/`sk_test_` is issued by more
