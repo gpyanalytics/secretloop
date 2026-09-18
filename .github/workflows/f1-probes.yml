@@ -448,3 +448,136 @@ jobs:
           RunAs $c1 "does the product trust the pre-planted approval" (@("trust","--out",$OUT,"--root",$STORE,"--repo",$REPO,"--tmp","$LAB\tmp1")) | Out-Null
           "--- the record after the product was asked (absent means the product CLAIMED it)"
           if (Test-Path "$STORE\pending\$ID.json") { "still present"; icacls "$STORE\pending\$ID.json" } else { "absent: the record was claimed or deleted by the product" }
+
+  # ---------------------------------------------------------------------------
+  # REVISED MECHANISM VALIDATION (evidence-only, never merge). Validates the full
+  # revised sequence: trusted ancestor chain, protected creation, per-object
+  # ownership, and the in-box PowerShell inspection helper (constant script,
+  # -EncodedCommand, paths on stdin). Every measurement runs AS AN ORDINARY USER;
+  # the elevated runner only provisions the lab. No continue-on-error anywhere.
+  # ---------------------------------------------------------------------------
+  acl-revised-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the product (tsc), no bundle
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compile
+      - name: Provision two ordinary users and the lab
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          "victim slprobe  $sid1"; "attacker slprobe2 $sid2"
+          $LAB = "$env:RUNNER_TEMP\acl3"
+          New-Item -ItemType Directory -Force $LAB, "$LAB\tmp1", "$LAB\tmp2" | Out-Null
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          icacls "$LAB\tmp1" /grant "*${sid1}:(OI)(CI)F" /q | Out-Null
+          icacls "$LAB\tmp2" /grant "*${sid2}:(OI)(CI)F" /q | Out-Null
+          # PRIVATE parent: protected DACL naming only the victim, SYSTEM and Administrators (a profile-like shape)
+          New-Item -ItemType Directory -Force "$LAB\priv" | Out-Null
+          icacls "$LAB\priv" /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          # PERMISSIVE parent: grants both ordinary accounts full control
+          New-Item -ItemType Directory -Force "$LAB\permissive" | Out-Null
+          icacls "$LAB\permissive" /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("$PWD\out", "$PWD\node_modules")) { icacls $d /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null }
+          Copy-Item tests\probes-f1\windows-acl-probes3.js "$LAB\p3.js"
+          "--- real ACLs of the stock chain components (recorded for the validation record)"
+          icacls C:\; icacls C:\Users
+          "--- lab ACLs"; icacls $LAB; icacls "$LAB\priv"; icacls "$LAB\permissive"
+          $pw1 | Out-File -NoNewline "$env:RUNNER_TEMP\r1.txt"; $pw2 | Out-File -NoNewline "$env:RUNNER_TEMP\r2.txt"
+          "LAB3=$LAB" >> $env:GITHUB_ENV; "SID1=$sid1" >> $env:GITHUB_ENV; "SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Materialize the ordinary users' real profiles (for the stock-chain case)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $c1 = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\r1.txt") -AsPlainText -Force))
+          $p = Start-Process -FilePath "$env:SystemRoot\System32\cmd.exe" -ArgumentList @("/c","echo profile") -Credential $c1 -LoadUserProfile -WorkingDirectory "$env:RUNNER_TEMP" -RedirectStandardOutput "$env:RUNNER_TEMP\prof.txt" -PassThru -NoNewWindow -Wait
+          "logon-with-profile exit $($p.ExitCode)"
+          $home1 = "C:\Users\slprobe"
+          if (Test-Path $home1) { "REAL PROFILE PRESENT: $home1"; icacls $home1; "PROFILE1=$home1" >> $env:GITHUB_ENV }
+          else { "REAL PROFILE NOT CREATED -- the stock-profile case will be reported NOT RUN"; "PROFILE1=" >> $env:GITHUB_ENV }
+      - name: Sequence validation as the ordinary owner and a second ordinary user
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:LAB3; $OUT = "$PWD\out"; $probe = "$LAB\p3.js"; $nodeExe = (Get-Command node).Source
+          $c1 = New-Object System.Management.Automation.PSCredential("slprobe",  (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\r1.txt") -AsPlainText -Force))
+          $c2 = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\r2.txt") -AsPlainText -Force))
+          $script:n = 0
+          function RunAs($cred, $tag, $argList) {
+            $script:n++; $o = "$env:RUNNER_TEMP\r3-$($script:n).out"; $e = "$env:RUNNER_TEMP\r3-$($script:n).err"
+            $p = Start-Process -FilePath $nodeExe -ArgumentList (@($probe) + $argList) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            Write-Host "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"
+            @(Get-Content $o) | ForEach-Object { Write-Host $_ }
+            if (Test-Path $e) { Get-Content $e | ForEach-Object { Write-Host "stderr: $_" } }
+            if ($p.ExitCode -ne 0) { throw "probe [$tag] exited $($p.ExitCode)" }
+            return @(Get-Content $o)
+          }
+          $T1 = @("--tmp","$LAB\tmp1"); $T2 = @("--tmp","$LAB\tmp2")
+          RunAs $c1 "environment facts (ordinary user)" (@("facts","--root",$LAB) + $T1) | Out-Null
+          RunAs $c1 "offline decision table" (@("table")) | Out-Null
+
+          # ---- P1 stock ancestor chain -------------------------------------------------
+          if ($env:PROFILE1) { RunAs $c1 "P1 stock profile chain (C:\ , C:\Users , real profile)" (@("chain","--path","$env:PROFILE1\.secretloop") + $T1) | Out-Null }
+          else { Write-Host "=== [P1 stock profile chain] NOT RUN: the ordinary user's real profile was not created in this environment" }
+          RunAs $c1 "P1b lab chain under a protected parent" (@("chain","--path","$LAB\priv\store") + $T1) | Out-Null
+          RunAs $c1 "P1c chain under the permissive parent" (@("chain","--path","$LAB\permissive\store") + $T1) | Out-Null
+
+          # ---- P2 permissive parent refused BEFORE creation ----------------------------
+          RunAs $c1 "P2 creation under a permissive parent" (@("create","--root","$LAB\permissive\store") + $T1) | Out-Null
+          if (Test-Path "$LAB\permissive\store") { throw "P2: the refusal created a directory" }
+          Write-Host "P2 filesystem check: nothing was created under the permissive parent"
+
+          # ---- P9 the legitimate path must still work ----------------------------------
+          RunAs $c1 "P9 legitimate: create, call 1, replace, approve, claim, replay" (@("legit","--out",$OUT,"--root","$LAB\priv\store","--repo","$LAB\priv\repo") + $T1) | Out-Null
+
+          # ---- P6 the attacker cannot reach a store under a private parent -------------
+          RunAs $c2 "P6 attacker attempts access under the private parent" (@("attack-open","--store","$LAB\priv\store2") + $T2) | Out-Null
+          RunAs $c2 "P7 attacker attempts to substitute the private parent" (@("attack-swap","--path","$LAB\priv") + $T2) | Out-Null
+          RunAs $c2 "P7b attacker substitutes a PERMISSIVE parent (why the rule matters)" (@("attack-swap","--path","$LAB\permissive") + $T2) | Out-Null
+
+          # ---- P3/P4 an attacker-owned record inside an otherwise private store --------
+          $TPL = "$LAB\tmp1\forged.json"
+          $mk = RunAs $c1 "product-generated approved record (no field guessed)" (@("make-record","--out",$OUT,"--repo","$LAB\priv\repo2","--scratch","$LAB\tmp1\scratch","--json-out",$TPL) + $T1)
+          $ID = (($mk | Select-String -Pattern '^RECORD-ID: ').Line -replace '^RECORD-ID: ','')
+          if (-not $ID) { throw "could not obtain the product-generated record id -- NON-MEASUREMENT" }
+          RunAs $c1 "fresh private store for the planted-record cases" (@("create","--root","$LAB\priv\store3") + $T1) | Out-Null
+          # the elevated runner places the record and gives it to the attacker as OWNER: this is the residue of the
+          # creation-window attack after the directory was later protected (inheritance launders the record's DACL)
+          Copy-Item $TPL "$LAB\priv\store3\pending\$ID.json"
+          icacls "$LAB\priv\store3\pending\$ID.json" /setowner "*$($env:SID2)" /q | Out-Null
+          "--- planted record ACL and owner as the runner sees it"; icacls "$LAB\priv\store3\pending\$ID.json"
+          RunAs $c1 "P3/P4 store trusted but the attacker-owned record must be refused" (@("operate","--root","$LAB\priv\store3") + $T1) | Out-Null
+
+          # ---- P5 explicit permissive grant on a record beneath a private directory ----
+          RunAs $c1 "fresh private store for the permissive-record case" (@("create","--root","$LAB\priv\store4") + $T1) | Out-Null
+          Copy-Item $TPL "$LAB\priv\store4\pending\$ID.json"
+          icacls "$LAB\priv\store4\pending\$ID.json" /grant "*$($env:SID2):F" /q | Out-Null
+          RunAs $c1 "P5 record with an explicit foreign grant under a private store" (@("operate","--root","$LAB\priv\store4") + $T1) | Out-Null
+
+          # ---- P8 reparse points at directory and record level -------------------------
+          RunAs $c1 "fresh private store for the reparse cases" (@("create","--root","$LAB\priv\store5") + $T1) | Out-Null
+          Copy-Item $TPL "$LAB\priv\store5\pending\$ID.json"
+          New-Item -ItemType Directory -Force "$LAB\priv\elsewhere" | Out-Null
+          cmd /c mklink /J "$LAB\priv\store5\pending\junction-dir" "$LAB\priv\elsewhere"
+          cmd /c mklink "$LAB\priv\store5\pending\link-record.json" "$LAB\priv\store5\pending\$ID.json"
+          RunAs $c1 "P8 reparse points beneath a private store" (@("operate","--root","$LAB\priv\store5") + $T1) | Out-Null
+          New-Item -ItemType Directory -Force "$LAB\priv\realstore\pending" | Out-Null
+          cmd /c mklink /J "$LAB\priv\store6" "$LAB\priv\realstore"
+          RunAs $c1 "P8b the store itself is a junction" (@("operate","--root","$LAB\priv\store6") + $T1) | Out-Null
+
+          # ---- P10 tooling failures refuse and never fall through ----------------------
+          RunAs $c1 "P10 inspection helper absent" (@("toolfail","--root","$LAB\tmp1\tf1","--ps","C:\nonexistent\powershell.exe") + $T1) | Out-Null
+          RunAs $c1 "P10b enforcement tooling absent" (@("toolfail","--root","$LAB\tmp1\tf2","--icacls","C:\nonexistent\icacls.exe") + $T1) | Out-Null
+          Write-Host "all revised-sequence cases completed"
