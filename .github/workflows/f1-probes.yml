@@ -35,7 +35,7 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run compile
-          node tests/probes-f1/header-probe.js out
+          node tests/probes-f1/header-probe.js "$PWD/out"
 
   probes-windows:
     runs-on: windows-latest
