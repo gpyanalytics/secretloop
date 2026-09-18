@@ -224,6 +224,7 @@ jobs:
             "set SECRETLOOP_WIN_ATTACKER_SID=$env:ACL_SID2",
             ("set SECRETLOOP_WIN_PERMISSIVE_PARENT=" + (Join-Path $LAB "permissive")),
             "set SECRETLOOP_WIN_RX_STORE=$env:ACL_RX_STORE",
+            "set SECRETLOOP_WIN_EXPECTED_SID=$env:ACL_SID1",
             "node node_modules\ts-node\dist\bin.js --transpile-only tests\consent-acl-win-twouser.test.ts"
           )
           Set-Content -Path $runner -Value $lines -Encoding ASCII

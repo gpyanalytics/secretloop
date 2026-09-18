@@ -50,6 +50,17 @@ function armFetch(): void {
 
 suite("windows consent ACL — against a second ordinary account");
 
+test("these cases run as the ordinary owner, not as the account that built the fixture", () => {
+  if (!CONFIGURED) return skip(REASON);
+  const expected = process.env.SECRETLOOP_WIN_EXPECTED_SID;
+  if (!expected) return skip("NOT RUN: the job did not say which account these cases must run as");
+  const me = acl.currentUserSid();
+  // The fixture is built by an elevated account; the product must be exercised by an ordinary one.
+  // Without this, an administrator's result could be presented as an ordinary user's.
+  assert.strictEqual(me, expected, "the product is not running as the ordinary owner the job provisioned");
+  assert.notStrictEqual(me, ATTACKER, "the owner and the attacker must be different accounts");
+});
+
 test("the planted record really is owned by the other account, or nothing below is evidence", () => {
   if (!CONFIGURED) return skip(REASON);
   const pending = path.join(STORE as string, "pending");
