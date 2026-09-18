@@ -66,3 +66,112 @@ jobs:
       - name: POSIX challenge file on Windows (documents what cannot run here)
         run: node tests/probes-f1/posix-challenges.js
         continue-on-error: true
+
+  # ---------------------------------------------------------------------------
+  # CONSENT-FILE PROBES (added after the F-1 probes above; evidence-only, never merge).
+  # Each job creates a SECOND, disposable local user on the hosted runner and
+  # measures whether that user can list, read, append to, replace, rename or
+  # plant beside a consent record written by the runner user through the REAL
+  # consent module. The runner itself is disposable. No secret, no provider
+  # call: the tamper probe replaces the outbound boundary with an interceptor.
+  # ---------------------------------------------------------------------------
+  consent-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the product (tsc), no bundle
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compile
+      - name: Facts
+        run: |
+          node tests/probes-f1/consent-probes.js facts
+          df -T "$HOME" | tail -1; mount | grep -E " $(df --output=target "$HOME" | tail -1) " || true
+      - name: Lifecycle (real homedir path logic, umask 022 / 000 / 077)
+        run: |
+          for um in 022 000 077; do echo "=== umask $um"; node tests/probes-f1/consent-probes.js --out "$PWD/out" lifecycle --umask $um; done
+      - name: Tamper (parser + decision logic, outbound intercepted)
+        run: node tests/probes-f1/consent-probes.js --out "$PWD/out" tamper --consent-root "$RUNNER_TEMP/consent-tamper"
+      - name: Cross-user (second ordinary user, and root) against a record in the runner's real store
+        run: |
+          set -e
+          sudo useradd -m -s /bin/bash slprobe
+          node tests/probes-f1/consent-probes.js --out "$PWD/out" plant | tee /tmp/plant.txt
+          P=$(grep '^PLANTED-PATH: ' /tmp/plant.txt | sed 's/^PLANTED-PATH: //')
+          echo "--- ls -ld of the store as seen by the owner"; ls -ld "$HOME/.secretloop" "$HOME/.secretloop/pending" "$P"; id
+          echo "--- as slprobe (ordinary user)"; sudo -u slprobe -H node "$PWD/tests/probes-f1/consent-probes.js" other-user --target "$P" || true
+          echo "--- as root"; sudo -H node "$PWD/tests/probes-f1/consent-probes.js" other-user --target "$P" || true
+          echo "--- pre-existing store owned by ROOT with world-writable modes, then the runner writes into it (chmod must fail silently)"
+          sudo rm -rf "$RUNNER_TEMP/rootowned"; sudo mkdir -p "$RUNNER_TEMP/rootowned/pending"; sudo chmod 777 "$RUNNER_TEMP/rootowned" "$RUNNER_TEMP/rootowned/pending"
+          node tests/probes-f1/consent-probes.js --out "$PWD/out" plant --consent-root "$RUNNER_TEMP/rootowned" | tee /tmp/plant2.txt
+          P2=$(grep '^PLANTED-PATH: ' /tmp/plant2.txt | sed 's/^PLANTED-PATH: //')
+          ls -ld "$RUNNER_TEMP/rootowned" "$RUNNER_TEMP/rootowned/pending" "$P2"
+          echo "--- slprobe against the record inside the root-owned world-writable store"; sudo -u slprobe -H node "$PWD/tests/probes-f1/consent-probes.js" other-user --target "$P2" || true
+
+  consent-windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the product (tsc), no bundle
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compile
+      - name: Facts
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          node tests/probes-f1/consent-probes.js facts
+          whoami; whoami /groups | Select-String -Pattern "S-1-16-|Administrators"
+          fsutil fsinfo fstype ($env:USERPROFILE.Substring(0,2))
+          "USERPROFILE ACL:"; icacls $env:USERPROFILE
+          exit 0
+      - name: Lifecycle (real profile path logic) and tamper, as the elevated runner user
+        shell: pwsh
+        run: |
+          node tests/probes-f1/consent-probes.js --out "$PWD\out" lifecycle
+          node tests/probes-f1/consent-probes.js --out "$PWD\out" tamper --consent-root "$env:RUNNER_TEMP\consent-tamper"
+      - name: Cross-user (second ORDINARY local user) against a record in the runner's real profile store
+        shell: pwsh
+        continue-on-error: true
+        run: |
+          $ErrorActionPreference = "Continue"
+          $pw = -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!"
+          net user slprobe $pw /add /y | Out-Null
+          Write-Host "slprobe created (ordinary user; NOT added to Administrators):"; net user slprobe | Select-String -Pattern "Local Group Memberships"
+          $plant = node tests/probes-f1/consent-probes.js --out "$PWD\out" plant
+          $plant
+          $P = ($plant | Select-String -Pattern '^PLANTED-PATH: ').Line -replace '^PLANTED-PATH: ',''
+          "--- icacls of the store as seen by the owner"; icacls $env:USERPROFILE\.secretloop; icacls $env:USERPROFILE\.secretloop\pending; icacls $P
+          $sec = ConvertTo-SecureString $pw -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", $sec)
+          $outFile = "$env:RUNNER_TEMP\otheruser.txt"; $errFile = "$env:RUNNER_TEMP\otheruser.err"
+          # An ordinary user needs a directory it can execute from and write output to.
+          icacls "$env:RUNNER_TEMP" /grant "slprobe:(OI)(CI)RX" | Out-Null
+          Copy-Item tests\probes-f1\consent-probes.js "$env:RUNNER_TEMP\consent-probes.js"
+          icacls "$env:RUNNER_TEMP\consent-probes.js" /grant "slprobe:RX" | Out-Null
+          $nodeExe = (Get-Command node).Source
+          try {
+            $proc = Start-Process -FilePath $nodeExe -ArgumentList @("$env:RUNNER_TEMP\consent-probes.js","other-user","--target","$P") -Credential $cred -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput $outFile -RedirectStandardError $errFile -PassThru -NoNewWindow -Wait
+            "--- as slprobe: exit $($proc.ExitCode)"; Get-Content $outFile; Get-Content $errFile
+          } catch { "--- Start-Process -Credential FAILED: $($_.Exception.Message)  (cross-user measurement NOT RUN)" }
+          "--- lifecycle AS slprobe (normal-user context) with an explicit disposable root the user can write"
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP\slprobe-root" | Out-Null
+          icacls "$env:RUNNER_TEMP\slprobe-root" /grant "slprobe:(OI)(CI)F" | Out-Null
+          icacls "$PWD\out" /grant "slprobe:(OI)(CI)RX" | Out-Null; icacls "$PWD\node_modules" /grant "slprobe:(OI)(CI)RX" | Out-Null
+          $out2 = "$env:RUNNER_TEMP\slprobe-lifecycle.txt"; $err2 = "$env:RUNNER_TEMP\slprobe-lifecycle.err"
+          try {
+            $proc2 = Start-Process -FilePath $nodeExe -ArgumentList @("$env:RUNNER_TEMP\consent-probes.js","--out","$PWD\out","lifecycle","--consent-root","$env:RUNNER_TEMP\slprobe-root\store") -Credential $cred -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput $out2 -RedirectStandardError $err2 -PassThru -NoNewWindow -Wait
+            "--- lifecycle as slprobe: exit $($proc2.ExitCode)"; Get-Content $out2; Get-Content $err2
+          } catch { "--- lifecycle as slprobe FAILED to start: $($_.Exception.Message)  (normal-user lifecycle NOT RUN)" }
+          "--- the runner (a different user) reading slprobe's record"
+          $rec = Get-ChildItem "$env:RUNNER_TEMP\slprobe-root\store\pending" -Filter *.json -ErrorAction SilentlyContinue | Select-Object -First 1
+          if ($rec) { icacls $rec.FullName; node "$env:RUNNER_TEMP\consent-probes.js" other-user --target $rec.FullName } else { "no record left by the slprobe lifecycle (it cleans up); planting one as slprobe instead" ; $out3="$env:RUNNER_TEMP\p3.txt"; Start-Process -FilePath $nodeExe -ArgumentList @("$env:RUNNER_TEMP\consent-probes.js","--out","$PWD\out","plant","--consent-root","$env:RUNNER_TEMP\slprobe-root\store") -Credential $cred -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput $out3 -RedirectStandardError "$env:RUNNER_TEMP\p3.err" -PassThru -NoNewWindow -Wait | Out-Null; Get-Content $out3; $P3 = (Get-Content $out3 | Select-String -Pattern '^PLANTED-PATH: ').Line -replace '^PLANTED-PATH: ',''; icacls $P3; node "$env:RUNNER_TEMP\consent-probes.js" other-user --target $P3 }
+          exit 0
