@@ -193,6 +193,14 @@ jobs:
           if ($permissive -notmatch '"create-store-name":"SUCCEEDED"') {
             throw "the control failed: the second account could not create the store name even under a permissive parent, so the refusal above is not evidence"
           }
+      - name: Where the ancestor rule draws the line on this image
+        # Diagnostic, and evidence for the record: the chain verdict for the profile, for the
+        # store path a real user would have, and for the OS temporary directory the test suite
+        # uses. It asserts nothing; the cases above and below do the asserting.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node (Join-Path $PWD "tests\\fixtures\\win-chain-diagnostic.js") (Join-Path $PWD "out\\consent-acl-win.js")
       - name: The product, as the ordinary owner, against that fixture
         shell: pwsh
         run: |

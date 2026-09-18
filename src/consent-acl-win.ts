@@ -255,7 +255,12 @@ export function ancestorPrincipalAllowed(sid: string, userSid: string): boolean 
 }
 
 /** The ancestor rule: no untrusted principal may replace or re-permission this component. */
-export function decideAncestorDacl(sddl: unknown, userSid: string, immediateParent: boolean): Decision {
+export function decideAncestorDacl(
+  sddl: unknown,
+  userSid: string,
+  immediateParent: boolean,
+  note?: (principal: string, rights: string) => void
+): Decision {
   const dacl = parseDacl(sddl);
   if (!dacl) return { ok: false, problem: "acl-inspection-malformed" };
   if (dacl.nullDacl) return { ok: false, problem: "null-dacl" };
@@ -266,7 +271,10 @@ export function decideAncestorDacl(sddl: unknown, userSid: string, immediatePare
     // An inherit-only entry does not apply to the object carrying it.
     const effective = ace.inheritOnly ? 0 : ace.mask;
     const forbidden = NAMESPACE_BITS | GENERIC_WRITEISH | (immediateParent ? CREATE_CHILD_BITS : 0);
-    if ((effective & forbidden) !== 0) return { ok: false, problem: "unsafe-parent" };
+    if ((effective & forbidden) !== 0) {
+      if (note) note(ace.sid, `${ace.rightsText}=0x${(effective & forbidden) >>> 0 ? ((effective & forbidden) >>> 0).toString(16) : "0"}`);
+      return { ok: false, problem: "unsafe-parent" };
+    }
   }
   return { ok: true };
 }
@@ -524,6 +532,26 @@ export interface CheckTarget {
  * by a parent's protection has its inherited DACL rewritten to look private while its owner
  * stays the attacker, so every record is checked on its own.
  */
+/**
+ * Why a check refused, for diagnostics only. The product never prints any of this: its refusals
+ * are fixed sentences. Tests and evidence jobs use it so a refusal can be understood rather than
+ * guessed at.
+ */
+export interface RefusalDetail {
+  component: string;
+  principal?: string;
+  rights?: string;
+}
+let lastDetail: RefusalDetail | undefined;
+/** The detail of the most recent refusal in this process. Diagnostic only; never user-facing. */
+export function lastRefusalDetail(): RefusalDetail | undefined {
+  return lastDetail;
+}
+function refuse(problem: WindowsAclProblem, detail: RefusalDetail): { ok: false; problem: WindowsAclProblem } {
+  lastDetail = detail;
+  return { ok: false, problem };
+}
+
 export function checkWindowsStore(
   storeDir: string,
   targets: CheckTarget[],
@@ -538,29 +566,35 @@ export function checkWindowsStore(
 
   for (const component of chain) {
     const info = inspected.byPath.get(key(component));
-    if (!info) return { ok: false, problem: "acl-inspection-malformed" };
-    if (!info.exists) return { ok: false, problem: "unsafe-parent" };
-    if (info.unreadable) return { ok: false, problem: "owner-unreadable" };
-    if (info.isReparsePoint) return { ok: false, problem: "unsafe-parent" };
-    if (!info.isDirectory) return { ok: false, problem: "unsafe-parent" };
-    if (!ancestorPrincipalAllowed(info.ownerSid, userSid)) return { ok: false, problem: "unsafe-parent" };
-    const decision = decideAncestorDacl(info.sddl, userSid, key(component) === key(parent));
-    if (!decision.ok) return { ok: false, problem: decision.problem };
+    if (!info) return refuse("acl-inspection-malformed", { component });
+    if (!info.exists) return refuse("unsafe-parent", { component, principal: "absent" });
+    if (info.unreadable) return refuse("owner-unreadable", { component });
+    if (info.isReparsePoint) return refuse("unsafe-parent", { component, principal: "reparse-point" });
+    if (!info.isDirectory) return refuse("unsafe-parent", { component, principal: "not-a-directory" });
+    if (!ancestorPrincipalAllowed(info.ownerSid, userSid)) {
+      return refuse("unsafe-parent", { component, principal: `owner:${info.ownerSid}` });
+    }
+    let offender: RefusalDetail = { component };
+    const decision = decideAncestorDacl(info.sddl, userSid, key(component) === key(parent), (principal, rights) => {
+      offender = { component, principal, rights };
+    });
+    if (!decision.ok) return refuse(decision.problem, offender);
   }
 
   for (const target of targets) {
     const info = inspected.byPath.get(key(target.path));
-    if (!info) return { ok: false, problem: "acl-inspection-malformed" };
+    if (!info) return refuse("acl-inspection-malformed", { component: target.path });
     if (!info.exists) continue; // the caller decides what an absent object means
-    if (info.unreadable) return { ok: false, problem: "owner-unreadable" };
-    if (info.isReparsePoint) return { ok: false, problem: "reparse-point" };
-    if (target.kind === "directory" && !info.isDirectory) return { ok: false, problem: "not-a-directory" };
-    if (target.kind === "record" && info.isDirectory) return { ok: false, problem: "not-a-directory" };
+    if (info.unreadable) return refuse("owner-unreadable", { component: target.path });
+    if (info.isReparsePoint) return refuse("reparse-point", { component: target.path });
+    if (target.kind === "directory" && !info.isDirectory) return refuse("not-a-directory", { component: target.path });
+    if (target.kind === "record" && info.isDirectory) return refuse("not-a-directory", { component: target.path });
     if (info.ownerSid !== userSid && info.ownerSid !== SID_SYSTEM && info.ownerSid !== SID_ADMINISTRATORS) {
-      return { ok: false, problem: "foreign-owner" };
+      return refuse("foreign-owner", { component: target.path, principal: `owner:${info.ownerSid}` });
     }
     const decision = decideStoreDacl(info.sddl, userSid);
-    if (!decision.ok) return { ok: false, problem: decision.problem };
+    if (!decision.ok) return refuse(decision.problem, { component: target.path, principal: info.sddl });
   }
+  lastDetail = undefined;
   return { ok: true };
 }
