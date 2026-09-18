@@ -208,13 +208,23 @@ can write your home directory. A missing `pending` directory under an
 existing, private `.secretloop` is not an error; it is recreated on the next
 request. If you meet the refusal on a
 store you did not create, move it aside rather than deleting or loosening it,
-and ask the client to request the verification again. **Windows:** the check
-refuses a junction or link — so a store redirected to another drive through a
-junction is refused until it is moved back to a real directory — but reads no
-ownership or mode, because those are not meaningful there; the records' protection is the inherited ACL of your
-profile folder — in the tested setup a default profile refused another
-ordinary user, and a folder that grants other accounts let another account
-read a record. No ACL is set; that is an open release decision.
+and ask the client to request the verification again. **Windows:** the check is a
+different one, because mode bits are not meaningful there. SecretLoop reads the
+owner and the access list of `.secretloop`, of `pending` and of each record it
+is about to use, and requires every entry to allow only your account, SYSTEM or
+Administrators, the owner to be one of those three, and your account to hold
+full access; a reparse point at any of them is refused and never followed. Each
+record is checked on its own, because a record another account planted and a
+protected parent later caught looks private while its owner stays that account.
+Every folder from the drive root down to the store's parent is checked too, and
+the store is refused if any account outside a small platform set can delete,
+rename or re-permission one of them. A new store is created private and a failed
+creation withdraws only what it made; an existing store is refused rather than
+repaired. The built-in `powershell.exe` and `icacls.exe` are used for this; if
+either cannot be run, or a store sits on a network or UNC path, the request is
+refused rather than assumed safe. Applying an access list does not revoke a
+handle another process already holds, and for a store that already existed these
+checks describe the present only, not its history.
 
 Your client's own approval dialog governs whether the assistant may *call*
 these tools at all. That is your client's control, not SecretLoop's consent
