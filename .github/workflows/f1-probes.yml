@@ -5,7 +5,7 @@ name: f1-probes
 on:
   pull_request:
     paths:
-      - "probes/f1/**"
+      - "tests/probes-f1/**"
       - ".github/workflows/f1-probes.yml"
 
 permissions:
@@ -24,13 +24,13 @@ jobs:
         run: |
           uname -a; node --version; node -p process.versions.uv; id -u; df -T . | tail -1; mount | grep -E ' /proc ' || true
       - name: POSIX challenges (component boundary, kernel path)
-        run: node probes/f1/posix-challenges.js
+        run: node tests/probes-f1/posix-challenges.js
       - name: POSIX challenges (naive prefix, to show what it would accept)
-        run: node probes/f1/posix-challenges.js --naive-prefix
+        run: node tests/probes-f1/posix-challenges.js --naive-prefix
       - name: POSIX challenges (O_NOFOLLOW variant)
-        run: node probes/f1/posix-challenges.js --nofollow
+        run: node tests/probes-f1/posix-challenges.js --nofollow
       - name: Windows-probe file on Linux (comparison baseline)
-        run: node probes/f1/windows-probes.js
+        run: node tests/probes-f1/windows-probes.js
 
   probes-windows:
     runs-on: windows-latest
@@ -57,7 +57,7 @@ jobs:
           fsutil fsinfo fstype $drive
           exit 0
       - name: Windows probes W0-W6
-        run: node probes/f1/windows-probes.js
+        run: node tests/probes-f1/windows-probes.js
       - name: POSIX challenge file on Windows (documents what cannot run here)
-        run: node probes/f1/posix-challenges.js
+        run: node tests/probes-f1/posix-challenges.js
         continue-on-error: true
