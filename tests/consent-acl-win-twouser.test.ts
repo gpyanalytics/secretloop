@@ -35,7 +35,7 @@ const ATTACKER = process.env.SECRETLOOP_WIN_ATTACKER_SID;
 const REASON =
   "NOT RUN: no second ordinary Windows account was provisioned for this run " +
   "(SECRETLOOP_WIN_TWOUSER_STORE, SECRETLOOP_WIN_TWOUSER_REPO, SECRETLOOP_WIN_ATTACKER_SID); " +
-  "the acl-two-user-windows CI job provides them";
+  "the test-windows-two-user CI job provides them";
 const CONFIGURED = process.platform === "win32" && !!STORE && !!REPO && !!ATTACKER;
 
 let wire = { count: 0 };
