@@ -110,10 +110,9 @@ function decideAncestor(sddl, userSid, immediateParent) {
   const d = parseDacl(sddl);
   if (!d) return { ok: false, reason: "acl-inspection-malformed" };
   if (d.nullDacl) return { ok: false, reason: "null-dacl" };
-  const allowed = new Set([userSid, SID_SYSTEM, SID_ADMINS]);
   const problems = [], tolerated = [];
   for (const a of d.aces) {
-    if (allowed.has(a.sid)) continue;
+    if (ancestorPrincipalAllowed(a.sid, userSid)) continue;
     if (a.type !== "A") { tolerated.push(`deny:${a.sid}`); continue; }   // a deny ACE only removes access
     if (a.unknownRights.length) { problems.push(`acl-inspection-malformed:rights:${a.unknownRights.join("")}`); continue; }
     const effective = a.inheritOnly ? 0 : a.mask;                        // an IO ACE does not apply to this object
@@ -184,7 +183,24 @@ function psInspect(paths) {
   }
   return { byPath };
 }
+/** STORE objects: only these three principals may appear or own. */
 const ownerAllowed = (sid, userSid) => sid === userSid || sid === SID_SYSTEM || sid === SID_ADMINS;
+/**
+ * ANCESTORS: a wider set, because measurement showed the store rule is unusable above the store.
+ * Stock volume roots are owned by, and grant full control to, platform principals: C:\ is owned by
+ * NT SERVICE\TrustedInstaller (S-1-5-80-*) and the runner's D:\ by NETWORK SERVICE (S-1-5-20).
+ * The adversary class is "another ordinary local account that is not SYSTEM and not an Administrator".
+ * A service identity or the platform installer is not in that class and cannot be assumed by an ordinary
+ * user, so those principals are trusted ABOVE the store. This buys nothing against a compromised Windows
+ * service or the platform itself, which was already out of scope; it is stated, not assumed away.
+ */
+function ancestorPrincipalAllowed(sid, userSid) {
+  if (sid === userSid || sid === SID_SYSTEM || sid === SID_ADMINS) return true;
+  if (sid === "S-1-5-19" || sid === "S-1-5-20") return true;          // LOCAL SERVICE, NETWORK SERVICE
+  if (/^S-1-5-80-/.test(sid)) return true;                             // NT SERVICE\* (incl. TrustedInstaller)
+  if (/^S-1-5-21-[\d-]+-500$/.test(sid)) return true;                  // the built-in Administrator account
+  return false;                                                        // every ordinary account, Users, Everyone, ...
+}
 
 /** C.2 / D.2 -- the ancestor chain, top down. Returns the first failing component. */
 function checkChain(storePath, userSid, info) {
@@ -198,7 +214,7 @@ function checkChain(storePath, userSid, info) {
     if (!e || !e.ok) { results.push({ component: p, ok: false, reason: e && e.exists === false ? "unsafe-parent:absent" : "owner-unreadable", errorType: e && e.errorType }); break; }
     if (e.isReparsePoint) { results.push({ component: p, ok: false, reason: "unsafe-parent:reparse-point" }); break; }
     if (!e.isDirectory) { results.push({ component: p, ok: false, reason: "unsafe-parent:not-a-directory" }); break; }
-    if (!ownerAllowed(e.ownerSid, userSid)) { results.push({ component: p, ok: false, reason: `unsafe-parent:foreign-owner:${e.ownerSid}`, immediate }); break; }
+    if (!ancestorPrincipalAllowed(e.ownerSid, userSid)) { results.push({ component: p, ok: false, reason: `unsafe-parent:foreign-owner:${e.ownerSid}`, immediate }); break; }
     const d = decideAncestor(e.sddl, userSid, immediate);
     results.push({ component: p, ok: d.ok, reason: d.reason, immediate, tolerated: d.tolerated });
     if (!d.ok) break;
@@ -316,6 +332,9 @@ function table() {
     ["other user WRITE_DAC", `D:AI(A;OICIID;FA;;;${me})(A;OICIID;WD;;;${other})(A;OICIID;FA;;;BA)`],
     ["other user delete-child", `D:AI(A;OICIID;FA;;;${me})(A;OICIID;DT;;;${other})(A;OICIID;FA;;;BA)`],
     ["other user deny", `D:AI(D;OICIID;FA;;;${other})(A;OICIID;FA;;;${me})(A;OICIID;FA;;;BA)`],
+    ["TrustedInstaller full", `D:PAI(A;;FA;;;S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;0x1200a9;;;BU)`],
+    ["NETWORK SERVICE full", `D:PAI(A;OICI;FA;;;S-1-5-20)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`],
+    ["built-in Administrator", `D:PAI(A;OICI;FA;;;S-1-5-21-1-1-1-500)(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)`],
   ]) {
     const a = decideAncestor(sddl, me, false), b = decideAncestor(sddl, me, true);
     console.log(`  ${label.padEnd(24)} ${a.ok ? "ACCEPT" : "REFUSE"} ${(a.reason).padEnd(42)} [${b.ok ? "ACCEPT" : "REFUSE"} ${b.reason}]`);
