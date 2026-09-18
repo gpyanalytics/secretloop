@@ -37,6 +37,9 @@ const ICACLS = opt("--icacls") || path.join(SYSTEM_ROOT, "System32", "icacls.exe
 const TMP = opt("--tmp", require("os").tmpdir()); // where the transient /save file goes: never inside the store
 const POWERSHELL = path.join(SYSTEM_ROOT, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
 const SID_SYSTEM = "S-1-5-18", SID_ADMINS = "S-1-5-32-544";
+// SDDL string-SID aliases as icacls /save emits them. Closed table; an alias not listed here is refused as unknown.
+const SDDL_ALIAS = { BA: "S-1-5-32-544", BU: "S-1-5-32-545", BG: "S-1-5-32-546", PU: "S-1-5-32-547", AO: "S-1-5-32-548", SO: "S-1-5-32-549", PO: "S-1-5-32-550", BO: "S-1-5-32-551", RE: "S-1-5-32-552", RU: "S-1-5-32-554", RD: "S-1-5-32-555", NO: "S-1-5-32-556", SY: "S-1-5-18", LS: "S-1-5-19", NS: "S-1-5-20", WD: "S-1-1-0", AU: "S-1-5-11", IU: "S-1-5-4", NU: "S-1-5-2", AN: "S-1-5-7", RC: "S-1-5-12", CO: "S-1-3-0", CG: "S-1-3-1", OW: "S-1-3-4", AC: "S-1-15-2-1", LW: "S-1-16-4096", ME: "S-1-16-8192", HI: "S-1-16-12288", SI: "S-1-16-16384", ES: "S-1-5-32-573", LU: "S-1-5-32-559", CY: "S-1-5-32-569", MU: "S-1-5-32-558", IS: "S-1-5-17" };
+const canonSid = (x) => /^S-1-/.test(x) ? x : (SDDL_ALIAS[x] || `unknown-alias:${x}`);
 const WELL_KNOWN = { "S-1-1-0": "Everyone", "S-1-5-11": "Authenticated Users", "S-1-5-32-545": "Users", "S-1-3-0": "CREATOR OWNER", "S-1-5-18": "SYSTEM", "S-1-5-32-544": "Administrators" };
 
 function run(exe, argv, timeoutMs = 15000) {
@@ -67,7 +70,7 @@ function sddlOf(p) {
 function parseDacl(sddl) {
   const m = /^D:([A-Z]*)((?:\([^)]*\))*)$/.exec(sddl.trim());
   if (!m) return null;
-  const aces = [...m[2].matchAll(/\(([^)]*)\)/g)].map((x) => { const f = x[1].split(";"); return { type: f[0], flags: f[1], rights: f[2], sid: f[5] }; });
+  const aces = [...m[2].matchAll(/\(([^)]*)\)/g)].map((x) => { const f = x[1].split(";"); return { type: f[0], flags: f[1], rights: f[2], sid: canonSid(f[5]), raw: f[5] }; });
   return { flags: m[1], aces };
 }
 /** THE POLICY DECISION on one object. Refusal reasons are closed; the inheritance flag is advisory only. */
@@ -130,7 +133,13 @@ function create() {
   const root2 = root + "-late"; fs.rmSync(root2, { recursive: true, force: true }); fs.mkdirSync(path.join(root2, "pending"), { recursive: true });
   const r2 = path.join(root2, "pending", "old-record.json"); fs.writeFileSync(r2, "{}\n");
   const p2 = protect(root2, sid); const late = inspect(path.join(root2, "pending"), sid, true); const lateRec = inspect(r2, sid, false);
-  log("late-protect.parent-only", { protect: p2.ok, pendingAfter: { ok: late.ok, reason: late.reason }, oldRecordAfter: { ok: lateRec.ok, reason: lateRec.reason } });
+  log("late-protect.parent-only", { protect: p2.ok, pendingAfter: { ok: late.ok, reason: late.reason, principals: late.principals }, oldRecordAfter: { ok: lateRec.ok, reason: lateRec.reason, principals: lateRec.principals } });
+  // a planted file with its OWN explicit grant survives parent-only protection?
+  const planted = path.join(root2, "pending", "planted.json"); fs.writeFileSync(planted, "{}\n"); run(ICACLS, [planted, "/grant", "*S-1-1-0:F", "/q"]);
+  const before2 = inspect(planted, sid, false);
+  const p3 = run(ICACLS, [root2, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, `*${SID_SYSTEM}:(OI)(CI)F`, `*${SID_ADMINS}:(OI)(CI)F`, "/t", "/q"]);
+  const after2 = inspect(planted, sid, false);
+  log("late-protect.tree", { treeStatus: p3.status, plantedBefore: { ok: before2.ok, reason: before2.reason }, plantedAfterTree: { ok: after2.ok, reason: after2.reason, principals: after2.principals } });
   fs.rmSync(root2, { recursive: true, force: true });
   console.log("CREATED: " + root);
 }
@@ -199,6 +208,7 @@ async function call2() {
   consent.setConsentRootForTests(root); mcp.setAllowedRoots([repo]); mcp.resetSessions();
   let outbound = 0; mcp.setVerifyFetchForTests(async () => { outbound++; return new Response("{}", { status: 401 }); });
   const id = consent.recordId(fp, repo); let seen; try { const rec = consent.readRecord(id); seen = rec ? rec.state : "absent"; } catch (e) { seen = "store-refused:" + (e.problem || code(e)); }
+  const scan = mcp.toolScan({ path: repo }); if (!scan.ok) throw new Error("scan failed: " + scan.error); // the client scans in this session first, as in call 1
   const r = await mcp.toolVerify({ path: repo, fingerprint: fp });
   log("call2", { recordStateSeen: seen, state: r.ok ? r.payload.state : "fail:" + String(r.error).slice(0, 100), outboundAttempted: outbound, externalTransmission: r.ok && r.payload.network ? r.payload.network.externalTransmission : null });
 }
