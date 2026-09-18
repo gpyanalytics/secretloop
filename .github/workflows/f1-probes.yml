@@ -494,6 +494,10 @@ jobs:
           Copy-Item tests\probes-f1\windows-acl-probes3.js "$LAB\p3.js"
           "--- real ACLs of the stock chain components (recorded for the validation record)"
           icacls C:\; icacls C:\Users
+          "--- filesystem of both volumes (fsutil needs elevation, so it is read here, not by the ordinary user)"
+          fsutil fsinfo volumeinfo C: | Select-String -Pattern "File System Name|Volume Name"
+          fsutil fsinfo volumeinfo $($env:RUNNER_TEMP.Substring(0,2)) | Select-String -Pattern "File System Name|Volume Name"
+          "--- architecture and OS build"; $env:PROCESSOR_ARCHITECTURE; [System.Environment]::OSVersion.VersionString
           "--- lab ACLs"; icacls $LAB; icacls "$LAB\priv"; icacls "$LAB\permissive"
           $pw1 | Out-File -NoNewline "$env:RUNNER_TEMP\r1.txt"; $pw2 | Out-File -NoNewline "$env:RUNNER_TEMP\r2.txt"
           "LAB3=$LAB" >> $env:GITHUB_ENV; "SID1=$sid1" >> $env:GITHUB_ENV; "SID2=$sid2" >> $env:GITHUB_ENV

@@ -147,11 +147,16 @@ const PS_SOURCE = [
   "  }catch{ $o.errorType=$_.Exception.GetType().FullName }",   // type name only: never a message, path or OS text
   "  [void]$out.Add((New-Object psobject -Property $o))",
   "}",
-  "ConvertTo-Json -InputObject @($out) -Depth 4 -Compress",
+  // One compact JSON object per line. PowerShell 5.1 unwraps a single-element array, so emitting one array
+  // would change shape with the number of paths; JSON Lines is the same shape for one path and for many.
+  "foreach($r in $out){ ConvertTo-Json -InputObject $r -Depth 4 -Compress }",
 ].join("\n");
 const PS_B64 = Buffer.from(PS_SOURCE, "utf16le").toString("base64");
 
 let psCalls = 0;
+// Probe-only diagnostic. A product would print none of this; it exists so a harness fault cannot be mistaken
+// for a security result. Truncated, and the helper is only ever given paths -- never record content.
+const probeRaw = (t) => String(t || "").slice(0, 400).replace(/\r?\n/g, " | ");
 function psInspect(paths) {
   psCalls++;
   if (!fs.existsSync(PS)) return { fail: "acl-tooling-unavailable" };
@@ -162,11 +167,15 @@ function psInspect(paths) {
   if (r.error) return { fail: "acl-tooling-unavailable", detail: r.error.code };
   if (r.status !== 0) return { fail: "acl-inspection-failed", detail: `exit ${r.status}` };
   if (!r.stdout || r.stdout.length > PS_MAX_OUTPUT) return { fail: "acl-inspection-failed", detail: "empty-or-oversized" };
-  let parsed; try { parsed = JSON.parse(r.stdout); } catch { return { fail: "acl-inspection-malformed" }; }
-  if (!Array.isArray(parsed)) return { fail: "acl-inspection-malformed" };
+  const lines = r.stdout.split(/\r?\n/).filter((l) => l.trim().length);
   const byPath = new Map();
-  for (const e of parsed) { if (e && typeof e.path === "string") byPath.set(e.path.toLowerCase(), e); }
-  for (const p of paths) if (!byPath.has(p.toLowerCase())) return { fail: "acl-inspection-malformed", detail: "missing-result" };
+  for (const ln of lines) {
+    let e; try { e = JSON.parse(ln); } catch { return { fail: "acl-inspection-malformed", raw: probeRaw(r.stdout) }; }
+    if (e && typeof e.path === "string") byPath.set(path.resolve(e.path).toLowerCase(), e);
+  }
+  for (const p of paths) if (!byPath.has(path.resolve(p).toLowerCase())) {
+    return { fail: "acl-inspection-malformed", detail: "missing-result", raw: probeRaw(r.stdout) };
+  }
   return { byPath };
 }
 const ownerAllowed = (sid, userSid) => sid === userSid || sid === SID_SYSTEM || sid === SID_ADMINS;
@@ -328,13 +337,18 @@ function facts() {
   log("filesystem", fsm ? fsm[1] : `unreadable (fsutil exit ${fsu.status})`);
   // the helper round-trip itself
   const t0 = Date.now(); const probe = psInspect([process.cwd()]); const ms = Date.now() - t0;
-  log("helper.round-trip", { ok: !probe.fail, ms, encodedCommandBytes: PS_B64.length, scriptIsConstant: true });
+  log("helper.round-trip", { ok: !probe.fail, ms, encodedCommandBytes: PS_B64.length, scriptIsConstant: true,
+                             fail: probe.fail, detail: probe.detail, raw: probe.raw });
+  if (probe.fail) { console.log("PROBE-ERROR: the inspection helper failed its own round trip -- NON-MEASUREMENT"); process.exit(2); }
+  const e = probe.byPath.get(path.resolve(process.cwd()).toLowerCase());
+  log("helper.sample", { ownerSidRead: !!e.ownerSid, sddlRead: !!e.sddl, protectedFlagRead: typeof e.protected === "boolean",
+                         reparseFlagRead: typeof e.isReparsePoint === "boolean" });
 }
 function chainMode() {
   const p = opt("--path"); const sid = currentSid();
   const parts = []; for (let q = path.dirname(path.resolve(p)); ; q = path.dirname(q)) { parts.unshift(q); if (path.dirname(q) === q) break; }
   const info = psInspect(parts);
-  if (info.fail) { log("chain", { fail: info.fail, detail: info.detail }); process.exit(2); }
+  if (info.fail) { log("chain", { fail: info.fail, detail: info.detail, raw: info.raw }); process.exit(2); }
   const c = checkChain(p, sid, info);
   log("chain.verdict", { ok: c.ok, reason: c.reason, failedAt: c.failedAt });
   for (const comp of c.components) {
@@ -346,7 +360,7 @@ function chainMode() {
 function inspectMode() {
   const p = path.resolve(opt("--path")); const sid = currentSid();
   const info = psInspect([p]);
-  if (info.fail) { log("inspect", { fail: info.fail, detail: info.detail }); process.exit(2); }
+  if (info.fail) { log("inspect", { fail: info.fail, detail: info.detail, raw: info.raw }); process.exit(2); }
   const e = info.byPath.get(p.toLowerCase());
   const st = has("--as-store") ? checkStoreObject(p, sid, info) : null;
   log("inspect", { exists: e.exists, isDirectory: e.isDirectory, reparse: e.isReparsePoint, owner: e.ownerSid,
