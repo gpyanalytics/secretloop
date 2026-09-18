@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
-import { binaryIdentity, BINARY_CONTRACT_VERSION } from "../src/report-metadata";
+import { binaryIdentity, BINARY_CONTRACT_VERSION, REPORT_SCHEMA_VERSION } from "../src/report-metadata";
 
 /**
  * THE INPUT CONTRACT OF `binaryIdentity`, AND THE TWO PRODUCTION GUARDS AROUND IT.
@@ -343,7 +343,7 @@ test("SCANNER: withholding leaves the rest of the report intact and findings unc
     assert.strictEqual(d.binaryDigest, undefined, "only the binary identity is withheld");
     assert.match(String(d.scopeDigest), /^scope:[0-9a-f]{16}$/, "the scope identity is untouched");
     assert.match(String(d.configDigest), /^[0-9a-f]{16}$/);
-    assert.strictEqual(d.schemaVersion, 4, "no schema change was needed");
+    assert.strictEqual(d.schemaVersion, REPORT_SCHEMA_VERSION, "this case changed no schema on its own");
     assert.deepStrictEqual(d.findings, [], "detection is unaffected");
   });
 });

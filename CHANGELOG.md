@@ -2,6 +2,120 @@
 
 ## Unreleased
 
+### Consent
+
+- **SecretLoop refuses to trust consent records when the consent directory
+  fails its private-store checks (macOS, Linux).** Before every consent
+  operation — reading a record at either `secretloop_verify` call, listing
+  for `secretloop approve`, approving, claiming, deleting and writing — the
+  store's two directories (`~/.secretloop` and its `pending`) must be real
+  directories, not symbolic links, owned by your account, with mode `0700`. A
+  directory you own that is too open is set to `0700` and re-checked; one
+  owned by another account is refused and never changed; a link is refused and
+  never followed. On refusal the MCP tool answers an error and `secretloop
+  approve` exits 2, both in fixed words that carry no path, record, hash or
+  OS message; nothing is transmitted, approved, written or claimed. Before
+  this change a failed `chmod` was swallowed and the store was used anyway —
+  measured (`consent-file-security-assessment`): in a root-owned
+  world-writable store another ordinary user could list record ids, plant
+  files beside them and rename records away.
+- **What this does not do, stated plainly.** It inspects the store's own two
+  directories, not the home directory above them or a component swapped
+  between the check and the next operation (a window open to any account that
+  can write the home directory — normally only you and root); it does not see
+  POSIX ACL entries, so "private" here means mode bits and ownership, not
+  every effective grant;
+  it changes nothing it does not own and never touches your home directory's
+  permissions; and it closes no window against a process already running as
+  you, which is the documented trust boundary. First use still creates the
+  store. A `.secretloop` that was already private is unaffected.
+- **Windows.** Ownership and mode fields are not meaningful there and are not
+  consulted; only the link/junction refusal applies — which is a behaviour
+  change: a store that was redirected through a junction or symbolic link
+  (for example `.secretloop` pointed at another drive) is now refused, with
+  the same fixed message; move the store back to a real directory under the
+  profile. Measured natively in CI: a junction at the store root and at
+  `pending` is refused on Windows. Measured on one elevated
+  NTFS runner with a second ordinary user: a default profile refused that user
+  every operation (the inherited profile ACL, not the `0600` mode, is the
+  control), and a store under a folder that grants other accounts let another
+  account read a record. No ACL is set or verified; **Windows ACL hardening
+  remains unresolved and needs an explicit release disposition.**
+- Compatibility: an existing store that is already a private directory needs
+  nothing. A store that is a link, is owned by another account, or cannot be
+  made private is refused with guidance to inspect it and move it aside, not
+  to delete it, loosen it, or run anything elevated.
+
+### Containment
+
+- **The scanner now checks the file it actually opened before reading it, and
+  says what it checked.** Both readers — the text reader and the binary
+  detectors' candidate reader, header probe included — inspect a file, capture
+  its device and inode, open it, and then compare the opened descriptor against
+  that identity before the first byte is read. On Linux they also read the
+  kernel's own record of the opened descriptor's path (`/proc/self/fd`) and
+  require it to lie under the scan root by path component. What this buys, in
+  plain terms: certain file substitutions between the inspection and the read
+  are **detected before anything is read**, an observed violation **refuses
+  the file**, and every scan **reports when a check could not run**.
+- **What is refused, and how it is reported.** A descriptor whose identity
+  differs from the inspected object is refused as **`replaced`** — a new skip
+  reason, disclosed as `N file(s) not scanned — replaced between inspection and
+  read`, counted as a coverage limitation, and making the report `incomplete`.
+  A descriptor whose kernel-recorded path is outside the root is refused with
+  the existing **`outside`** reason. A refusal on the binary probe's descriptor
+  refuses the whole file; the text reader is not tried again on that name.
+  Nothing is read from a refused descriptor. An ordinary per-file refusal never
+  stops the scan.
+- **New disclosure: `openedFileChecks`.** Every working-tree and staged scan
+  now accounts for each descriptor its readers opened for content — three per
+  ordinary file, one per reader — and what the two checks did on each:
+  `verified`, `refused`, `unavailable`, `failed` or `notReached`, for
+  `identity` and for `kernelPath`. It appears as `summary.coverage.openedFileChecks`
+  in JSON, in the SARIF invocation properties, in the MCP `scope` object and as
+  the **last clause of every scope sentence**, for example
+  `; 12 descriptor(s) opened for content: identity 12 verified; kernel path 12 unavailable`.
+  The clause is printed on every scan, all-verified included, so a sentence
+  without it cannot be mistaken for one where every check ran. A history scan
+  never runs these readers and omits the block. `unavailable` is disclosed but
+  is **not** a coverage limitation.
+- **The guarantee, stated exactly, and its limits.** On Linux with a readable
+  `/proc/self/fd`, for every descriptor the block records as `kernelPath:
+  verified`: no bytes are read from an object whose kernel-recorded location,
+  *at the check that immediately precedes its first read*, lies outside the
+  root. Every platform, for every descriptor recorded `identity: verified`: no
+  bytes are read from an object other than the one inspected one syscall
+  before the open. A descriptor recorded `unavailable` for a check **is read
+  without that check**, and the block says so; neither claim extends to it. It does **not** establish containment at the moment of the open,
+  throughout the read, or against every filesystem race — measured, not
+  supposed: an outside object moved under the root after the open and before
+  the check is accepted with its outside-origin bytes read; an inside object
+  moved out after the check is still read; the identity check alone cannot see
+  a parent replaced between path resolution and the identity capture (on
+  darwin and Windows there is no kernel path, so that case is read there and
+  the block says `kernel path N unavailable`); and content can change in place.
+  Windows and macOS therefore get **risk reduction**, not a Linux-equivalent
+  check. **F-1 Concern A remains open.** No native dependency, `openat2`
+  binding or broader filesystem policy was added.
+- **`schemaVersion` is now `5`.** The refusals above **widen what `incomplete`
+  counts**: a version-4 producer read a substituted object and said
+  `incomplete: false`; a version-5 producer says `true` for the same event. That
+  is the documented bump trigger, so the version moves. Consequences, measured
+  with real reports: a published 0.6.0 (schema-4) report is byte-for-byte what
+  it was; the comparator in this build refuses a schema-4 report **on either
+  side** with `unsupported-schema` (exit 3, no difference computed) — a 4/5
+  pair additionally reports `mixed-schema`, and a 4/4 pair is refused too;
+  two schema-5 reports of a stable tree compare exactly as before; a file
+  refused by the checks still makes its report `incomplete` and the pair
+  ineligible. `BINARY_CONTRACT_VERSION` (2) and `SCOPE_CONTRACT_VERSION` (1)
+  are unchanged: neither representation moved. The `openedFileChecks` block
+  itself is descriptive and lives under `summary.coverage`, never beside the
+  identities. On a stable tree, builds from either side produce byte-identical
+  findings, fingerprints and every comparison identity except `schemaVersion`;
+  the other differences are the new clause and the new block. Reading a scope
+  sentence that used to end at a known clause now
+  finds the accounting clause after it.
+
 ### Coverage
 
 - **The file-size cap now bounds the READ, not an earlier look at the name.**
@@ -45,10 +159,12 @@
   skipped as `unreadable` instead. Every value that is actually a number behaves
   exactly as before, `Infinity` included — measured across the default, the exact
   size, one under, zero, a negative, and fractional caps.
-- No report or digest contract changed: `REPORT_SCHEMA_VERSION` stays 4,
-  `BINARY_CONTRACT_VERSION` 2, `SCOPE_CONTRACT_VERSION` 1, and no new skip reason
-  was introduced — an over-cap file is still `oversized`, still counted, and
-  still makes the report incomplete.
+- This change on its own altered no report or digest contract:
+  `BINARY_CONTRACT_VERSION` stays 2, `SCOPE_CONTRACT_VERSION` 1, and it
+  introduced no new skip reason — an over-cap file is still `oversized`, still
+  counted, and still makes the report incomplete. (`REPORT_SCHEMA_VERSION`
+  was still 4 here; the containment entry above moves it to 5 in this same
+  release.)
 - **A file replaced by a named pipe during scanning no longer causes the
   validated reader path to wait indefinitely for a writer.** Both readers
   classify a path before opening it, so a FIFO that is already there was always

@@ -32,7 +32,15 @@ import {
   resolveConfigFile,
   globToRegExp,
 } from "./config";
-import { listFilesWithExclusions, findRepoRoot, SkipReason } from "./walk";
+import {
+  listFilesWithExclusions,
+  findRepoRoot,
+  SkipReason,
+  OpenedFileChecks,
+  CheckCounts,
+  emptyOpenedFileChecks,
+  recordOpenedFileCheck,
+} from "./walk";
 import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
 import { scanHistory, isGitRepo } from "./history";
 // Metadata only, and from verify-meta rather than verify: importing verify.ts
@@ -49,7 +57,9 @@ import { readTextFile } from "./walk";
 import { scanText } from "./scanner";
 import {
   CONSENT_VERSION,
+  CONSENT_STORE_GUIDANCE,
   ConsentRecord,
+  ConsentStoreError,
   commitmentOf,
   consumeRecord,
   deleteRecord,
@@ -119,10 +129,39 @@ export interface ScopeNotes {
   notAFileExcluded?: number;
   /** Files that were gone before they could be read. */
   vanishedExcluded?: number;
+  /** Files whose opened object was not the inspected one; nothing read. */
+  replacedExcluded?: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped?: number;
   /** What the scan met in the way of archives, counts only; omitted when none. */
   archives?: ArchiveAccounting;
+  /** The readers' per-descriptor check accounting; the last clause, always, when supplied. */
+  openedFileChecks?: OpenedFileChecks;
+}
+
+/**
+ * Must stay identical to describeCheckCounts / describeOpenedFileChecks in
+ * src/report.ts, for the reason every copy in this file exists: coupling by
+ * assertion across the bundle boundary, not by import. The pin is the
+ * openedFileChecks entries in the describeScope matrix of tests/mcp.test.ts
+ * and the parity case in tests/opened-file-checks.test.ts.
+ */
+function describeCheckCounts(counts: CheckCounts): string {
+  const parts: string[] = [];
+  if (counts.verified > 0) parts.push(`${counts.verified} verified`);
+  if (counts.refused > 0) parts.push(`${counts.refused} refused`);
+  if (counts.failed > 0) parts.push(`${counts.failed} failed`);
+  if (counts.unavailable > 0) parts.push(`${counts.unavailable} unavailable`);
+  if (counts.notReached > 0) parts.push(`${counts.notReached} not reached`);
+  return parts.join(", ");
+}
+
+function describeOpenedFileChecks(o: OpenedFileChecks): string {
+  if (o.opened === 0) return "0 descriptor(s) opened for content";
+  return (
+    `${o.opened} descriptor(s) opened for content: ` +
+    `identity ${describeCheckCounts(o.identity)}; kernel path ${describeCheckCounts(o.kernelPath)}`
+  );
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
@@ -137,8 +176,10 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     unreadableExcluded = 0,
     notAFileExcluded = 0,
     vanishedExcluded = 0,
+    replacedExcluded = 0,
     apiDocumentsScoped = 0,
     archives,
+    openedFileChecks,
   } = notes;
   let out =
     count === 0
@@ -190,6 +231,9 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   if (vanishedExcluded > 0) {
     out += `; ${vanishedExcluded} file(s) not scanned — gone before they could be read`;
   }
+  if (replacedExcluded > 0) {
+    out += `; ${replacedExcluded} file(s) not scanned — replaced between inspection and read`;
+  }
   // Archives, after every file clause and never folded into one: a member is
   // not a file, a stopped walk is not a refused member, and a container that
   // would not open is not an ordinary binary. Reasons live in the structured
@@ -212,6 +256,8 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     }
     if (notOpened > 0) out += `; ${notOpened} recognized archive container(s) not opened`;
   }
+  // Parity clause: a copy of report.ts's helper (see above), pinned by test.
+  if (openedFileChecks) out += `; ${describeOpenedFileChecks(openedFileChecks)}`;
   return out;
 }
 
@@ -582,6 +628,12 @@ export interface ScanScope {
   outsideExcluded: number;
   apiDocumentsScoped: number;
   archives?: ArchiveAccounting;
+  /**
+   * Every content descriptor the readers opened for this scan and what its
+   * identity and kernel-path checks did. Counts only, never a path. Always
+   * present for a working-tree scan; `opened: 0` is a statement.
+   */
+  openedFileChecks: OpenedFileChecks;
   statement: string;
 }
 
@@ -742,6 +794,12 @@ export function toolScan(input: ScanInput): ToolResult {
   let readNotAFile = 0;
   let readVanished = 0;
   let readOutside = 0;
+  let readReplaced = 0;
+  // Per-descriptor check accounting, recorded from the readers' own events
+  // the way the CLI records it, so both surfaces publish the same numbers.
+  const openedFileChecks = emptyOpenedFileChecks();
+  const onOpenedFileCheck = (check: Parameters<typeof recordOpenedFileCheck>[1]): void =>
+    recordOpenedFileCheck(openedFileChecks, check);
   // Exhaustive, like the CLI's. A reason nobody classified must not quietly
   // become "unreadable" on one surface and something else on the other.
   const countSkip = (reason: SkipReason): void => {
@@ -752,6 +810,7 @@ export function toolScan(input: ScanInput): ToolResult {
       case "vanished": readVanished++; break;
       case "unreadable": readUnreadable++; break;
       case "outside": readOutside++; break;
+      case "replaced": readReplaced++; break;
       default: {
         const never: never = reason;
         void never;
@@ -766,7 +825,7 @@ export function toolScan(input: ScanInput): ToolResult {
   };
   try {
     if (include.length === 0) {
-      const result = scanWorkspaceScan(root, config, { onSkipped: countSkip, onContainerNotOpened });
+      const result = scanWorkspaceScan(root, config, { onSkipped: countSkip, onContainerNotOpened, onOpenedFileCheck });
       scanned = result.scanned;
       generatedExcluded = result.generatedExcluded;
       walkerOutsideExcluded = result.outsideExcluded;
@@ -786,7 +845,7 @@ export function toolScan(input: ScanInput): ToolResult {
       }).files.filter((rel) => matchers.some((m) => m.test(rel)));
       const files = candidates.filter((rel) => classifyPath(rel, config) === "none");
       generatedExcluded = candidates.length - files.length;
-      scanned = scanFiles(root, files, config, { onSkipped: countSkip, onContainerNotOpened });
+      scanned = scanFiles(root, files, config, { onSkipped: countSkip, onContainerNotOpened, onOpenedFileCheck });
     }
   } catch (err) {
     return fail(`scan failed: ${quoteUntrusted((err as Error).message)}`);
@@ -819,6 +878,7 @@ export function toolScan(input: ScanInput): ToolResult {
     // Present only when a container was met, so a scan of a tree without
     // archives serializes exactly as it did before. Counts only, no paths.
     ...(archiveNotes ? { archives: archiveNotes } : {}),
+    openedFileChecks,
     // The one sentence that keeps an empty enumeration from reading as a
     // pass. Word-for-word the CLI's, and pinned to it by test rather than
     // by import — see the note on describeScope above.
@@ -848,7 +908,9 @@ export function toolScan(input: ScanInput): ToolResult {
       unreadableExcluded: readUnreadable,
       notAFileExcluded: readNotAFile,
       vanishedExcluded: readVanished,
+      replacedExcluded: readReplaced,
       archives: archiveNotes,
+      openedFileChecks,
     })}.`,
   };
 
@@ -1403,6 +1465,21 @@ function unknown(
 }
 
 export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
+  try {
+    return await toolVerifyInner(input);
+  } catch (err) {
+    // The consent store failed its private-store checks (src/consent.ts,
+    // assertPrivateStore). Refused as a whole, before any record is trusted,
+    // written, claimed or deleted, and before the provider boundary. The
+    // sentence is fixed text: no path, no record content, no OS message.
+    if (err instanceof ConsentStoreError) {
+      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${CONSENT_STORE_GUIDANCE}`);
+    }
+    throw err;
+  }
+}
+
+async function toolVerifyInner(input: VerifyInput): Promise<ToolResult> {
   // Type validation first, before any filesystem access, on both arguments.
   if (typeof input?.fingerprint !== "string" || input.fingerprint.trim().length === 0) {
     return fail("fingerprint is required and must be a non-empty string.");

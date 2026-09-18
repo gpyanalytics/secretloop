@@ -111,6 +111,9 @@ sentence and the JSON `summary` carry:
 | `N file(s) not scanned — could not be read` | **New in 0.6.0.** The scan intended to read them and could not — permission, I/O, or a supported binary format it could not conclusively inspect |
 | `N path(s) not scanned — not a regular file` | **New in 0.6.0.** A directory, fifo, socket or device where a file was expected |
 | `N file(s) not scanned — gone before they could be read` | **New in 0.6.0.** Enumerated, then absent by the time the read reached them |
+| `N file(s) not scanned — replaced between inspection and read` | **Unreleased.** The object the reader opened was not the object it had just inspected (device or inode differed). A positive observation of a substitution — outside content, or an inside file saved over the name in that instant; the check cannot tell which — and nothing is read from it. Counts against completeness |
+| `N file(s) excluded (symlinks resolving outside the scan root)` also counts, **Unreleased**, a file whose opened descriptor the Linux kernel records as located outside the root at the check before its first read | Same clause and reason as the symlink case: the object is outside |
+| `N descriptor(s) opened for content: identity …; kernel path …` | **Unreleased.** Always the last clause, printed on every working-tree and staged scan. What the readers' own checks did on each descriptor they opened — see [Opened-file checks](#opened-file-checks) |
 | `N file(s) not scanned — binary or unreadable` | **0.5.1 and earlier; no longer emitted.** The single combined clause the four rows above replace. It makes the report incomplete, binary files included |
 | `N archive(s) opened — M member(s) scanned` | containers opened, members offered to the scanner |
 | `N archive member(s) not scanned` | members refused; reasons in `summary.archives.members.refused` |
@@ -123,6 +126,56 @@ The structured object behind the archive clauses (`summary.archives` in JSON,
 `invocations[0].properties.archives` in SARIF, `scope.archives` over MCP)
 carries the same counts with the bounded reason codes. Counts only: no path,
 member name or value.
+
+## Opened-file checks
+
+**Unreleased.** Before a reader reads a byte from a file it opened, it checks
+the descriptor it holds — not the name it resolved. The accounting is per
+**descriptor**, not per file: an ordinary file is opened by three readers (the
+PKCS#12 probe, the archive probe and the text reader), each on its own
+descriptor, each checked and counted separately. Approval is never carried from
+one open to the next, and a file served from an editor buffer opens nothing.
+
+| check | what it does | outcomes |
+|---|---|---|
+| `identity` (all platforms) | the device and inode captured by `lstat` one syscall before the open must equal `fstat` of the descriptor | `verified`; `refused` (file skipped as `replaced`); `unavailable` (the inspected object reported no identity — dev 0, ino 0 — and the read continued); `failed` (`fstat` itself failed; file skipped `unreadable`); `notReached` (refused before this check, e.g. not a regular file after the open) |
+| `kernelPath` (Linux, procfs) | the kernel's own path for the descriptor, `/proc/self/fd/N`, read raw and compared by path component against the canonical root — never by string prefix, and never with the ` (deleted)` suffix stripped | `verified`; `refused` (file skipped as `outside`); `unavailable` (not Linux, or no readable `/proc/self/fd`; the read continued under the identity check alone); `failed` (procfs present but this descriptor's link unreadable; file skipped `unreadable`); `notReached` |
+
+For each check, `verified + refused + unavailable + failed + notReached` equals
+`opened`. Counts only ever grow during a scan: a capability that stops working
+part-way leaves the earlier `verified` and the later `unavailable` side by side,
+and a later successful check never erases an earlier gap. `verified` is written
+only after the comparison or the link read actually succeeded on that
+descriptor; it is never inferred from the platform name.
+
+The block appears as `summary.coverage.openedFileChecks` in JSON,
+`invocations[0].properties.openedFileChecks` in SARIF and `scope.openedFileChecks`
+over MCP, and the scope sentence carries it as its last clause. A working-tree
+or staged scan that opened nothing says `0 descriptor(s) opened for content` —
+a statement. A history scan never runs these readers and carries no block at
+all — an absence, in the sense the report format gives it.
+
+`refused` and `failed` each also produce a per-file skip that is a coverage
+limitation. `unavailable` is disclosed and is **not** a limitation: the read
+happened under the checks that were possible, and the block says which.
+
+**What the checks establish, exactly — per descriptor, as recorded.** For a
+descriptor recorded `kernelPath: verified`: no bytes were read from it before its
+kernel-recorded location, at the check that immediately precedes its first read,
+was found inside the root. For a descriptor recorded `identity: verified`: every
+byte read came from the object inspected one syscall before the open. A
+descriptor recorded `unavailable` for a check **was read without that check** —
+on darwin and Windows that is every descriptor for the kernel path, and on a
+volume that reports no inode it is every descriptor for identity — and the block
+is where that is said; nothing is claimed for it. **What they do not establish:** containment at
+the moment of the open (an outside object moved under the root after the open
+and before the check is accepted, and its bytes are read), containment
+throughout the read (an inside object moved out after the check is still read),
+the parent-replacement case where there is no kernel path (a parent swapped
+between path resolution and the identity capture is read on darwin and
+Windows), or content stability. These are measured results, recorded in the
+project's containment design records. On darwin and Windows the identity check
+is risk reduction, not a Linux-equivalent check. F-1 Concern A remains open.
 
 ## What is deliberately not scanned
 

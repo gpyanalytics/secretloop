@@ -22,7 +22,7 @@ illustrative, not a claim about which release carries these fields.
   "tool": "secretloop",
 
   // Comparison-bearing. See the rule below: an absent key means UNKNOWN.
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "toolVersion": "0.5.1",
   "root": "git:af829fc833133fca",
   "configDigest": "3071344b11905ec5",
@@ -43,6 +43,13 @@ illustrative, not a claim about which release carries these fields.
     "scopeNoun": "file",
     "coverage": {                    // DESCRIPTIVE, not comparison-bearing
       "limitations": [],
+      // Unreleased: per-descriptor check accounting for the readers this scan
+      // ran (see coverage.md, "Opened-file checks"); absent for a history scan
+      "openedFileChecks": {
+        "opened": 6,
+        "identity":   { "verified": 6, "refused": 0, "unavailable": 0, "failed": 0, "notReached": 0 },
+        "kernelPath": { "verified": 0, "refused": 0, "unavailable": 6, "failed": 0, "notReached": 0 }
+      },
       "suppression": {
         "allowValuesCount": 0,
         "baselineApplied": false,
@@ -91,7 +98,7 @@ refuse the comparison**, never as "the same". The same applies to a
 
 `schemaVersion` is bumped when the **meaning** of one of these changes — what a
 digest covers, what `incomplete` counts, or the set of required fields. Adding a
-descriptive field does not bump it. **It is `4`**:
+descriptive field does not bump it. **It is `5`**:
 
 - version 1 had no `scopeDigest`, so a version-1 report cannot be shown to have
   examined any particular population;
@@ -101,10 +108,18 @@ descriptive field does not bump it. **It is `4`**:
   the binary set between two scans while every comparison field stayed equal —
   so a still-present credential could read as removed;
 - version 4 adds **`binaryDigest`**, making the excluded set part of
-  eligibility, which closes that.
+  eligibility, which closes that;
+- version 5 (**Unreleased**) **widens what `incomplete` counts**: a file refused
+  by the opened-file checks — `replaced`, a kernel-path `outside`, or failed
+  check evidence — is a coverage limitation. A version-4 producer read such an
+  object and said `incomplete: false`; a version-5 producer says `true` for the
+  same event, so the two booleans are not equivalent and the version moves.
 
-**Versions 1, 2 and 3 are unsupported by this contract.** A consumer
-implementing it accepts `4` and rejects everything else. The boolean fields
+**Versions 1 to 4 are unsupported by this contract.** A consumer implementing
+it accepts `5` and rejects everything else — including a pair of two version-4
+reports, not only a mixed pair. Published 0.6.0 reports are version 4 and stay
+exactly as they were written; they are simply ineligible against this contract,
+and against each other under this comparator. The boolean fields
 still type-check under every version, so nothing but the version number stops
 reports written against different meanings from comparing as though they agreed.
 
@@ -282,7 +297,21 @@ suppression identity.
 look at**: a file over `maxFileSizeBytes`, a file it could not read, a path that
 was not a regular file or had vanished, a symlink refused by the containment
 guard, an archive it could not finish enumerating, a container it could not
-open, or a run that was stopped.
+open, or a run that was stopped. **Unreleased:** also a file whose opened
+descriptor was not the object just inspected (`replaced`), or whose
+kernel-recorded location was outside the root at the check before its first
+read (`outside`), or whose check evidence could not be obtained (`unreadable`).
+These change what `incomplete` counts — a version-4 producer read such an object
+and said `false`; a version-5 producer says `true` for the same event — and that
+is the bump trigger the rule above names, so **`REPORT_SCHEMA_VERSION` is 5**. The
+direction is conservative and stable-tree reports from either side carry equal
+identities, but a version-4 `false` may be describing a scan that read a
+substituted object, and the version is what stops it comparing as equivalent to
+a version-5 `false`. The cost is the documented one: every version-4 report is
+ineligible against a version-5 report, and this comparator refuses version-4
+reports on both sides. A
+check that was **unavailable** on the platform is disclosed in
+`summary.coverage.openedFileChecks` and does **not** make the report incomplete.
 
 Deliberate policy is **not** incompleteness. Generated-file exclusions, fixture
 suppression, API-document scoping and configured `excludePaths` are decisions;
@@ -674,6 +703,15 @@ producer cannot close it, which is why the list is normative here.
 decide it, and **two equal coverage blocks do not make two scans comparable**.
 Nothing in it may be used as an identity — least of all `inlineSuppressed`, for
 the reason in the table above.
+
+`summary.coverage.openedFileChecks` (**Unreleased**) is descriptive in the same
+way. Two complete reports whose blocks differ — one scanned on Linux with the
+kernel-path check verified, one on macOS with it unavailable — remain
+comparable, exactly as every report written before the block existed compares
+today; the difference is visible in each report and is not an identity. A
+check **refusal** makes the report `incomplete` and therefore ineligible,
+because the scan did not cover that file. The comparator reads nothing from
+this block.
 
 ## Compatibility
 

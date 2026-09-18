@@ -1,0 +1,37 @@
+{
+  "tool": "secretloop",
+  "schemaVersion": 4,
+  "toolVersion": "0.6.0",
+  "root": "git:76cf1248661eeb1f",
+  "configDigest": "3071344b11905ec5",
+  "ruleSetDigest": "c6f8fdd1265654d9",
+  "suppressionDigest": "be50e2eac01c5e68",
+  "scopeDigest": "scope:4a9f5bca6cba1480",
+  "binaryDigest": "binary:61b74cdb9db4e86c",
+  "incomplete": false,
+  "summary": {
+    "total": 0,
+    "scope": "2 file(s)",
+    "scannedCount": 2,
+    "scopeNoun": "file",
+    "coverage": {
+      "limitations": [],
+      "suppression": {
+        "allowValuesCount": 0,
+        "baselineApplied": false,
+        "inlineSuppressed": 0,
+        "inlineSuppressedWithReason": 0,
+        "unidentified": []
+      }
+    },
+    "confirmedLive": 0,
+    "bySeverity": {},
+    "byLiveness": {
+      "live": 0,
+      "dead": 0,
+      "unknown": 0,
+      "unchecked": 0
+    }
+  },
+  "findings": []
+}

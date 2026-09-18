@@ -333,8 +333,9 @@ test("a FIFO is refused promptly by both readers, without blocking on open", () 
  * (f1-containment-design, E2), the reader hung until its process was killed.
  *
  * These cases replace the file INSIDE the product's own pre-open type check --
- * a wrapper around fs.statSync (text) or fs.lstatSync (binary), fired once,
- * after the real call -- so the replacement lands exactly in the window, on
+ * a wrapper around fs.lstatSync, the pre-open type check of both readers
+ * since the identity capture, fired once after the real call -- so the
+ * replacement lands exactly in the window, on
  * the unchanged source and on the corrected one alike. That is what makes the
  * result discriminating: the trigger reaches the same operation in both
  * builds, and a build that blocks fails on the TIMEOUT below rather than
@@ -366,11 +367,16 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
     const probe = () => { const fd = fs.openSync(lab, "r"); fs.closeSync(fd); return fd; }; // the lab directory: present before and after, never the swapped path
     const before = probe();
     // Fire once, after the product's own pre-open type check on THIS path.
-    const name = ${JSON.stringify(mode === "text" ? "statSync" : "lstatSync")};
+    // Both readers make that check with lstat since the identity capture
+    // arrived: the binary reader on the enumerated name, the text reader on
+    // the RESOLVED name (the lab may sit behind a symlinked temp directory),
+    // so either spelling is the product's call on this file.
+    const targets = new Set([p, fs.realpathSync(p)]);
+    const name = "lstatSync";
     const real = fs[name]; let fired = false;
     fs[name] = function (...a) {
       const r = real.apply(this, a);
-      if (!fired && String(a[0]) === p) { fired = true; fs.unlinkSync(p); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); }
+      if (!fired && targets.has(String(a[0]))) { fired = true; fs.unlinkSync(p); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); }
       return r;
     };
     const s = (r) => (r && typeof r === "object" && "skipped" in r ? r.skipped : ("text" in r ? "TEXT" : "BYTES"));

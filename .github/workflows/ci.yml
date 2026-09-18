@@ -19,6 +19,19 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run compile
+      - name: Foreign-owned consent-store fixture (root-owned, world-writable; the suite runs as the ordinary runner user)
+        # The one case that needs elevation to SET UP: a store this account does
+        # not own and cannot chmod. tests/consent-store.test.ts reads the path
+        # from the variable and asserts the refusal; without the variable it
+        # skips with its reason. Failure to create the fixture fails the job
+        # here rather than becoming a silent skip later.
+        run: |
+          set -e
+          F="$RUNNER_TEMP/foreign-consent-store"
+          sudo mkdir -p "$F/pending"
+          sudo chmod 777 "$F" "$F/pending"
+          test "$(stat -c %u "$F")" = "0" && test "$(stat -c %a "$F")" = "777"
+          echo "SECRETLOOP_FOREIGN_STORE_FIXTURE=$F" >> "$GITHUB_ENV"
       - run: npm test
 
   test-windows:

@@ -102,7 +102,7 @@ const PATTERNS: Record<string, RegExp> = {
 function eligible(a: any, b: any): { ok: boolean; why: string[] } {
   const why: string[] = [];
   for (const r of [a, b]) {
-    if (r?.schemaVersion !== 4) why.push(`unsupported schemaVersion ${r?.schemaVersion}`);
+    if (r?.schemaVersion !== REPORT_SCHEMA_VERSION) why.push(`unsupported schemaVersion ${r?.schemaVersion}`);
     if (r?.incomplete !== false) why.push("incomplete is not false in both");
   }
   if (a?.toolVersion !== b?.toolVersion) why.push("toolVersion differs");
@@ -380,10 +380,12 @@ test("the schema version moved, so the two meanings cannot silently compare", ()
   // changes — explicitly including "what `incomplete` counts". A version-2
   // report saying `incomplete: true` may describe nothing worse than an image;
   // a version-3 report saying the same describes a real failure to look.
-  assert.strictEqual(REPORT_SCHEMA_VERSION, 4);
+  // 4 -> 5 moved it again for the same trigger in the other direction: the
+  // opened-file check refusals WIDENED what `incomplete` counts.
+  assert.strictEqual(REPORT_SCHEMA_VERSION, 5);
   withDir((dir) => {
     writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n");
-    assert.strictEqual(json(dir).schemaVersion, 4, "emitted reports must carry the new version");
+    assert.strictEqual(json(dir).schemaVersion, 5, "emitted reports must carry the new version");
   });
 });
 
@@ -395,7 +397,7 @@ test("the same tree that was incomplete under v2 is complete under v4, and says 
     // Under schema 2 this exact tree reported incomplete: true with
     // ["1 file(s) not scanned — binary or unreadable"]. Both changed together —
     // which is precisely why the version had to move with them.
-    assert.strictEqual(d.schemaVersion, 4);
+    assert.strictEqual(d.schemaVersion, REPORT_SCHEMA_VERSION);
     assert.strictEqual(d.incomplete, false);
     assert.deepStrictEqual(d.summary.coverage.limitations, []);
     assert.match(d.summary.scope, /not scanned — binary/);
@@ -590,7 +592,7 @@ test("PRODUCER TRACE: only a producer that observes exclusions claims the set", 
 
 test("REFERENCE MODEL: invalid, missing or mismatched binaryDigest is rejected", () => {
   const base = {
-    schemaVersion: 4, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
+    schemaVersion: REPORT_SCHEMA_VERSION, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
     configDigest: "b".repeat(16), ruleSetDigest: "c".repeat(16),
     suppressionDigest: "d".repeat(16), scopeDigest: "scope:" + "e".repeat(16),
     binaryDigest: "binary:" + "f".repeat(16), incomplete: false,
@@ -617,7 +619,7 @@ test("REFERENCE MODEL: invalid, missing or mismatched binaryDigest is rejected",
 
 test("REFERENCE MODEL: schema versions 1, 2 and 3 are unsupported", () => {
   const ok = {
-    schemaVersion: 4, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
+    schemaVersion: REPORT_SCHEMA_VERSION, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
     configDigest: "b".repeat(16), ruleSetDigest: "c".repeat(16),
     suppressionDigest: "d".repeat(16), scopeDigest: "scope:" + "e".repeat(16),
     binaryDigest: "binary:" + "f".repeat(16), incomplete: false,
@@ -638,7 +640,7 @@ test("REFERENCE MODEL: a partial scan cannot claim complete accounting", () => {
   // incomplete gates before binaryDigest is ever consulted, so an interrupted
   // or failed scan is ineligible regardless of what set it managed to observe.
   const base = {
-    schemaVersion: 4, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
+    schemaVersion: REPORT_SCHEMA_VERSION, toolVersion: "0.5.1", root: "git:" + "a".repeat(16),
     configDigest: "b".repeat(16), ruleSetDigest: "c".repeat(16),
     suppressionDigest: "d".repeat(16), scopeDigest: "scope:" + "e".repeat(16),
     binaryDigest: "binary:" + "f".repeat(16), incomplete: true,
@@ -665,8 +667,8 @@ test("a report that still cannot look is incomplete under v4 too", () => {
     writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n");
     writeAdmittedDer(dir, "store.p12");
     const d = json(dir);
-    assert.strictEqual(d.schemaVersion, 4);
-    assert.strictEqual(d.incomplete, true, "v4 must not have weakened real failures");
+    assert.strictEqual(d.schemaVersion, REPORT_SCHEMA_VERSION);
+    assert.strictEqual(d.incomplete, true, "later versions must not have weakened real failures");
   });
 });
 

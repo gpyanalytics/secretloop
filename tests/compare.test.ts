@@ -147,7 +147,7 @@ test("null, wrong type, empty and malformed values are each rejected", () => {
     ["binaryDigest", `scope:${hex("f")}`], ["binaryDigest", "binary:zz"],
     ["toolVersion", ""], ["toolVersion", "  "], ["toolVersion", 5],
     ["incomplete", "false"], ["incomplete", 0], ["incomplete", null],
-    ["schemaVersion", "4"], ["schemaVersion", 4.5], ["schemaVersion", null],
+    ["schemaVersion", "5"], ["schemaVersion", 5.5], ["schemaVersion", null],
   ];
   for (const [field, value] of cases) {
     const r = cmp(report(), report({ [field]: value }));
@@ -198,8 +198,12 @@ test("incomplete on either side, or both, rejects the pair", () => {
 // ---------------------------------------------------------------------------
 suite("\ncompare (unit) — schema versions");
 
-test("schemas 1, 2 and 3 are rejected even when both sides agree", () => {
-  for (const v of [1, 2, 3]) {
+test("schemas 1 to 4 are rejected even when both sides agree", () => {
+  // 4 joined this list when `incomplete` widened (the opened-file check
+  // refusals): two schema-4 reports agree with each other and are still not
+  // this contract. tests/report-schema-version.test.ts drives the same refusal
+  // through the CLI with a real published 0.6.0 report.
+  for (const v of [1, 2, 3, 4]) {
     const r = cmp(report({ schemaVersion: v }), report({ schemaVersion: v }));
     assert.strictEqual(r.comparable, false, `schema ${v} must reject`);
     assert.ok(codes(r).includes("unsupported-schema"));
@@ -207,7 +211,7 @@ test("schemas 1, 2 and 3 are rejected even when both sides agree", () => {
 });
 
 test("unknown future versions are rejected rather than guessed at", () => {
-  for (const v of [5, 6, 99, 1000]) {
+  for (const v of [6, 7, 99, 1000]) {
     const r = cmp(report({ schemaVersion: v }), report({ schemaVersion: v }));
     assert.strictEqual(r.comparable, false, `schema ${v} must reject`);
     assert.ok(codes(r).includes("unsupported-schema"));

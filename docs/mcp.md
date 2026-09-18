@@ -64,7 +64,11 @@ has no input of its own for the tier. The current count is in
 
   **What it establishes:** which working-tree scan of which root produced these
   findings, and what that scan inspected — `filesScanned`, `outsideExcluded`,
-  `apiDocumentsScoped`, any `archives` accounting, and the scope sentence.
+  `apiDocumentsScoped`, any `archives` accounting, the scope sentence and
+  (**Unreleased**) `openedFileChecks`, the per-descriptor accounting of the
+  readers' identity and kernel-path checks — counts only, no path — described
+  in [coverage](coverage.md#opened-file-checks). The scope statement ends with
+  the same accounting as its last clause.
 
   **What it does not establish:** freshness. `source: "session-cache"` and
   `scannedAt` already say these findings describe an *earlier* observation, and
@@ -186,6 +190,31 @@ disclose transmission explicitly:
 mode `0600` and hold hashes, but any process running as you can read and write
 them. This protects against a hostile repository and an over-eager or compromised
 agent, not against malware already running under your account.
+
+**The store is checked before it is trusted** (**Unreleased**). On macOS and
+Linux every consent operation — reading a record at either call, listing for
+`secretloop approve`, approving, claiming and deleting — first requires
+`~/.secretloop` and `~/.secretloop/pending` to be real directories (not
+symbolic links) owned by your account with mode `0700`. A directory you own
+that is too open is set to `0700` and re-checked; one owned by another account
+is never changed and is refused; a link is never followed. When the check
+fails, `secretloop_verify` answers with an error in fixed words (no path,
+record, hash or OS message) and transmits nothing, and `secretloop approve`
+refuses with the same words and approves nothing. The check covers the store's
+two directories only, by mode bits and ownership: it does not see POSIX ACL
+entries (an ACL grant to another account passes), and it does not close a
+window against a process already running as you or against any account that
+can write your home directory. A missing `pending` directory under an
+existing, private `.secretloop` is not an error; it is recreated on the next
+request. If you meet the refusal on a
+store you did not create, move it aside rather than deleting or loosening it,
+and ask the client to request the verification again. **Windows:** the check
+refuses a junction or link — so a store redirected to another drive through a
+junction is refused until it is moved back to a real directory — but reads no
+ownership or mode, because those are not meaningful there; the records' protection is the inherited ACL of your
+profile folder — in the tested setup a default profile refused another
+ordinary user, and a folder that grants other accounts let another account
+read a record. No ACL is set; that is an open release decision.
 
 Your client's own approval dialog governs whether the assistant may *call*
 these tools at all. That is your client's control, not SecretLoop's consent
