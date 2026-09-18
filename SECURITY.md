@@ -43,6 +43,26 @@ If your policy is that no credential leaves the machine, all three have to be
 closed: do not pass `--verify`, pin `secretloop.enableLiveVerification` off, and
 either do not connect the MCP server or never approve a request.
 
+The consent records behind that gate live in `.secretloop` under your home
+directory and hold a hash of the credential, never the credential. **On macOS
+and Linux, SecretLoop refuses to trust, write, approve or claim a consent
+record when that directory or its `pending` directory fails its private-store
+checks** — it must be a real directory (not a symbolic link) owned by your
+account with mode `0700`; a directory you own that is too open is set to `0700`
+and re-checked, and a directory owned by another account is refused rather than
+changed. The refusal names the problem in fixed words and says what to do; it
+never prints a path, a record or an OS error. This is the trust boundary the
+tool has always documented, now enforced instead of assumed. It inspects the
+store's own two directories by mode bits and ownership, not the path above
+them; it does not see POSIX ACL entries, so an ACL grant to another account is
+not detected; and it closes no window against a process already running as
+you or against any account that can write your home directory. **On
+Windows the records' protection is the inherited ACL of your profile folder,
+not a file mode:** in the tested setup another ordinary user was refused on a
+default profile, and a store under a folder that grants other accounts let
+another account read a record. SecretLoop sets no ACL there; that remains an
+open decision for a future release.
+
 Eighteen of the rules have a verifier, covering fifteen providers. A credential
 matched by any other rule is never transmitted, whatever the flag says. One of
 those eighteen never transmits either: `sk_live_`/`sk_test_` is issued by more
