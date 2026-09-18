@@ -21,13 +21,21 @@
   files beside them and rename records away.
 - **What this does not do, stated plainly.** It inspects the store's own two
   directories, not the home directory above them or a component swapped
-  between the check and the next operation; it does not see POSIX ACL entries;
+  between the check and the next operation (a window open to any account that
+  can write the home directory — normally only you and root); it does not see
+  POSIX ACL entries, so "private" here means mode bits and ownership, not
+  every effective grant;
   it changes nothing it does not own and never touches your home directory's
   permissions; and it closes no window against a process already running as
   you, which is the documented trust boundary. First use still creates the
   store. A `.secretloop` that was already private is unaffected.
 - **Windows.** Ownership and mode fields are not meaningful there and are not
-  consulted; only the link/junction refusal applies. Measured on one elevated
+  consulted; only the link/junction refusal applies — which is a behaviour
+  change: a store that was redirected through a junction or symbolic link
+  (for example `.secretloop` pointed at another drive) is now refused, with
+  the same fixed message; move the store back to a real directory under the
+  profile. Measured natively in CI: a junction at the store root and at
+  `pending` is refused on Windows. Measured on one elevated
   NTFS runner with a second ordinary user: a default profile refused that user
   every operation (the inherited profile ACL, not the `0600` mode, is the
   control), and a store under a folder that grants other accounts let another

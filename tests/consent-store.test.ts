@@ -161,6 +161,39 @@ test("a healthy store: legitimate approval is honoured once, consumed, and a rep
   });
 });
 
+test("an existing private store whose pending directory is gone is 'no record', and the next request recreates it", async () => {
+  // A user who removed only `pending` (or an older layout) must not be refused
+  // as "inaccessible": the store directory is checked, the missing pending
+  // directory reads as empty, and the first call creates it again. The base
+  // behaved this way too; this pins that the check did not regress it.
+  await withWorkspace(async (ctx) => {
+    mkdirSync(ctx.store, { recursive: true, mode: 0o700 });
+    if (POSIX) chmodSync(ctx.store, 0o700);
+    assert.strictEqual(consent.readRecord(consent.recordId(ctx.fingerprint, ctx.root)), null);
+    assert.deepStrictEqual(consent.listRecords(), []);
+    const r = await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint }) as any;
+    assert.strictEqual(r.ok, true, JSON.stringify(r));
+    assert.strictEqual(r.payload.state, "CONSENT_REQUIRED");
+    assert.ok(lstatSync(path.join(ctx.store, "pending")).isDirectory());
+    if (POSIX) assert.strictEqual(mode(path.join(ctx.store, "pending")), 0o700);
+    assert.strictEqual(wire.count, 0);
+  });
+});
+
+test("an existing store that fails its own check is refused even when pending is gone -- absence never means safe", async () => {
+  await withWorkspace(async (ctx) => {
+    const target = path.join(ctx.base, "elsewhere");
+    mkdirSync(target, { recursive: true });
+    symlinkSync(target, ctx.store, POSIX ? "dir" : "junction");
+    let err: unknown = null;
+    try { consent.readRecord(consent.recordId(ctx.fingerprint, ctx.root)); } catch (e) { err = e; }
+    assert.ok(err instanceof consent.ConsentStoreError && err.problem === "symlink");
+    const r = await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint }) as any;
+    assert.strictEqual(r.ok, false);
+    assert.deepStrictEqual(readdirSync(target), [], "nothing was created behind the link");
+  });
+});
+
 test("reads on a store that does not exist mean 'no record', not an unsafe store", () => {
   const base = mkdtempSync(path.join(tmpdir(), "secretloop-store-absent-"));
   try {

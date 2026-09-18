@@ -157,14 +157,17 @@ export const CONSENT_STORE_GUIDANCE =
  *
  * WHAT THIS DOES NOT ESTABLISH, stated so it is not read as more:
  *   - It inspects the final components only. The path above `.secretloop` is
- *     the home directory, whose permissions are the user's and are not changed
- *     here; a component swapped between this check and the operation that
- *     follows is not caught. That window is open only to an account that can
- *     already write those paths, which is the same-user trust boundary the
- *     documentation states.
+ *     the home directory, whose permissions are the user's and are not
+ *     inspected or changed here; a component swapped between this check and
+ *     the operation that follows is not caught. That window is open to any
+ *     account that can write the home directory -- normally only this account
+ *     and root, which is the documented trust boundary; a home directory that
+ *     is itself writable by others widens it, and this check does not see that.
  *   - Mode bits do not show POSIX ACL entries (Linux setfacl, macOS chmod +a).
- *     A directory with mode 0700 and an ACL granting another account passes.
- *     No claim is made about ACLs on POSIX.
+ *     A directory with mode 0700 and an ACL granting another account passes,
+ *     and that account can then read, plant or replace records. So "only this
+ *     account can reach the records" is established here only up to the mode
+ *     bits and ownership; no claim is made about ACLs on POSIX.
  *   - Windows: ownership and mode fields from Node are not meaningful and are
  *     not consulted; only the symbolic-link/junction refusal applies. The
  *     records' protection there is the inherited ACL of the profile directory
@@ -173,33 +176,45 @@ export const CONSENT_STORE_GUIDANCE =
  *     verified here; that remains an open release decision.
  */
 export function assertPrivateStore(): void {
-  for (const dir of [consentDir(), pendingDir()]) {
-    let st;
+  for (const dir of [consentDir(), pendingDir()]) assertPrivateDir(dir);
+}
+
+/**
+ * True when the readers may answer "no record" without a store check: the
+ * path does not exist and is not a symbolic link. A dangling link is not
+ * "absent" -- it is a link, and the check refuses it.
+ */
+function absent(p: string): boolean {
+  return !existsSync(p) && !isSymlink(p);
+}
+
+/** One directory against the policy above. */
+function assertPrivateDir(dir: string): void {
+  let st;
+  try {
+    st = lstatSync(dir);
+  } catch {
+    throw new ConsentStoreError("inaccessible");
+  }
+  if (st.isSymbolicLink()) throw new ConsentStoreError("symlink");
+  if (!st.isDirectory()) throw new ConsentStoreError("not-a-directory");
+  if (process.platform === "win32" || typeof process.geteuid !== "function") return;
+  if (st.uid !== process.geteuid()) throw new ConsentStoreError("foreign-owner");
+  if ((st.mode & 0o077) !== 0) {
+    // Owner-owned and permissive: repair, then re-verify rather than assume.
     try {
-      st = lstatSync(dir);
+      chmodSync(dir, 0o700);
+    } catch {
+      throw new ConsentStoreError("permissive");
+    }
+    let after;
+    try {
+      after = lstatSync(dir);
     } catch {
       throw new ConsentStoreError("inaccessible");
     }
-    if (st.isSymbolicLink()) throw new ConsentStoreError("symlink");
-    if (!st.isDirectory()) throw new ConsentStoreError("not-a-directory");
-    if (process.platform === "win32" || typeof process.geteuid !== "function") continue;
-    if (st.uid !== process.geteuid()) throw new ConsentStoreError("foreign-owner");
-    if ((st.mode & 0o077) !== 0) {
-      // Owner-owned and permissive: repair, then re-verify rather than assume.
-      try {
-        chmodSync(dir, 0o700);
-      } catch {
-        throw new ConsentStoreError("permissive");
-      }
-      let after;
-      try {
-        after = lstatSync(dir);
-      } catch {
-        throw new ConsentStoreError("inaccessible");
-      }
-      if (after.isSymbolicLink() || !after.isDirectory() || after.uid !== process.geteuid() || (after.mode & 0o077) !== 0) {
-        throw new ConsentStoreError("permissive");
-      }
+    if (after.isSymbolicLink() || !after.isDirectory() || after.uid !== process.geteuid() || (after.mode & 0o077) !== 0) {
+      throw new ConsentStoreError("permissive");
     }
   }
 }
@@ -321,10 +336,14 @@ function parseRecord(file: string): ConsentRecord | null {
  * would write a fresh pending record into a store it should not use.
  */
 export function readRecord(id: string): ConsentRecord | null {
-  // A store that has never been created holds no record; a store that IS
-  // there, or is a link pretending to be, must pass the checks first.
-  if (!existsSync(consentDir()) && !isSymlink(consentDir())) return null;
-  assertPrivateStore();
+  // A store that has never been created holds no record, and so does a
+  // store whose pending directory is gone (it is recreated on the next
+  // write); whatever IS there, or is a link pretending to be, must pass the
+  // checks first. "Absent" never means "unsafe", and the reverse.
+  if (absent(consentDir())) return null;
+  assertPrivateDir(consentDir());
+  if (absent(pendingDir())) return null;
+  assertPrivateDir(pendingDir());
   const file = recordPath(id);
   if (!existsSync(file)) return null;
   const parsed = parseRecord(file);
@@ -343,8 +362,10 @@ export function readRecord(id: string): ConsentRecord | null {
  * yet is simply empty.
  */
 export function listRecords(): ConsentRecord[] {
-  if (!existsSync(consentDir()) && !isSymlink(consentDir())) return [];
-  assertPrivateStore();
+  if (absent(consentDir())) return [];
+  assertPrivateDir(consentDir());
+  if (absent(pendingDir())) return [];
+  assertPrivateDir(pendingDir());
   let entries: string[];
   try {
     entries = readdirSync(pendingDir());

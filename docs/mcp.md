@@ -201,12 +201,17 @@ is never changed and is refused; a link is never followed. When the check
 fails, `secretloop_verify` answers with an error in fixed words (no path,
 record, hash or OS message) and transmits nothing, and `secretloop approve`
 refuses with the same words and approves nothing. The check covers the store's
-two directories only, does not see POSIX ACL entries, and does not close a
-window against a process already running as you. If you meet the refusal on a
+two directories only, by mode bits and ownership: it does not see POSIX ACL
+entries (an ACL grant to another account passes), and it does not close a
+window against a process already running as you or against any account that
+can write your home directory. A missing `pending` directory under an
+existing, private `.secretloop` is not an error; it is recreated on the next
+request. If you meet the refusal on a
 store you did not create, move it aside rather than deleting or loosening it,
 and ask the client to request the verification again. **Windows:** the check
-refuses a junction or link but reads no ownership or mode, because those are
-not meaningful there; the records' protection is the inherited ACL of your
+refuses a junction or link — so a store redirected to another drive through a
+junction is refused until it is moved back to a real directory — but reads no
+ownership or mode, because those are not meaningful there; the records' protection is the inherited ACL of your
 profile folder — in the tested setup a default profile refused another
 ordinary user, and a folder that grants other accounts let another account
 read a record. No ACL is set; that is an open release decision.

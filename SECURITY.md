@@ -53,8 +53,10 @@ and re-checked, and a directory owned by another account is refused rather than
 changed. The refusal names the problem in fixed words and says what to do; it
 never prints a path, a record or an OS error. This is the trust boundary the
 tool has always documented, now enforced instead of assumed. It inspects the
-store's own two directories, not the path above them, does not see POSIX ACL
-entries, and closes no window against a process already running as you. **On
+store's own two directories by mode bits and ownership, not the path above
+them; it does not see POSIX ACL entries, so an ACL grant to another account is
+not detected; and it closes no window against a process already running as
+you or against any account that can write your home directory. **On
 Windows the records' protection is the inherited ACL of your profile folder,
 not a file mode:** in the tested setup another ordinary user was refused on a
 default profile, and a store under a folder that grants other accounts let
