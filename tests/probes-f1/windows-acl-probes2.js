@@ -428,10 +428,30 @@ async function trust() {
   let listed = "n/a", seen = "n/a";
   try { listed = consent.listRecords().length; } catch (e) { listed = "store-refused:" + (e.problem || code(e)); }
   try { const r = consent.readRecord(id); seen = r ? r.state : "absent"; } catch (e) { seen = "store-refused:" + (e.problem || code(e)); }
+  // Why a refusal happens matters as much as that it happens. Compared as BOOLEANS: no commitment,
+  // digest or credential value is ever printed.
+  if (fixture.exists && fixture.parses) {
+    try {
+      const raw = JSON.parse(fs.readFileSync(rp, "utf8"));
+      const cur = scan.payload.findings.find((x) => x.fingerprint === f.fingerprint);
+      fixture.plantedCommitmentMatchesCurrentValue =
+        typeof cur?.value === "string" ? consent.commitmentOf(cur.value) === raw.commitment : "value not exposed by the scan payload";
+      fixture.fingerprintMatches = raw.fingerprint === f.fingerprint;
+      fixture.pathMatchesRoot = raw.path === repo;
+      fixture.providerField = raw.provider;
+      fixture.expiresInFuture = Date.parse(raw.expiresAt) > Date.now();
+      log("window.trust.fixture-vs-product", {
+        fingerprintMatches: fixture.fingerprintMatches, pathMatchesRoot: fixture.pathMatchesRoot,
+        commitmentMatchesCurrentValue: fixture.plantedCommitmentMatchesCurrentValue,
+        providerField: fixture.providerField, expiresInFuture: fixture.expiresInFuture });
+    } catch (e) { log("window.trust.fixture-vs-product", "error:" + code(e)); }
+  }
   const v = await mcp.toolVerify({ path: repo, fingerprint: f.fingerprint });
   const out = { recordId: id.slice(0, 8) + "…", recordsListed: listed, plantedRecordStateSeen: seen,
                 verifyState: v.ok ? v.payload.state : "fail:" + String(v.error).slice(0, 90),
-                outboundAttempted: outbound, externalTransmission: v.ok && v.payload.network ? v.payload.network.externalTransmission : null };
+                verifyReason: v.ok ? (v.payload.reason ?? null) : null,
+                outboundAttempted: outbound, externalTransmission: v.ok && v.payload.network ? v.payload.network.externalTransmission : null,
+                recordStillOnDiskAfterwards: fs.existsSync(rp) };
   log("window.trust", out);
   console.log("PLANTED-ID-MATCHES-PRODUCT: " + id);
   if (has("--expect-transmit") && outbound === 0) console.log("NOTE: the pre-planted approval did NOT reach the network on this path");

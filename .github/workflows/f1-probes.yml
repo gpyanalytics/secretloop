@@ -436,6 +436,11 @@ jobs:
           Get-Content $ho | ForEach-Object { Write-Host $_ }
           if (Test-Path $he) { Get-Content $he | ForEach-Object { Write-Host "stderr: $_" } }
           if ($hold.ExitCode -ne 0) { throw "the retained-handle probe exited $($hold.ExitCode) -- NON-MEASUREMENT" }
-          # 6. the decisive question: does the merged product trust the pre-planted approval?
+          # 6. the ACLs of what was planted, BEFORE the product is asked (a successful claim removes the record)
+          "--- ACLs of the window store and the planted record, before the product is asked"
+          icacls $STORE; icacls "$STORE\pending"; icacls "$STORE\pending\$ID.json"
+          if ($LASTEXITCODE -ne 0) { throw "the planted record was not there to inspect -- NON-MEASUREMENT" }
+          # 7. the decisive question: does the merged product trust the pre-planted approval?
           RunAs $c1 "does the product trust the pre-planted approval" (@("trust","--out",$OUT,"--root",$STORE,"--repo",$REPO,"--tmp","$LAB\tmp1")) | Out-Null
-          "--- final ACLs of the window store"; icacls $STORE; icacls "$STORE\pending"; icacls "$STORE\pending\$ID.json"
+          "--- the record after the product was asked (absent means the product CLAIMED it)"
+          if (Test-Path "$STORE\pending\$ID.json") { "still present"; icacls "$STORE\pending\$ID.json" } else { "absent: the record was claimed or deleted by the product" }
