@@ -1,0 +1,51 @@
+# EXPERIMENTAL, DESIGN-ONLY. Runs the F-1 containment probes natively. Touches no product source, adds
+# no required check, requests the minimum permission, and runs only on this branch's pull request.
+name: f1-probes
+
+on:
+  pull_request:
+    paths:
+      - "probes/f1/**"
+      - ".github/workflows/f1-probes.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  probes-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Runner facts
+        run: |
+          uname -a; node --version; node -p process.versions.uv; id -u; df -T . | tail -1; mount | grep -E ' /proc ' || true
+      - name: POSIX challenges (component boundary, kernel path)
+        run: node probes/f1/posix-challenges.js
+      - name: POSIX challenges (naive prefix, to show what it would accept)
+        run: node probes/f1/posix-challenges.js --naive-prefix
+      - name: POSIX challenges (O_NOFOLLOW variant)
+        run: node probes/f1/posix-challenges.js --nofollow
+      - name: Windows-probe file on Linux (comparison baseline)
+        run: node probes/f1/windows-probes.js
+
+  probes-windows:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Runner facts
+        shell: pwsh
+        run: |
+          [System.Environment]::OSVersion.VersionString; node --version; node -p process.versions.uv; whoami; whoami /priv | Select-String -Pattern "SeCreateSymbolicLinkPrivilege" ; fsutil fsinfo volumeinfo (Get-Location).Drive.Root | Select-String -Pattern "File System Name"
+      - name: Windows probes W0-W6
+        run: node probes/f1/windows-probes.js
+      - name: POSIX challenge file on Windows (documents what cannot run here)
+        run: node probes/f1/posix-challenges.js
+        continue-on-error: true
