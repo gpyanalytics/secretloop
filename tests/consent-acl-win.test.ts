@@ -168,26 +168,64 @@ test("every way the helper can fail refuses, and none of them is permissive", ()
 });
 
 test("an incomplete or mistyped response refuses; every requested path must come back", () => {
-  const entry = (p: string) =>
-    JSON.stringify({ path: p, ok: true, exists: true, isDirectory: true, isReparsePoint: false, ownerSid: ME, sddl: "D:P" });
+  const rule = { sid: ME, allow: true, rights: 0x1f01ff, inheritOnly: false };
+  const entry = (p: string, extra: Record<string, unknown> = {}) =>
+    JSON.stringify({ path: p, ok: true, exists: true, isDirectory: true, isReparsePoint: false, ownerSid: ME, sddl: "D:P", rules: [rule], ...extra });
   const two = ["C:\\a", "C:\\b"];
   assert.ok(acl.parseHelperOutput(entry("C:\\a") + "\n" + entry("C:\\b"), two).ok);
   const missing = acl.parseHelperOutput(entry("C:\\a"), two);
   assert.ok(!missing.ok && missing.problem === "acl-inspection-malformed", "a missing per-path result refuses");
-  const badOwner = acl.parseHelperOutput(
-    JSON.stringify({ path: "C:\\a", ok: true, exists: true, isDirectory: true, isReparsePoint: false, ownerSid: "runner\\alice", sddl: "D:P" }),
-    ["C:\\a"]
-  );
+  const badOwner = acl.parseHelperOutput(entry("C:\\a", { ownerSid: "runner\\alice" }), ["C:\\a"]);
   assert.ok(!badOwner.ok, "an owner that is not a SID refuses — names are never matched");
   const badTypes = acl.parseHelperOutput(JSON.stringify({ path: "C:\\a", ok: true, exists: true, sddl: "D:P" }), ["C:\\a"]);
   assert.ok(!badTypes.ok, "missing fields refuse");
+  const noRules = acl.parseHelperOutput(
+    JSON.stringify({ path: "C:\\a", ok: true, exists: true, isDirectory: true, isReparsePoint: false, ownerSid: ME, sddl: "D:P" }),
+    ["C:\\a"]
+  );
+  assert.ok(!noRules.ok, "a response without structured rules refuses; the decision is never made from the text alone");
+  const ruleNotSid = acl.parseHelperOutput(entry("C:\\a", { rules: [{ sid: "BUILTIN\\Users", allow: true, rights: 1, inheritOnly: false }] }), ["C:\\a"]);
+  assert.ok(!ruleNotSid.ok, "an access rule identified by name rather than by SID refuses");
+});
+
+test("the structured rules the product actually decides on behave the same way", () => {
+  const r = (sid: string, rights: number, allow = true, inheritOnly = false) => ({ sid, allow, rights, inheritOnly });
+  const FULL = 0x1f01ff;
+  const priv = [r(ME, FULL), r(SYSTEM, FULL), r(ADMINS, FULL)];
+  assert.ok(acl.decideStoreRules(priv, ME).ok);
+  const withStranger = [...priv, r(OTHER, 0x1200a9)];
+  const strangerVerdict = acl.decideStoreRules(withStranger, ME);
+  assert.ok(!strangerVerdict.ok && strangerVerdict.problem === "foreign-principal");
+  const denied = acl.decideStoreRules([...priv, r("S-1-1-0", FULL, false)], ME);
+  assert.ok(!denied.ok && denied.problem === "deny-ace");
+  const readOnly = acl.decideStoreRules([r(ME, 0x1200a9), r(SYSTEM, FULL), r(ADMINS, FULL)], ME);
+  assert.ok(!readOnly.ok && readOnly.problem === "insufficient-rights");
+  const inheritOnly = acl.decideStoreRules([r(ME, FULL, true, true), r(SYSTEM, FULL), r(ADMINS, FULL)], ME);
+  assert.ok(!inheritOnly.ok && inheritOnly.problem === "insufficient-rights");
+  assert.ok(!acl.decideStoreRules([], ME).ok, "no rules at all is an empty access list");
+  // the built-in Administrator, which a stock profile is granted through, is trusted above the store
+  assert.ok(acl.decideAncestorRules([r("S-1-5-21-9-9-9-500", FULL)], ME, true).ok);
+  assert.ok(acl.decideAncestorRules([r("S-1-5-32-545", 0x1200a9)], ME, false).ok, "read access above the store is tolerated");
+  assert.ok(!acl.decideAncestorRules([r("S-1-5-32-545", 0x1200a9 | 0x10000)], ME, false).ok, "DELETE is not");
+  assert.ok(!acl.decideAncestorRules([r("S-1-5-32-545", 0x4)], ME, true).ok, "nor is creating a child in the store's own parent");
+});
+
+test("a stock Windows profile is not mistaken for an untrusted principal", () => {
+  // Regression. A stock profile grants the built-in Administrator through the SDDL alias LA, which
+  // has no fixed identifier because it is domain-relative. With that alias unmapped, a real profile
+  // read as an unknown principal and every store beneath it was refused.
+  assert.strictEqual(acl.canonicalSid("LA"), "domain-relative:500");
+  assert.ok(acl.ancestorPrincipalAllowed(acl.canonicalSid("LA"), ME), "the built-in Administrator is trusted above the store");
+  const profile = `D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)(A;;0x100020;;;S-1-15-3-65536-1)`;
+  assert.strictEqual(ancestorVerdict(profile, true), "accept", "a real profile must be usable as the store's parent");
 });
 
 test("the inspection script is a constant that interpolates nothing", () => {
   const source = acl.HELPER_SCRIPT_FOR_TESTS;
   assert.match(source, /\[Console\]::In\.ReadToEnd\(\)/, "paths arrive on standard input");
   assert.doesNotMatch(source, /\$\{/, "no template interpolation into PowerShell source");
-  assert.match(source, /GetSecurityDescriptorSddlForm/);
+  assert.match(source, /GetSecurityDescriptorSddlForm/, "the text form, for the NULL-versus-empty distinction");
+  assert.match(source, /GetAccessRules\(\$true,\$true,\[System\.Security\.Principal\.SecurityIdentifier\]\)/, "structured rules, identified by SID");
   assert.match(source, /GetOwner\(\[System\.Security\.Principal\.SecurityIdentifier\]\)/, "owner as a SID, not a name");
   assert.match(source, /\$_\.Exception\.GetType\(\)\.FullName/, "exception type names only");
   assert.doesNotMatch(source, /\$_\.Exception\.Message/, "no operating-system text is ever returned");

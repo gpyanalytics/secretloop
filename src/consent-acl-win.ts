@@ -112,11 +112,27 @@ const SDDL_ALIAS: Record<string, string> = {
   LW: "S-1-16-4096", ME: "S-1-16-8192", HI: "S-1-16-12288", SI: "S-1-16-16384",
 };
 
+/**
+ * Domain-relative aliases: these name a principal by its identifier within whatever domain the
+ * object belongs to, so they have no fixed value. LA -- the built-in Administrator, which a stock
+ * Windows profile is granted through -- is one, and its absence here is what made a real profile
+ * look like an unknown principal before the decision moved to structured rules. They are
+ * canonicalised to a relative form so the predicates can still recognise them in the SDDL
+ * adapters; the real path never sees an alias at all.
+ */
+const SDDL_DOMAIN_RELATIVE: Record<string, number> = {
+  LA: 500, LG: 501, CA: 517, DA: 512, DU: 513, DG: 514, DC: 516, DD: 521,
+  SA: 518, EA: 519, PA: 520, RO: 498, RS: 553,
+};
+
 /** An SDDL principal as a SID. An unrecognised alias becomes a value no rule can accept. */
 export function canonicalSid(raw: string): string {
   if (/^S-1-/.test(raw)) return raw;
   const mapped = SDDL_ALIAS[raw];
-  return mapped ?? `unknown-alias:${raw}`;
+  if (mapped) return mapped;
+  const rid = SDDL_DOMAIN_RELATIVE[raw];
+  if (rid !== undefined) return `domain-relative:${rid}`;
+  return `unknown-alias:${raw}`;
 }
 
 /**
@@ -216,28 +232,75 @@ export function parseDacl(sddl: unknown): Dacl | null {
 /** A discriminated union: a refusal always carries its reason, and the compiler enforces it. */
 export type Decision = { ok: true } | { ok: false; problem: WindowsAclProblem };
 
-/** The store rule: principal-clean, and the current user actually holds full access. */
+/**
+ * The store rule, over the structured rules the platform reports. Identities are security
+ * identifiers, so nothing here depends on an alias spelling or a display language.
+ */
+export function decideStoreRules(rules: AceRule[], userSid: string): Decision {
+  if (rules.length === 0) return { ok: false, problem: "empty-dacl" };
+  const allowed = new Set([userSid, SID_SYSTEM, SID_ADMINISTRATORS]);
+  for (const rule of rules) {
+    if (!rule.allow) return { ok: false, problem: "deny-ace" };
+    if (!allowed.has(rule.sid)) return { ok: false, problem: "foreign-principal" };
+  }
+  const mine = rules.filter((rule) => rule.sid === userSid);
+  if (mine.length === 0) return { ok: false, problem: "owner-not-granted" };
+  // An inherit-only entry confers nothing on the object carrying it, so it cannot supply the
+  // access the store needs. A descriptor that parses is not proof that access works.
+  const usable = mine.some(
+    (rule) => !rule.inheritOnly && ((rule.rights & FILE_ALL_ACCESS) === FILE_ALL_ACCESS || (rule.rights & RIGHT_BITS.GA) !== 0)
+  );
+  if (!usable) return { ok: false, problem: "insufficient-rights" };
+  return { ok: true };
+}
+
+/** The ancestor rule, over structured rules. */
+export function decideAncestorRules(
+  rules: AceRule[],
+  userSid: string,
+  immediateParent: boolean,
+  note?: (principal: string, rights: string) => void
+): Decision {
+  for (const rule of rules) {
+    if (ancestorPrincipalAllowed(rule.sid, userSid)) continue;
+    if (!rule.allow) continue; // a deny entry only removes access
+    const effective = rule.inheritOnly ? 0 : rule.rights;
+    const forbidden = NAMESPACE_BITS | GENERIC_WRITEISH | (immediateParent ? CREATE_CHILD_BITS : 0);
+    if ((effective & forbidden) !== 0) {
+      if (note) note(rule.sid, `0x${((effective & forbidden) >>> 0).toString(16)}`);
+      return { ok: false, problem: "unsafe-parent" };
+    }
+  }
+  return { ok: true };
+}
+
+/**
+ * The store rule expressed over an SDDL string. The real path uses `decideStoreRules`; this
+ * exists because the SDDL form is the only place a NULL access list is distinguishable from an
+ * empty one, and because the edge cases are worth testing on every platform.
+ */
 export function decideStoreDacl(sddl: unknown, userSid: string): Decision {
   const dacl = parseDacl(sddl);
   if (!dacl) return { ok: false, problem: "acl-inspection-malformed" };
   if (dacl.nullDacl) return { ok: false, problem: "null-dacl" };
   const aces = dacl.aces ?? [];
-  if (aces.length === 0) return { ok: false, problem: "empty-dacl" };
-  const allowed = new Set([userSid, SID_SYSTEM, SID_ADMINISTRATORS]);
-  for (const ace of aces) {
-    if (ace.type !== "A") return { ok: false, problem: "deny-ace" };
-    if (!allowed.has(ace.sid)) return { ok: false, problem: "foreign-principal" };
-    if (ace.unknownRights.length > 0) return { ok: false, problem: "acl-inspection-malformed" };
-  }
-  const mine = aces.filter((ace) => ace.sid === userSid);
-  if (mine.length === 0) return { ok: false, problem: "owner-not-granted" };
-  const usable = mine.some(
-    (ace) => !ace.inheritOnly && ((ace.mask & FILE_ALL_ACCESS) === FILE_ALL_ACCESS || (ace.mask & RIGHT_BITS.GA) !== 0)
-  );
-  // An inherit-only entry confers nothing on the object carrying it, so it cannot supply
-  // the access the store needs. Parsing a descriptor is not proof that access works.
-  if (!usable) return { ok: false, problem: "insufficient-rights" };
-  return { ok: true };
+  if (aces.some((ace) => ace.unknownRights.length > 0)) return { ok: false, problem: "acl-inspection-malformed" };
+  return decideStoreRules(acesToRules(aces), userSid);
+}
+
+/** SDDL entries as structured rules, for the adapters above. */
+function acesToRules(aces: Ace[]): AceRule[] {
+  return aces.map((ace) => ({ sid: ace.sid, allow: ace.type === "A", rights: ace.mask, inheritOnly: ace.inheritOnly }));
+}
+
+/** True when the descriptor says the access list is NULL, which grants everyone full access. */
+export function isNullDacl(sddl: string): boolean {
+  const parsed = parseDacl(sddl);
+  return !!parsed && parsed.nullDacl === true;
+}
+/** True when the descriptor cannot be understood at all. */
+export function isMalformedDacl(sddl: string): boolean {
+  return parseDacl(sddl) === null;
 }
 
 /**
@@ -251,10 +314,11 @@ export function ancestorPrincipalAllowed(sid: string, userSid: string): boolean 
   if (sid === SID_LOCAL_SERVICE || sid === SID_NETWORK_SERVICE) return true;
   if (/^S-1-5-80-/.test(sid)) return true; // NT SERVICE\*, including TrustedInstaller
   if (/^S-1-5-21-[\d-]+-500$/.test(sid)) return true; // the built-in Administrator account
+  if (sid === "domain-relative:500") return true; // the same account, named by an SDDL alias
   return false;
 }
 
-/** The ancestor rule: no untrusted principal may replace or re-permission this component. */
+/** The ancestor rule expressed over an SDDL string. The real path uses `decideAncestorRules`. */
 export function decideAncestorDacl(
   sddl: unknown,
   userSid: string,
@@ -264,19 +328,11 @@ export function decideAncestorDacl(
   const dacl = parseDacl(sddl);
   if (!dacl) return { ok: false, problem: "acl-inspection-malformed" };
   if (dacl.nullDacl) return { ok: false, problem: "null-dacl" };
-  for (const ace of dacl.aces ?? []) {
-    if (ancestorPrincipalAllowed(ace.sid, userSid)) continue;
-    if (ace.type !== "A") continue; // a deny entry only removes access
-    if (ace.unknownRights.length > 0) return { ok: false, problem: "acl-inspection-malformed" };
-    // An inherit-only entry does not apply to the object carrying it.
-    const effective = ace.inheritOnly ? 0 : ace.mask;
-    const forbidden = NAMESPACE_BITS | GENERIC_WRITEISH | (immediateParent ? CREATE_CHILD_BITS : 0);
-    if ((effective & forbidden) !== 0) {
-      if (note) note(ace.sid, `${ace.rightsText}=0x${(effective & forbidden) >>> 0 ? ((effective & forbidden) >>> 0).toString(16) : "0"}`);
-      return { ok: false, problem: "unsafe-parent" };
-    }
+  const aces = dacl.aces ?? [];
+  if (aces.some((ace) => ace.unknownRights.length > 0 && !ancestorPrincipalAllowed(ace.sid, userSid))) {
+    return { ok: false, problem: "acl-inspection-malformed" };
   }
-  return { ok: true };
+  return decideAncestorRules(acesToRules(aces), userSid, immediateParent, note);
 }
 
 // --------------------------------------------------------------------------- the helper
@@ -304,7 +360,15 @@ const HELPER_SOURCE = [
   "    if($item.PSIsContainer){$sec=New-Object System.Security.AccessControl.DirectorySecurity($p,'Access,Owner')}",
   "    else{$sec=New-Object System.Security.AccessControl.FileSecurity($p,'Access,Owner')}",
   "    $o.ownerSid=$sec.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
+    // The SDDL form is kept because it is the only place a NULL access list is distinguishable
+    // from an empty one. The DECISION uses the structured rules below, whose identities are
+    // already security identifiers, so no alias table and no account name is ever involved.
   "    $o.sddl=$sec.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)",
+  "    $rules=New-Object System.Collections.ArrayList",
+  "    foreach($r in $sec.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){",
+  "      [void]$rules.Add([ordered]@{sid=[string]$r.IdentityReference.Value;allow=($r.AccessControlType -eq 'Allow');rights=[int]$r.FileSystemRights;inheritOnly=(($r.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0)})",
+  "    }",
+  "    $o.rules=@($rules)",
   "    $o.ok=$true",
   "  }catch{ $o.errorType=$_.Exception.GetType().FullName }",
   "  [void]$out.Add((New-Object psobject -Property $o))",
@@ -339,12 +403,20 @@ function tools(): Tools {
   };
 }
 
+/** One access-control entry, as the platform reports it: a SID, a verdict and an access mask. */
+export interface AceRule {
+  sid: string;
+  allow: boolean;
+  rights: number;
+  inheritOnly: boolean;
+}
 export interface ObjectInfo {
   exists: boolean;
   isDirectory: boolean;
   isReparsePoint: boolean;
   ownerSid: string;
   sddl: string;
+  rules: AceRule[];
   unreadable: boolean;
 }
 export type InspectResult = { ok: true; byPath: Map<string, ObjectInfo> } | { ok: false; problem: WindowsAclProblem };
@@ -371,15 +443,34 @@ export function parseHelperOutput(stdout: string, requested: string[]): InspectR
     if (typeof e.exists !== "boolean" || typeof e.ok !== "boolean") {
       return { ok: false, problem: "acl-inspection-malformed" };
     }
+    let rules: AceRule[] = [];
     if (e.ok === true) {
       if (
         typeof e.isDirectory !== "boolean" ||
         typeof e.isReparsePoint !== "boolean" ||
         typeof e.ownerSid !== "string" ||
         !/^S-1-[0-9-]+$/.test(e.ownerSid) ||
-        typeof e.sddl !== "string"
+        typeof e.sddl !== "string" ||
+        !Array.isArray(e.rules)
       ) {
         return { ok: false, problem: "acl-inspection-malformed" };
+      }
+      for (const raw of e.rules as unknown[]) {
+        if (typeof raw !== "object" || raw === null) return { ok: false, problem: "acl-inspection-malformed" };
+        const r = raw as Record<string, unknown>;
+        // Every field is required and typed. A rule whose identity is not a security identifier
+        // is not something this code will reason about.
+        if (
+          typeof r.sid !== "string" ||
+          !/^S-1-[0-9-]+$/.test(r.sid) ||
+          typeof r.allow !== "boolean" ||
+          typeof r.rights !== "number" ||
+          !Number.isInteger(r.rights) ||
+          typeof r.inheritOnly !== "boolean"
+        ) {
+          return { ok: false, problem: "acl-inspection-malformed" };
+        }
+        rules.push({ sid: r.sid, allow: r.allow, rights: r.rights >>> 0, inheritOnly: r.inheritOnly });
       }
     }
     byPath.set(key(e.path), {
@@ -388,6 +479,7 @@ export function parseHelperOutput(stdout: string, requested: string[]): InspectR
       isReparsePoint: e.isReparsePoint === true,
       ownerSid: typeof e.ownerSid === "string" ? e.ownerSid : "",
       sddl: typeof e.sddl === "string" ? e.sddl : "",
+      rules,
       unreadable: e.ok !== true && e.exists === true,
     });
   }
@@ -574,8 +666,10 @@ export function checkWindowsStore(
     if (!ancestorPrincipalAllowed(info.ownerSid, userSid)) {
       return refuse("unsafe-parent", { component, principal: `owner:${info.ownerSid}` });
     }
+    if (isNullDacl(info.sddl)) return refuse("null-dacl", { component });
+    if (isMalformedDacl(info.sddl)) return refuse("acl-inspection-malformed", { component });
     let offender: RefusalDetail = { component };
-    const decision = decideAncestorDacl(info.sddl, userSid, key(component) === key(parent), (principal, rights) => {
+    const decision = decideAncestorRules(info.rules, userSid, key(component) === key(parent), (principal, rights) => {
       offender = { component, principal, rights };
     });
     if (!decision.ok) return refuse(decision.problem, offender);
@@ -592,7 +686,9 @@ export function checkWindowsStore(
     if (info.ownerSid !== userSid && info.ownerSid !== SID_SYSTEM && info.ownerSid !== SID_ADMINISTRATORS) {
       return refuse("foreign-owner", { component: target.path, principal: `owner:${info.ownerSid}` });
     }
-    const decision = decideStoreDacl(info.sddl, userSid);
+    if (isNullDacl(info.sddl)) return refuse("null-dacl", { component: target.path });
+    if (isMalformedDacl(info.sddl)) return refuse("acl-inspection-malformed", { component: target.path });
+    const decision = decideStoreRules(info.rules, userSid);
     if (!decision.ok) return refuse(decision.problem, { component: target.path, principal: info.sddl });
   }
   lastDetail = undefined;
