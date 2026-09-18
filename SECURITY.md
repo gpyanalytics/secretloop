@@ -56,12 +56,33 @@ tool has always documented, now enforced instead of assumed. It inspects the
 store's own two directories by mode bits and ownership, not the path above
 them; it does not see POSIX ACL entries, so an ACL grant to another account is
 not detected; and it closes no window against a process already running as
-you or against any account that can write your home directory. **On
-Windows the records' protection is the inherited ACL of your profile folder,
-not a file mode:** in the tested setup another ordinary user was refused on a
-default profile, and a store under a folder that grants other accounts let
-another account read a record. SecretLoop sets no ACL there; that remains an
-open decision for a future release.
+you or against any account that can write your home directory. **On Windows the check is a different one**, because mode bits mean nothing
+there. Before every consent operation SecretLoop reads the owner and the access
+list of `.secretloop`, of its `pending` directory and of each record it is about
+to use, and requires every entry to allow only your account, SYSTEM or
+Administrators, the owner to be one of those three, and your account to hold
+full access. Records are checked individually, not just the directories around
+them: a record another account planted and a protected parent later caught looks
+private, because its inherited access list is rewritten, while its owner stays
+the account that planted it — and an owner can re-grant itself. SecretLoop also
+walks every folder from the drive root down to the store's parent and refuses if
+any account outside a small platform set (SYSTEM, Administrators, the service
+identities that own stock system folders) can delete, rename or re-permission
+one of them, because a private store inside a folder someone else can rename can
+be replaced wholesale. New stores are created private and a failed creation
+withdraws only what it made; an existing store is refused, never repaired. The
+built-in `powershell.exe` and `icacls.exe` are used to read and set permissions;
+if either cannot be run, consent is refused rather than assumed safe.
+
+What that does not buy you: applying an access list does not revoke a handle
+another process already holds, so these checks prevent the situation for a store
+SecretLoop creates rather than revoking anything, and for a store that already
+existed they describe the present only — not whether it was always private, nor
+whether a handle was opened while it was not. Nothing here defends against an
+administrator, against SYSTEM, against a compromised Windows service, or against
+code already running as you. A store under a folder that grants other accounts is
+now refused and will not be created, and a store on a network or UNC path is
+refused because these checks have not been established for that kind of location.
 
 Eighteen of the rules have a verifier, covering fifteen providers. A credential
 matched by any other rule is never transmitted, whatever the flag says. One of

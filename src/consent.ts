@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   renameSync,
+  rmdirSync,
   rmSync,
   statSync,
   writeFileSync,
@@ -13,6 +14,13 @@ import {
 import { createHash, randomBytes } from "crypto";
 import { homedir } from "os";
 import * as path from "path";
+import {
+  CheckTarget,
+  checkWindowsStore,
+  currentUserSid,
+  protectDirectory,
+  WindowsAclProblem,
+} from "./consent-acl-win";
 
 /**
  * Durable consent records for a single credential verification.
@@ -97,7 +105,23 @@ export type ConsentStoreProblem =
   | "symlink"
   | "foreign-owner"
   | "permissive"
-  | "inaccessible";
+  | "inaccessible"
+  // Windows only. The security descriptor is what protects a record there, so these name
+  // the ways it can fail. See src/consent-acl-win.ts for the rules and the adversary class.
+  | "identity-unreadable"
+  | "unsupported-location"
+  | "unsafe-parent"
+  | "foreign-principal"
+  | "deny-ace"
+  | "null-dacl"
+  | "empty-dacl"
+  | "owner-not-granted"
+  | "insufficient-rights"
+  | "owner-unreadable"
+  | "acl-tooling-unavailable"
+  | "acl-inspection-failed"
+  | "acl-inspection-malformed"
+  | "acl-enforcement-failed";
 
 /**
  * Thrown by every consent operation when the store fails its private-store
@@ -126,7 +150,50 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       return `${where}, or its pending directory, is readable or writable by other accounts and SecretLoop could not make it private (0700), so consent records cannot be trusted.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
+    case "identity-unreadable":
+      return `SecretLoop could not determine which Windows account it is running as, so consent records cannot be trusted.`;
+    case "unsupported-location":
+      return `${where} is on a kind of location SecretLoop has not established these checks for (a network or UNC path), so consent records cannot be trusted.`;
+    case "unsafe-parent":
+      return `a directory on the path to ${where} can be replaced or re-permissioned by another account, so consent records cannot be trusted.`;
+    case "foreign-principal":
+      return `${where}, its pending directory, or a record in it grants access to another account, so consent records cannot be trusted.`;
+    case "deny-ace":
+      return `${where}, its pending directory, or a record in it carries an access-control entry SecretLoop does not accept, so consent records cannot be trusted.`;
+    case "null-dacl":
+      return `${where}, its pending directory, or a record in it has no access control at all and is open to every account, so consent records cannot be trusted.`;
+    case "empty-dacl":
+      return `${where}, its pending directory, or a record in it grants access to no one, so consent records cannot be trusted.`;
+    case "owner-not-granted":
+      return `${where}, its pending directory, or a record in it does not grant access to your own account, so consent records cannot be trusted.`;
+    case "insufficient-rights":
+      return `${where}, or its pending directory, does not give your own account the access SecretLoop needs, so consent records cannot be trusted.`;
+    case "owner-unreadable":
+      return `${where}, its pending directory, or a record in it could not be inspected, so consent records cannot be trusted.`;
+    case "acl-tooling-unavailable":
+      return `SecretLoop could not run the built-in Windows tools it uses to inspect permissions, so consent records cannot be trusted.`;
+    case "acl-inspection-failed":
+      return `SecretLoop could not complete its inspection of the Windows permissions on ${where}, so consent records cannot be trusted.`;
+    case "acl-inspection-malformed":
+      return `SecretLoop did not understand the Windows permission information it was given for ${where}, so consent records cannot be trusted.`;
+    case "acl-enforcement-failed":
+      return `SecretLoop could not apply owner-only Windows permissions to a newly created ${where}, so consent records cannot be trusted.`;
   }
+}
+
+/**
+ * Fixed guidance, safe to print beside the sentence above. Windows has its own text because
+ * the remedy is different there: permissions are an access-control list, not a mode.
+ */
+export const CONSENT_STORE_GUIDANCE_WINDOWS =
+  "Inspect .secretloop in your profile folder yourself, with icacls: it, its pending directory and the " +
+  "records in it should be owned by you and grant only you, SYSTEM and Administrators, and every folder " +
+  "on the way to it should be one no other account can rename or re-permission. Move a store you did not " +
+  "create aside rather than deleting or loosening it, then ask the client to request the verification again.";
+
+/** The guidance for the platform this process is running on. */
+export function consentStoreGuidance(): string {
+  return process.platform === "win32" ? CONSENT_STORE_GUIDANCE_WINDOWS : CONSENT_STORE_GUIDANCE;
 }
 
 /** Fixed guidance, safe to print beside the sentence above. */
@@ -176,7 +243,61 @@ export const CONSENT_STORE_GUIDANCE =
  *     verified here; that remains an open release decision.
  */
 export function assertPrivateStore(): void {
-  for (const dir of [consentDir(), pendingDir()]) assertPrivateDir(dir);
+  assertStoreScope({ includePending: true, records: [] });
+}
+
+/**
+ * What an operation is about to touch. The Windows check covers the ancestor chain, the
+ * directories and the named records in one pass, so the caller states its scope rather than
+ * asking directory by directory.
+ */
+interface StoreScope {
+  includePending: boolean;
+  /** Record files this operation will read, trust, replace, claim or delete. */
+  records: string[];
+}
+
+/**
+ * The store policy for this platform.
+ *
+ * POSIX is unchanged: the two directories, by mode bits and ownership. Record FILES are not
+ * inspected there — that remains a separate scope, as the notes above say.
+ *
+ * Windows applies the descriptor rules in `./consent-acl-win`: the whole ancestor chain, both
+ * directories, and EVERY record in scope. A directory that passes licenses nothing about its
+ * children: a record planted by another account and later caught by a parent's protection has
+ * its inherited access list rewritten to look private while its owner stays the attacker, so
+ * ownership is checked per record. That attack was measured before this was written.
+ */
+function assertStoreScope(scope: StoreScope): void {
+  if (process.platform !== "win32") {
+    assertPrivateDir(consentDir());
+    if (scope.includePending) assertPrivateDir(pendingDir());
+    return;
+  }
+  const userSid = currentUserSid();
+  if (!userSid) throw new ConsentStoreError("identity-unreadable");
+  const targets: CheckTarget[] = [{ path: consentDir(), kind: "directory" }];
+  if (scope.includePending) targets.push({ path: pendingDir(), kind: "directory" });
+  for (const record of scope.records) targets.push({ path: record, kind: "record" });
+  const verdict = checkWindowsStore(consentDir(), targets, userSid);
+  if (!verdict.ok) throw new ConsentStoreError(translateAclProblem(verdict.problem));
+}
+
+/** The descriptor rules speak of reparse points; the store has always called that a symlink. */
+function translateAclProblem(problem: WindowsAclProblem): ConsentStoreProblem {
+  return problem === "reparse-point" ? "symlink" : problem;
+}
+
+/** Record files currently in the pending directory, for a scope that covers all of them. */
+function recordFilesInPending(): string[] {
+  try {
+    return readdirSync(pendingDir())
+      .filter((entry) => entry.endsWith(".json"))
+      .map((entry) => path.join(pendingDir(), entry));
+  } catch {
+    return [];
+  }
 }
 
 /**
@@ -272,6 +393,10 @@ function ensureDir(): void {
       /* absent: created below */
     }
   }
+  if (process.platform === "win32") {
+    ensureDirWindows();
+    return;
+  }
   try {
     mkdirSync(pendingDir(), { recursive: true, mode: 0o700 });
   } catch {
@@ -280,9 +405,88 @@ function ensureDir(): void {
   assertPrivateStore();
 }
 
+/**
+ * Creating the store on Windows.
+ *
+ * The parent chain is established BEFORE anything is created, which is the whole point: an
+ * account that cannot write the parent cannot pre-create the store name, plant a record beside
+ * it, or hold a handle to a directory that does not yet exist. Applying an access list later
+ * would not have done that — it does not revoke a handle anyone already holds.
+ *
+ * A store that already exists is verified, never repaired. If this call created a directory and
+ * a later step fails, it removes ONLY what it created, and only with a non-recursive rmdir, so
+ * nothing pre-existing can be deleted. A directory that something else has meanwhile written to
+ * will refuse to go, and is left in place rather than emptied.
+ */
+function ensureDirWindows(): void {
+  const userSid = currentUserSid();
+  if (!userSid) throw new ConsentStoreError("identity-unreadable");
+
+  const chain = checkWindowsStore(consentDir(), [], userSid);
+  if (!chain.ok) throw new ConsentStoreError(translateAclProblem(chain.problem));
+
+  let madeStore = false;
+  let madePending = false;
+  const undo = (): void => {
+    if (madePending) {
+      try {
+        rmdirSync(pendingDir());
+      } catch {
+        /* not empty, or gone: left exactly as found */
+      }
+    }
+    if (madeStore) {
+      try {
+        rmdirSync(consentDir());
+      } catch {
+        /* not empty, or gone: left exactly as found */
+      }
+    }
+  };
+
+  if (!existsSync(consentDir())) {
+    try {
+      mkdirSync(consentDir());
+      madeStore = true;
+    } catch {
+      throw new ConsentStoreError("inaccessible");
+    }
+    const protection = protectDirectory(consentDir(), userSid);
+    if (!protection.ok) {
+      undo();
+      throw new ConsentStoreError(translateAclProblem(protection.problem));
+    }
+  }
+  if (!existsSync(pendingDir())) {
+    try {
+      mkdirSync(pendingDir());
+      madePending = true;
+    } catch {
+      undo();
+      throw new ConsentStoreError("inaccessible");
+    }
+  }
+  const verdict = checkWindowsStore(
+    consentDir(),
+    [
+      { path: consentDir(), kind: "directory" },
+      { path: pendingDir(), kind: "directory" },
+    ],
+    userSid
+  );
+  if (!verdict.ok) {
+    undo();
+    throw new ConsentStoreError(translateAclProblem(verdict.problem));
+  }
+}
+
 export function writeRecord(record: ConsentRecord): void {
   ensureDir();
   const target = recordPath(record.id);
+  // Replacing a record that fails the checks would quietly repair unsafe state. Refuse instead,
+  // so the user is told. On POSIX this scope carries no record checks and the call is a no-op
+  // beyond the directory rules already applied by ensureDir.
+  if (existsSync(target)) assertStoreScope({ includePending: true, records: [target] });
   // Written to a temp name and renamed, so a reader never sees a half-written
   // record — and created with the mode rather than chmod'ed afterwards, which
   // would leave a window where it is world-readable.
@@ -341,10 +545,14 @@ export function readRecord(id: string): ConsentRecord | null {
   // write); whatever IS there, or is a link pretending to be, must pass the
   // checks first. "Absent" never means "unsafe", and the reverse.
   if (absent(consentDir())) return null;
-  assertPrivateDir(consentDir());
-  if (absent(pendingDir())) return null;
-  assertPrivateDir(pendingDir());
+  const pendingAbsent = absent(pendingDir());
   const file = recordPath(id);
+  // The store is checked even when the pending directory is gone: absence never means safe.
+  assertStoreScope({
+    includePending: !pendingAbsent,
+    records: !pendingAbsent && existsSync(file) ? [file] : [],
+  });
+  if (pendingAbsent) return null;
   if (!existsSync(file)) return null;
   const parsed = parseRecord(file);
   // The same rule listRecords applies, so the two readers agree: a record whose
@@ -363,15 +571,19 @@ export function readRecord(id: string): ConsentRecord | null {
  */
 export function listRecords(): ConsentRecord[] {
   if (absent(consentDir())) return [];
-  assertPrivateDir(consentDir());
-  if (absent(pendingDir())) return [];
-  assertPrivateDir(pendingDir());
+  const pendingAbsent = absent(pendingDir());
+  assertStoreScope({ includePending: !pendingAbsent, records: [] });
+  if (pendingAbsent) return [];
   let entries: string[];
   try {
     entries = readdirSync(pendingDir());
   } catch {
     return [];
   }
+  // The names come from a directory that has just passed its checks; every record they name is
+  // then checked on its own before any of it is parsed. Two passes, because the second cannot
+  // be built until the first has approved the directory it reads the names from.
+  assertStoreScope({ includePending: true, records: recordFilesInPending() });
   const out: ConsentRecord[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
@@ -396,8 +608,9 @@ function isSymlink(p: string): boolean {
 }
 
 export function deleteRecord(id: string): void {
-  assertPrivateStore();
-  rmSync(recordPath(id), { force: true });
+  const target = recordPath(id);
+  assertStoreScope({ includePending: true, records: existsSync(target) ? [target] : [] });
+  rmSync(target, { force: true });
 }
 
 export function isExpired(record: ConsentRecord, now = Date.now()): boolean {
@@ -419,8 +632,10 @@ export function isExpired(record: ConsentRecord, now = Date.now()): boolean {
  * already claimed, already gone, or never existed.
  */
 export function consumeRecord(id: string): boolean {
-  assertPrivateStore();
   const from = recordPath(id);
+  // The claim happens before the credential is transmitted, so the record it claims is checked
+  // here too, not only the directories around it.
+  assertStoreScope({ includePending: true, records: existsSync(from) ? [from] : [] });
   const to = `${from}.consumed.${process.pid}.${randomBytes(6).toString("hex")}`;
   try {
     renameSync(from, to);

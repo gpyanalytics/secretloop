@@ -57,7 +57,7 @@ import { readTextFile } from "./walk";
 import { scanText } from "./scanner";
 import {
   CONSENT_VERSION,
-  CONSENT_STORE_GUIDANCE,
+  consentStoreGuidance,
   ConsentRecord,
   ConsentStoreError,
   commitmentOf,
@@ -1473,7 +1473,7 @@ export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
     // written, claimed or deleted, and before the provider boundary. The
     // sentence is fixed text: no path, no record content, no OS message.
     if (err instanceof ConsentStoreError) {
-      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${CONSENT_STORE_GUIDANCE}`);
+      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${consentStoreGuidance()}`);
     }
     throw err;
   }

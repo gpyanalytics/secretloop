@@ -29,22 +29,57 @@
   permissions; and it closes no window against a process already running as
   you, which is the documented trust boundary. First use still creates the
   store. A `.secretloop` that was already private is unaffected.
-- **Windows.** Ownership and mode fields are not meaningful there and are not
-  consulted; only the link/junction refusal applies — which is a behaviour
-  change: a store that was redirected through a junction or symbolic link
-  (for example `.secretloop` pointed at another drive) is now refused, with
-  the same fixed message; move the store back to a real directory under the
-  profile. Measured natively in CI: a junction at the store root and at
-  `pending` is refused on Windows. Measured on one elevated
-  NTFS runner with a second ordinary user: a default profile refused that user
-  every operation (the inherited profile ACL, not the `0600` mode, is the
-  control), and a store under a folder that grants other accounts let another
-  account read a record. No ACL is set or verified; **Windows ACL hardening
-  remains unresolved and needs an explicit release disposition.**
 - Compatibility: an existing store that is already a private directory needs
   nothing. A store that is a link, is owned by another account, or cannot be
   made private is refused with guidance to inspect it and move it aside, not
   to delete it, loosen it, or run anything elevated.
+- **Windows now has its own check, and it is not the POSIX one.** Ownership
+  and mode fields are meaningless there, so what protects a record is its
+  security descriptor. Before every consent operation SecretLoop reads the
+  owner and access list of `.secretloop`, of its `pending` directory and of
+  **each record it is about to use**, and requires every entry to be an allow
+  entry naming only your account, SYSTEM or Administrators, the owner to be
+  one of those three, and your account to hold full access through an entry
+  that is not inherit-only. A reparse point at any of them is refused and
+  never followed. It also walks **every directory from the volume root down to
+  the store's parent** and refuses if any account outside a small platform set
+  can delete, replace or re-permission one of them — because a private
+  `.secretloop` inside a folder someone else can rename can be swapped
+  wholesale without its own permissions ever changing.
+- **Why records are checked one by one.** A record planted by another account
+  and later caught by a protected parent has its *inherited* access list
+  rewritten to look private while its owner stays the account that planted it,
+  and an owner can re-grant itself. Measured before this was written; a check
+  that reads only the access list accepts it. The owner check is what refuses
+  it.
+- **New stores are created private, and a failed creation leaves nothing.**
+  The parent chain is verified *before* anything is created; then the store is
+  made, given an owner-only access list, and re-inspected, with `pending`
+  inheriting it. If any step fails, only the directories that call created are
+  removed, with a non-recursive delete, so nothing pre-existing is touched and
+  a directory something else has meanwhile written to is left in place rather
+  than emptied. An existing store is verified and refused, never repaired.
+- **What this does not do on Windows.** Applying an access list does not
+  revoke a handle another process already holds; access is checked when a
+  handle is opened. Verifying the parent chain prevents that situation for a
+  store SecretLoop creates — the directory is new, under a parent no other
+  ordinary account can write — but it revokes nothing, and for a store that
+  already existed it cannot. These checks describe the present: they do not
+  establish that a store was always private, nor that no handle was opened
+  while it was not. Inspection is by path and the work that follows is by
+  path, so a replacement in between is not detected; the bounded claim is that
+  no *other ordinary account* can perform it. Nothing here defends against an
+  administrator, against SYSTEM, against a compromised Windows service, or
+  against code already running as you.
+- **Windows compatibility.** A store under a default profile is unaffected: a
+  stock chain and an inherited-private store both pass. A store under a folder
+  that grants other accounts is now refused **and will not be created** — move
+  it under your profile, or remove those grants yourself. A store or record
+  owned by another account is refused rather than repaired. SecretLoop uses
+  the built-in `powershell.exe` and `icacls.exe` from the system directory; if
+  either cannot be run, consent is unavailable rather than assumed safe. A
+  store on a network or UNC path is refused: these checks have not been
+  established for that kind of location. No new dependency is added.
 
 ### Containment
 

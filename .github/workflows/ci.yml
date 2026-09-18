@@ -83,6 +83,140 @@ jobs:
       - run: npm run compile
       - run: npm test
 
+  test-windows-two-user:
+    # THE CASE A SECOND ACCOUNT IS NEEDED FOR.
+    #
+    # A record planted by another ordinary account, and later caught by a
+    # protected parent, has its INHERITED access list rewritten to name only the
+    # owner, SYSTEM and Administrators -- it looks private -- while its owner
+    # stays the account that planted it. A check that reads only the access list
+    # accepts it. This job builds exactly that state and asserts the product
+    # refuses it on the owner and transmits nothing.
+    #
+    # Provisioning local accounts needs elevation, so the runner SETS UP and the
+    # ordinary account MEASURES: every assertion runs as `slprobe` through
+    # Start-Process -Credential, and an administrator result is never presented
+    # as an ordinary-user one. The record is produced by the real product's first
+    # request, so no field is guessed.
+    #
+    # Added beside the existing jobs and taking nothing away: the Linux `test`
+    # jobs, both `test-windows` jobs, the packaging jobs, the self-scan and their
+    # check names are untouched, so branch protection keeps requiring exactly what
+    # it required before. Nothing is masked -- no continue-on-error -- and a
+    # fixture that cannot be built fails the job instead of becoming a skip.
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: Provision two ordinary accounts and the fixture parents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          # A parent the second account can write: the shape the policy must refuse.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "permissive") | Out-Null
+          icacls (Join-Path $LAB "permissive") /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("out", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          }
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          $pw2 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p2.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+          "ACL_SID1=$sid1" >> $env:GITHUB_ENV
+          "ACL_SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Plant a record with the real product, then hand it to the second account
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $store = Join-Path $LAB "private\.secretloop"
+          $repo = Join-Path $LAB "private\repo"
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $o = Join-Path $env:RUNNER_TEMP "plant.out"; $e = Join-Path $env:RUNNER_TEMP "plant.err"
+          $args = @((Join-Path $PWD "tests\fixtures\win-twouser-plant.js"), "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+          $p = Start-Process -FilePath $node -ArgumentList $args -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          Get-Content $o; if (Test-Path $e) { Get-Content $e }
+          if ($p.ExitCode -ne 0) { throw "the fixture could not be planted (exit $($p.ExitCode)); nothing below would be evidence" }
+          $record = ((Get-Content $o | Select-String -Pattern '^PLANTED-RECORD: ').Line -replace '^PLANTED-RECORD: ', '')
+          if (-not $record) { throw "the fixture helper printed no record path" }
+          # Ownership moves to the second account; the access list is left exactly as inherited,
+          # which is the laundered state the policy has to catch.
+          icacls $record /setowner "*$($env:ACL_SID2)" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not hand the planted record to the second account" }
+          "--- the planted record, as the runner sees it"; icacls $record
+          "ACL_STORE=$store" >> $env:GITHUB_ENV
+          "ACL_REPO=$repo" >> $env:GITHUB_ENV
+      - name: What the second ordinary account can and cannot do
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p2.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $probe = Join-Path $PWD "tests\fixtures\win-twouser-attempt.js"
+          function Attempt($tag, $dir, $out) {
+            $err = "$out.err"
+            $p = Start-Process -FilePath $node -ArgumentList @($probe, "--dir", $dir) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow -Wait
+            $text = ((Get-Content $out) -join " ")
+            Write-Host "=== [$tag] as slprobe2: exit $($p.ExitCode) :: $text"
+            if (Test-Path $err) { Get-Content $err | ForEach-Object { Write-Host "stderr: $_" } }
+            if ($p.ExitCode -ne 0) { throw "the attempt probe [$tag] did not run; that is a non-measurement, not a refusal" }
+            return $text
+          }
+          $private = Attempt "under the private parent" (Join-Path $LAB "private") (Join-Path $env:RUNNER_TEMP "a1.out")
+          foreach ($op in @("create-store-name", "rename-parent", "delete-parent", "list-parent")) {
+            if ($private -match ('"' + $op + '":"SUCCEEDED"')) { throw "the second account could $op under the private parent" }
+          }
+          # The control. These operations are not impossible; they are prevented by the parent's
+          # permissions. Without a parent where they succeed, the refusals above prove nothing.
+          $permissive = Attempt "under the permissive parent (the control)" (Join-Path $LAB "permissive") (Join-Path $env:RUNNER_TEMP "a2.out")
+          if ($permissive -notmatch '"create-store-name":"SUCCEEDED"') {
+            throw "the control failed: the second account could not create the store name even under a permissive parent, so the refusal above is not evidence"
+          }
+      - name: The product, as the ordinary owner, against that fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $runner = Join-Path $LAB "run-two-user.cmd"
+          $lines = @(
+            "@echo off",
+            ("cd /d " + '"' + $PWD + '"'),
+            "set SECRETLOOP_WIN_TWOUSER_STORE=$env:ACL_STORE",
+            "set SECRETLOOP_WIN_TWOUSER_REPO=$env:ACL_REPO",
+            "set SECRETLOOP_WIN_ATTACKER_SID=$env:ACL_SID2",
+            ("set SECRETLOOP_WIN_PERMISSIVE_PARENT=" + (Join-Path $LAB "permissive")),
+            "node node_modules\ts-node\dist\bin.js --transpile-only tests\consent-acl-win-twouser.test.ts"
+          )
+          Set-Content -Path $runner -Value $lines -Encoding ASCII
+          icacls $runner /grant "*$($env:ACL_SID1):RX" /q | Out-Null
+          $o = Join-Path $env:RUNNER_TEMP "suite.out"; $e = Join-Path $env:RUNNER_TEMP "suite.err"
+          $p = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") -ArgumentList @("/d", "/c", $runner) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          Get-Content $o; if (Test-Path $e) { Get-Content $e }
+          if ($p.ExitCode -ne 0) { throw "the two-account cases failed (exit $($p.ExitCode))" }
+          if (((Get-Content $o) -join "`n") -match "skip - ") { throw "a two-account case skipped inside the job that exists to run it" }
+
   packaging-windows:
     # The same two packaging smokes as `packaging`, on a native Windows runner.
     # Both scripts are bash; on windows-latest `shell: bash` is Git for

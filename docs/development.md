@@ -67,15 +67,43 @@ Two limits of that measurement. **One hosted runner is not "Windows
 support"**: a non-elevated user without Developer Mode would get `EPERM`
 from `symlinkSync`, and the containment suites would fail rather than skip.
 And **the pending consent record is not owner-only on Windows**: `mode:
-0o600` at write time has no effect there, so the record's protection is the
-ACL of the profile directory it lives under, not a mode. That is a real
-platform difference in `src/consent.ts`, disclosed here; it is not changed.
-Measured natively (`consent-file-security-assessment`, one elevated NTFS
-runner): a default profile refused a second ordinary user every operation; a
-store under a folder granting other accounts let another account read a
-record. The Unreleased private-store check (`assertPrivateStore`) refuses a
-junction or link on Windows but reads no ownership or mode there; an ACL
-policy for Windows is an open release decision, not something this code does.
+0o600` at write time has no effect there, so the record's protection is its
+security descriptor, not a mode. `src/consent-acl-win.ts` is what reads that
+descriptor: the owner and access list of the store, of `pending` and of each
+record, plus every folder from the drive root down to the store's parent, with
+two deliberately different rules — store objects may name only this account,
+SYSTEM and Administrators, while ancestors need only deny the power to delete,
+rename or re-permission to everyone outside a small platform set. The wider set
+above the store is not laxness: a stock `C:\` is owned by
+`NT SERVICE\TrustedInstaller` and grants it full control, so the store rule
+would refuse every real machine. It was measured
+(`windows-consent-acl-revised-validation`), as was the attack it defends: a
+record planted by a second ordinary account, once a protected parent rewrote its
+*inherited* access list, looked private while its owner stayed the attacker, and
+the product trusted it and transmitted.
+
+Inspection runs the in-box `powershell.exe` with a **constant** script delivered
+through `-EncodedCommand`, paths supplied on standard input — nothing is
+interpolated into PowerShell source, no file is written, and no execution policy
+is changed — and returns owner, access list and reparse state for every object in
+one bounded call. Only security identifiers are compared, never account names, so
+the result does not depend on the display language. `icacls.exe` is used for one
+thing: setting the owner-only access list on a directory this process just
+created. Missing tooling, a timeout, output past the cap, a non-zero exit, an
+unparsable or incomplete answer and a failed enforcement all refuse; there is no
+permissive fallback and no new dependency.
+
+What it does not do: applying an access list does not revoke a handle another
+process already holds, so the parent-chain check prevents that situation for a
+store SecretLoop creates rather than revoking anything; for a store that already
+existed these checks describe the present, not its history; and inspection is by
+path while the work that follows is by path, so a replacement in between is not
+detected by any account that already has the rights to make it. Tested on one
+`windows-latest` image (Server 2025, NTFS, x64, Node 20, Windows PowerShell 5.1,
+`en-US`) as an ordinary account against a second ordinary account. Not exercised,
+and so not claimed: managed or relocated profiles, network and UNC locations
+(refused outright), non-NTFS volumes, non-English hosts, domain accounts, client
+Windows images and ARM64.
 
 ## Layout
 
