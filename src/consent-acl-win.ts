@@ -370,7 +370,9 @@ const HELPER_SOURCE = [
   "    }",
   "    $o.rules=@($rules)",
   "    $o.ok=$true",
-  "  }catch{ $o.errorType=$_.Exception.GetType().FullName }",
+    // The catch must still say whether the object is THERE. Leaving `exists` false would make a
+    // failed inspection indistinguishable from an absent object, and an absent target is skipped.
+  "  }catch{ $o.errorType=$_.Exception.GetType().FullName; try{ $o.exists=[bool](Test-Path -LiteralPath $p) }catch{ $o.exists=$true } }",
   "  [void]$out.Add((New-Object psobject -Property $o))",
   "}",
   // One compact object per line: PowerShell 5.1 unwraps a single-element array, so an array
@@ -473,6 +475,7 @@ export function parseHelperOutput(stdout: string, requested: string[]): InspectR
         rules.push({ sid: r.sid, allow: r.allow, rights: r.rights >>> 0, inheritOnly: r.inheritOnly });
       }
     }
+    if (byPath.has(key(e.path))) return { ok: false, problem: "acl-inspection-malformed" };
     byPath.set(key(e.path), {
       exists: e.exists === true,
       isDirectory: e.isDirectory === true,
@@ -655,6 +658,22 @@ export function checkWindowsStore(
   const targetPaths = targets.map((t) => path.resolve(t.path));
   const inspected = inspectPaths([...chain, ...targetPaths]);
   if (!inspected.ok) return { ok: false, problem: inspected.problem };
+  return evaluateInspected(chain, targets, inspected.byPath, userSid);
+}
+
+/**
+ * The decision over an already-inspected set. Separated from the subprocess so every branch --
+ * including the ones a live Windows machine will not produce on demand, such as an object that
+ * exists but could not be inspected -- is exercised directly by tests on any platform.
+ */
+export function evaluateInspected(
+  chain: string[],
+  targets: CheckTarget[],
+  byPath: Map<string, ObjectInfo>,
+  userSid: string
+): { ok: true } | { ok: false; problem: WindowsAclProblem } {
+  const parent = chain[chain.length - 1];
+  const inspected = { byPath };
 
   for (const component of chain) {
     const info = inspected.byPath.get(key(component));

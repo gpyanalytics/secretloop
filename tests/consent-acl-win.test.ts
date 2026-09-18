@@ -220,6 +220,100 @@ test("a stock Windows profile is not mistaken for an untrusted principal", () =>
   assert.strictEqual(ancestorVerdict(profile, true), "accept", "a real profile must be usable as the store's parent");
 });
 
+// ---------------------------------------------------------------------------
+suite("windows consent ACL — what the check does with what it is told");
+
+/** An object the checks accept, as the helper would report it. */
+const clean = (owner: string, isDirectory: boolean): acl.ObjectInfo => ({
+  exists: true,
+  isDirectory,
+  isReparsePoint: false,
+  ownerSid: owner,
+  sddl: `D:PAI(A;;FA;;;${owner})`,
+  rules: [{ sid: owner, allow: true, rights: 0x1f01ff, inheritOnly: false }],
+  unreadable: false,
+});
+const mapOf = (entries: Array<[string, acl.ObjectInfo]>): Map<string, acl.ObjectInfo> =>
+  new Map(entries.map(([p, info]) => [p.toLowerCase(), info]));
+const CHAIN = ["C:\\", "C:\\Users", "C:\\Users\\me"];
+const chainMap = (): Array<[string, acl.ObjectInfo]> => CHAIN.map((c) => [c, clean(ME, true)] as [string, acl.ObjectInfo]);
+const STORE = "C:\\Users\\me\\.secretloop";
+const RECORD = "C:\\Users\\me\\.secretloop\\pending\\a.json";
+
+test("an object that EXISTS but could not be inspected is refused, not treated as absent", () => {
+  // RED against the previous helper. Its catch branch left `exists` false, so a record whose
+  // inspection failed arrived looking exactly like one that was not there -- and an absent target
+  // is skipped. The caller would then find the file on disk and read it, never having checked it.
+  const failedButPresent: acl.ObjectInfo = {
+    exists: true, isDirectory: false, isReparsePoint: false, ownerSid: "", sddl: "", rules: [], unreadable: true,
+  };
+  const refused = acl.evaluateInspected(
+    CHAIN, [{ path: STORE, kind: "directory" }, { path: RECORD, kind: "record" }],
+    mapOf([...chainMap(), [STORE, clean(ME, true)], [RECORD, failedButPresent]]), ME
+  );
+  assert.ok(!refused.ok && refused.problem === "owner-unreadable", "a failed inspection must refuse on its own terms");
+
+  // The shape the OLD helper produced, kept to show precisely what it bought an attacker.
+  const lookedAbsent: acl.ObjectInfo = { ...failedButPresent, exists: false, unreadable: false };
+  const skipped = acl.evaluateInspected(
+    CHAIN, [{ path: STORE, kind: "directory" }, { path: RECORD, kind: "record" }],
+    mapOf([...chainMap(), [STORE, clean(ME, true)], [RECORD, lookedAbsent]]), ME
+  );
+  assert.ok(skipped.ok, "an absent target is skipped — which is why reporting a failure as absence was the defect");
+});
+
+test("naming a record that is not there is not protection, which is why the reader tests existence first", () => {
+  // The helper answers for every path it is given, so a record that is not there comes back
+  // REPORTED ABSENT -- and the check skips it. A record named before it exists, and created
+  // before the read, would therefore be parsed unchecked. src/consent.ts decides "no record"
+  // BEFORE checking, rather than naming a record it has not seen.
+  // (A path missing from the response entirely is a different thing, and refuses: see above.)
+  const reportedAbsent: acl.ObjectInfo = {
+    exists: false, isDirectory: false, isReparsePoint: false, ownerSid: "", sddl: "", rules: [], unreadable: false,
+  };
+  const verdict = acl.evaluateInspected(
+    CHAIN, [{ path: STORE, kind: "directory" }, { path: RECORD, kind: "record" }],
+    mapOf([...chainMap(), [STORE, clean(ME, true)], [RECORD, reportedAbsent]]), ME
+  );
+  assert.ok(verdict.ok, "a target reported absent is skipped, not refused");
+});
+
+test("a record owned by another account is refused even when every other object is clean", () => {
+  const verdict = acl.evaluateInspected(
+    CHAIN, [{ path: STORE, kind: "directory" }, { path: RECORD, kind: "record" }],
+    mapOf([...chainMap(), [STORE, clean(ME, true)], [RECORD, clean(OTHER, false)]]), ME
+  );
+  assert.ok(!verdict.ok && verdict.problem === "foreign-owner");
+});
+
+test("a reparse point, and an object of the wrong kind, are each refused where they stand", () => {
+  const link = { ...clean(ME, false), isReparsePoint: true };
+  const asLink = acl.evaluateInspected(CHAIN, [{ path: RECORD, kind: "record" }], mapOf([...chainMap(), [RECORD, link]]), ME);
+  assert.ok(!asLink.ok && asLink.problem === "reparse-point");
+  const dirWhereRecordExpected = acl.evaluateInspected(
+    CHAIN, [{ path: RECORD, kind: "record" }], mapOf([...chainMap(), [RECORD, clean(ME, true)]]), ME
+  );
+  assert.ok(!dirWhereRecordExpected.ok && dirWhereRecordExpected.problem === "not-a-directory");
+  const chainLink = acl.evaluateInspected(
+    CHAIN, [], mapOf([[CHAIN[0], clean(ME, true)], [CHAIN[1], { ...clean(ME, true), isReparsePoint: true }], [CHAIN[2], clean(ME, true)]]), ME
+  );
+  assert.ok(!chainLink.ok && chainLink.problem === "unsafe-parent", "a reparse point on the way to the store refuses");
+});
+
+test("a missing result for something that was asked about refuses rather than passing", () => {
+  const verdict = acl.evaluateInspected(CHAIN, [{ path: STORE, kind: "directory" }], mapOf(chainMap()), ME);
+  assert.ok(!verdict.ok && verdict.problem === "acl-inspection-malformed");
+});
+
+test("two answers for one path is a response this code will not reason about", () => {
+  const one = JSON.stringify({
+    path: "C:\\a", ok: true, exists: true, isDirectory: true, isReparsePoint: false, ownerSid: ME,
+    sddl: "D:P", rules: [{ sid: ME, allow: true, rights: 0x1f01ff, inheritOnly: false }],
+  });
+  const duplicated = acl.parseHelperOutput(one + "\n" + one, ["C:\\a"]);
+  assert.ok(!duplicated.ok && duplicated.problem === "acl-inspection-malformed", "a duplicate result refuses");
+});
+
 test("the inspection script is a constant that interpolates nothing", () => {
   const source = acl.HELPER_SCRIPT_FOR_TESTS;
   assert.match(source, /\[Console\]::In\.ReadToEnd\(\)/, "paths arrive on standard input");
@@ -231,6 +325,8 @@ test("the inspection script is a constant that interpolates nothing", () => {
   assert.doesNotMatch(source, /\$_\.Exception\.Message/, "no operating-system text is ever returned");
   assert.doesNotMatch(source, /ExecutionPolicy/i, "no execution-policy change is requested");
   assert.doesNotMatch(source, /Out-File|Set-Content|New-Item/i, "nothing is written to disk");
+  assert.match(source, /-LiteralPath/, "paths are literal: no wildcard or glob expansion");
+  assert.match(source, /catch\{ \$o\.errorType=.*Test-Path -LiteralPath/, "a failed inspection still reports whether the object is there");
 });
 
 test("every refusal sentence is fixed words, with no path, descriptor, record or OS text in it", () => {

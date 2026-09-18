@@ -289,17 +289,6 @@ function translateAclProblem(problem: WindowsAclProblem): ConsentStoreProblem {
   return problem === "reparse-point" ? "symlink" : problem;
 }
 
-/** Record files currently in the pending directory, for a scope that covers all of them. */
-function recordFilesInPending(): string[] {
-  try {
-    return readdirSync(pendingDir())
-      .filter((entry) => entry.endsWith(".json"))
-      .map((entry) => path.join(pendingDir(), entry));
-  } catch {
-    return [];
-  }
-}
-
 /**
  * True when the readers may answer "no record" without a store check: the
  * path does not exist and is not a symbolic link. A dangling link is not
@@ -422,8 +411,16 @@ function ensureDirWindows(): void {
   const userSid = currentUserSid();
   if (!userSid) throw new ConsentStoreError("identity-unreadable");
 
-  const chain = checkWindowsStore(consentDir(), [], userSid);
-  if (!chain.ok) throw new ConsentStoreError(translateAclProblem(chain.problem));
+  // One inspection before anything is created: the ancestor chain always, and the store itself
+  // when it is already there. A store this call did not create is therefore judged BEFORE
+  // anything is put inside it, rather than being written into and refused afterwards -- and
+  // because both travel in the same call, that costs no extra subprocess.
+  const before = checkWindowsStore(
+    consentDir(),
+    existsSync(consentDir()) ? [{ path: consentDir(), kind: "directory" as const }] : [],
+    userSid
+  );
+  if (!before.ok) throw new ConsentStoreError(translateAclProblem(before.problem));
 
   let madeStore = false;
   let madePending = false;
@@ -547,12 +544,15 @@ export function readRecord(id: string): ConsentRecord | null {
   if (absent(consentDir())) return null;
   const pendingAbsent = absent(pendingDir());
   const file = recordPath(id);
-  // The store is checked even when the pending directory is gone: absence never means safe.
-  // The record is named unconditionally. Deciding whether to check it by whether it exists a
-  // moment earlier would leave a record that appeared in between unchecked; an absent target is
-  // simply skipped by the check itself, so naming it always costs nothing and closes that gap.
-  assertStoreScope({ includePending: !pendingAbsent, records: pendingAbsent ? [] : [file] });
-  if (pendingAbsent) return null;
+  // Order matters, and not in the obvious way. The check SKIPS a target that is not there, so
+  // naming a record that does not yet exist protects nothing: it would be created, found, and
+  // parsed without ever having been looked at. Deciding here that there is no record ends the
+  // call before anything is parsed, so nothing unchecked can be read. What remains is the
+  // ordinary check-then-use window -- a record present now and replaced before the read -- which
+  // naming it does NOT close, and which no path-based inspection can.
+  const present = !pendingAbsent && existsSync(file);
+  assertStoreScope({ includePending: !pendingAbsent, records: present ? [file] : [] });
+  if (pendingAbsent || !present) return null;
   if (!existsSync(file)) return null;
   const parsed = parseRecord(file);
   // The same rule listRecords applies, so the two readers agree: a record whose
@@ -581,9 +581,14 @@ export function listRecords(): ConsentRecord[] {
     return [];
   }
   // The names come from a directory that has just passed its checks; every record they name is
-  // then checked on its own before any of it is parsed. Two passes, because the second cannot
-  // be built until the first has approved the directory it reads the names from.
-  assertStoreScope({ includePending: true, records: recordFilesInPending() });
+  // then checked on its own before any of it is parsed. Two passes, because the second cannot be
+  // built until the first has approved the directory it reads the names from -- and the second
+  // pass covers exactly the entries this call is about to parse, taken from the SAME listing, so
+  // the set checked and the set read cannot drift apart.
+  assertStoreScope({
+    includePending: true,
+    records: entries.filter((e) => e.endsWith(".json")).map((e) => path.join(pendingDir(), e)),
+  });
   const out: ConsentRecord[] = [];
   for (const entry of entries) {
     if (!entry.endsWith(".json")) continue;
