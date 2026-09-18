@@ -2,6 +2,42 @@
 
 ## Unreleased
 
+### Consent
+
+- **SecretLoop refuses to trust consent records when the consent directory
+  fails its private-store checks (macOS, Linux).** Before every consent
+  operation — reading a record at either `secretloop_verify` call, listing
+  for `secretloop approve`, approving, claiming, deleting and writing — the
+  store's two directories (`~/.secretloop` and its `pending`) must be real
+  directories, not symbolic links, owned by your account, with mode `0700`. A
+  directory you own that is too open is set to `0700` and re-checked; one
+  owned by another account is refused and never changed; a link is refused and
+  never followed. On refusal the MCP tool answers an error and `secretloop
+  approve` exits 2, both in fixed words that carry no path, record, hash or
+  OS message; nothing is transmitted, approved, written or claimed. Before
+  this change a failed `chmod` was swallowed and the store was used anyway —
+  measured (`consent-file-security-assessment`): in a root-owned
+  world-writable store another ordinary user could list record ids, plant
+  files beside them and rename records away.
+- **What this does not do, stated plainly.** It inspects the store's own two
+  directories, not the home directory above them or a component swapped
+  between the check and the next operation; it does not see POSIX ACL entries;
+  it changes nothing it does not own and never touches your home directory's
+  permissions; and it closes no window against a process already running as
+  you, which is the documented trust boundary. First use still creates the
+  store. A `.secretloop` that was already private is unaffected.
+- **Windows.** Ownership and mode fields are not meaningful there and are not
+  consulted; only the link/junction refusal applies. Measured on one elevated
+  NTFS runner with a second ordinary user: a default profile refused that user
+  every operation (the inherited profile ACL, not the `0600` mode, is the
+  control), and a store under a folder that grants other accounts let another
+  account read a record. No ACL is set or verified; **Windows ACL hardening
+  remains unresolved and needs an explicit release disposition.**
+- Compatibility: an existing store that is already a private directory needs
+  nothing. A store that is a link, is owned by another account, or cannot be
+  made private is refused with guidance to inspect it and move it aside, not
+  to delete it, loosen it, or run anything elevated.
+
 ### Containment
 
 - **The scanner now checks the file it actually opened before reading it, and

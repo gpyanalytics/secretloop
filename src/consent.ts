@@ -1,6 +1,7 @@
 import {
   chmodSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readFileSync,
   readdirSync,
@@ -78,6 +79,131 @@ export function pendingDir(): string {
   return path.join(consentDir(), "pending");
 }
 
+/**
+ * Why the store was refused. A closed set, so a caller can show a bounded
+ * sentence without echoing a path, a record, a commitment or an OS message.
+ *
+ *   not-a-directory  the store path exists and is not a directory
+ *   symlink          the store path or its pending directory is a symbolic
+ *                    link (a junction on Windows); nothing is followed
+ *   foreign-owner    a directory is owned by another account; it is never
+ *                    chmod'ed and never trusted
+ *   permissive       a directory this account owns was found readable or
+ *                    writable by others and could NOT be repaired to 0700
+ *   inaccessible     the directory could not be inspected at all
+ */
+export type ConsentStoreProblem =
+  | "not-a-directory"
+  | "symlink"
+  | "foreign-owner"
+  | "permissive"
+  | "inaccessible";
+
+/**
+ * Thrown by every consent operation when the store fails its private-store
+ * checks. Carries only the problem code and a fixed sentence: the path is the
+ * user's own home directory and needs no echoing, and an OS error message can
+ * carry a path.
+ */
+export class ConsentStoreError extends Error {
+  constructor(public readonly problem: ConsentStoreProblem) {
+    super(describeStoreProblem(problem));
+    this.name = "ConsentStoreError";
+  }
+}
+
+/** The one sentence callers show. Fixed text per problem; nothing interpolated. */
+export function describeStoreProblem(problem: ConsentStoreProblem): string {
+  const where = "the consent store (.secretloop under your home directory)";
+  switch (problem) {
+    case "not-a-directory":
+      return `${where} exists but is not a directory, so consent records cannot be trusted.`;
+    case "symlink":
+      return `${where}, or its pending directory, is a symbolic link, so consent records cannot be trusted; SecretLoop does not follow it.`;
+    case "foreign-owner":
+      return `${where}, or its pending directory, is owned by another account, so consent records cannot be trusted; SecretLoop does not change its permissions.`;
+    case "permissive":
+      return `${where}, or its pending directory, is readable or writable by other accounts and SecretLoop could not make it private (0700), so consent records cannot be trusted.`;
+    case "inaccessible":
+      return `${where} could not be inspected, so consent records cannot be trusted.`;
+  }
+}
+
+/** Fixed guidance, safe to print beside the sentence above. */
+export const CONSENT_STORE_GUIDANCE =
+  "Inspect .secretloop in your home directory yourself: it and its pending directory should be real " +
+  "directories owned by you with mode 0700. Move a store you did not create aside rather than deleting or " +
+  "loosening it, then ask the client to request the verification again.";
+
+/**
+ * THE STORE POLICY, checked before every consent operation -- reads, listing,
+ * approval, claim, deletion and writes -- not only when a record is created.
+ *
+ * Accepted on POSIX, for BOTH `consentDir()` and `pendingDir()`:
+ *   - an actual directory reached by `lstat` (a symbolic link is refused, and
+ *     nothing behind it is inspected, repaired or written);
+ *   - owned by the effective user (`process.geteuid()`);
+ *   - no group or other bits set (`mode & 0o077 === 0`). A directory THIS
+ *     account owns that has such bits is repaired with `chmod 0700` and then
+ *     re-checked; a directory another account owns is never chmod'ed.
+ *
+ * Why fail closed here: `ensureDir` used to swallow a failed chmod, so a store
+ * that could not be made private was used as if it were. Measured
+ * (consent-file-security-assessment): in a root-owned world-writable store,
+ * another ordinary user could list record ids, plant files beside them and
+ * rename records away; the 0600 record itself stayed unreadable. Records are a
+ * map of which credentials exist where, and an approval in a store others can
+ * alter is not one this code should act on.
+ *
+ * WHAT THIS DOES NOT ESTABLISH, stated so it is not read as more:
+ *   - It inspects the final components only. The path above `.secretloop` is
+ *     the home directory, whose permissions are the user's and are not changed
+ *     here; a component swapped between this check and the operation that
+ *     follows is not caught. That window is open only to an account that can
+ *     already write those paths, which is the same-user trust boundary the
+ *     documentation states.
+ *   - Mode bits do not show POSIX ACL entries (Linux setfacl, macOS chmod +a).
+ *     A directory with mode 0700 and an ACL granting another account passes.
+ *     No claim is made about ACLs on POSIX.
+ *   - Windows: ownership and mode fields from Node are not meaningful and are
+ *     not consulted; only the symbolic-link/junction refusal applies. The
+ *     records' protection there is the inherited ACL of the profile directory
+ *     (measured: the default profile denied another ordinary user; a
+ *     permissive parent let another account read a record). No ACL is set or
+ *     verified here; that remains an open release decision.
+ */
+export function assertPrivateStore(): void {
+  for (const dir of [consentDir(), pendingDir()]) {
+    let st;
+    try {
+      st = lstatSync(dir);
+    } catch {
+      throw new ConsentStoreError("inaccessible");
+    }
+    if (st.isSymbolicLink()) throw new ConsentStoreError("symlink");
+    if (!st.isDirectory()) throw new ConsentStoreError("not-a-directory");
+    if (process.platform === "win32" || typeof process.geteuid !== "function") continue;
+    if (st.uid !== process.geteuid()) throw new ConsentStoreError("foreign-owner");
+    if ((st.mode & 0o077) !== 0) {
+      // Owner-owned and permissive: repair, then re-verify rather than assume.
+      try {
+        chmodSync(dir, 0o700);
+      } catch {
+        throw new ConsentStoreError("permissive");
+      }
+      let after;
+      try {
+        after = lstatSync(dir);
+      } catch {
+        throw new ConsentStoreError("inaccessible");
+      }
+      if (after.isSymbolicLink() || !after.isDirectory() || after.uid !== process.geteuid() || (after.mode & 0o077) !== 0) {
+        throw new ConsentStoreError("permissive");
+      }
+    }
+  }
+}
+
 /** SHA-256 of a credential value. The only form a value takes on disk. */
 export function commitmentOf(value: string): string {
   return createHash("sha256").update(value, "utf8").digest("hex");
@@ -108,22 +234,35 @@ function recordPath(id: string): string {
 }
 
 /**
- * Creates the store with owner-only permissions.
+ * Creates the store with owner-only permissions, then PROVES it.
  *
  * 0700 on the directory and 0600 on each file. These hold a hash rather than a
  * credential, so a leak is not immediately a key — but it is a list of which
  * credentials exist, where, and which provider they belong to, which is a map
  * worth denying to other accounts on a shared machine.
+ *
+ * First use creates both directories. Any later state goes through
+ * assertPrivateStore, which repairs an owner-owned permissive directory and
+ * refuses everything else. The earlier version swallowed a failed chmod and
+ * continued; it no longer does.
  */
 function ensureDir(): void {
-  mkdirSync(pendingDir(), { recursive: true, mode: 0o700 });
-  try {
-    chmodSync(consentDir(), 0o700);
-    chmodSync(pendingDir(), 0o700);
-  } catch {
-    // A pre-existing directory we cannot chmod is not worth refusing over; the
-    // file mode below is the control that matters.
+  // A symbolic link at either level would be FOLLOWED by a recursive mkdir
+  // and by the chmod; refuse before creating anything behind it.
+  for (const dir of [consentDir(), pendingDir()]) {
+    try {
+      if (lstatSync(dir).isSymbolicLink()) throw new ConsentStoreError("symlink");
+    } catch (err) {
+      if (err instanceof ConsentStoreError) throw err;
+      /* absent: created below */
+    }
   }
+  try {
+    mkdirSync(pendingDir(), { recursive: true, mode: 0o700 });
+  } catch {
+    throw new ConsentStoreError("inaccessible");
+  }
+  assertPrivateStore();
 }
 
 export function writeRecord(record: ConsentRecord): void {
@@ -175,7 +314,17 @@ function parseRecord(file: string): ConsentRecord | null {
   return r as ConsentRecord;
 }
 
+/**
+ * The record for `id`, null when there is none. Throws ConsentStoreError when
+ * the store fails its checks: "no record" and "the store cannot be trusted"
+ * are different answers, and a caller that treated the second as the first
+ * would write a fresh pending record into a store it should not use.
+ */
 export function readRecord(id: string): ConsentRecord | null {
+  // A store that has never been created holds no record; a store that IS
+  // there, or is a link pretending to be, must pass the checks first.
+  if (!existsSync(consentDir()) && !isSymlink(consentDir())) return null;
+  assertPrivateStore();
   const file = recordPath(id);
   if (!existsSync(file)) return null;
   const parsed = parseRecord(file);
@@ -188,8 +337,14 @@ export function readRecord(id: string): ConsentRecord | null {
   return parsed;
 }
 
-/** Every readable record. Malformed files are skipped, not fatal. */
+/**
+ * Every readable record. Malformed files are skipped, not fatal; an unsafe
+ * store throws ConsentStoreError (see readRecord). A store that does not exist
+ * yet is simply empty.
+ */
 export function listRecords(): ConsentRecord[] {
+  if (!existsSync(consentDir()) && !isSymlink(consentDir())) return [];
+  assertPrivateStore();
   let entries: string[];
   try {
     entries = readdirSync(pendingDir());
@@ -211,7 +366,16 @@ export function findByFingerprint(fingerprint: string): ConsentRecord[] {
   return listRecords().filter((r) => r.fingerprint === fingerprint);
 }
 
+function isSymlink(p: string): boolean {
+  try {
+    return lstatSync(p).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
 export function deleteRecord(id: string): void {
+  assertPrivateStore();
   rmSync(recordPath(id), { force: true });
 }
 
@@ -234,6 +398,7 @@ export function isExpired(record: ConsentRecord, now = Date.now()): boolean {
  * already claimed, already gone, or never existed.
  */
 export function consumeRecord(id: string): boolean {
+  assertPrivateStore();
   const from = recordPath(id);
   const to = `${from}.consumed.${process.pid}.${randomBytes(6).toString("hex")}`;
   try {

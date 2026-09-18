@@ -70,6 +70,12 @@ And **the pending consent record is not owner-only on Windows**: `mode:
 0o600` at write time has no effect there, so the record's protection is the
 ACL of the profile directory it lives under, not a mode. That is a real
 platform difference in `src/consent.ts`, disclosed here; it is not changed.
+Measured natively (`consent-file-security-assessment`, one elevated NTFS
+runner): a default profile refused a second ordinary user every operation; a
+store under a folder granting other accounts let another account read a
+record. The Unreleased private-store check (`assertPrivateStore`) refuses a
+junction or link on Windows but reads no ownership or mode there; an ACL
+policy for Windows is an open release decision, not something this code does.
 
 ## Layout
 

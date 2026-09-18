@@ -1410,6 +1410,24 @@ export async function runApprove(
   io: ApproveIO = terminalIO()
 ): Promise<number> {
   const consent = await import("./consent");
+  try {
+    return await runApproveInner(fingerprint, io, consent);
+  } catch (err) {
+    // The consent store failed its private-store checks. Nothing was
+    // approved; the sentence is fixed text (no path, record or OS message).
+    if (err instanceof consent.ConsentStoreError) {
+      io.err(`secretloop: ${err.message} Nothing was approved. ${consent.CONSENT_STORE_GUIDANCE}\n`);
+      return 2;
+    }
+    throw err;
+  }
+}
+
+async function runApproveInner(
+  fingerprint: string | undefined,
+  io: ApproveIO,
+  consent: typeof import("./consent")
+): Promise<number> {
   const { createHash } = await import("crypto");
 
   if (!fingerprint) {

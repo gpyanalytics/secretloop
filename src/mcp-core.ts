@@ -57,7 +57,9 @@ import { readTextFile } from "./walk";
 import { scanText } from "./scanner";
 import {
   CONSENT_VERSION,
+  CONSENT_STORE_GUIDANCE,
   ConsentRecord,
+  ConsentStoreError,
   commitmentOf,
   consumeRecord,
   deleteRecord,
@@ -1463,6 +1465,21 @@ function unknown(
 }
 
 export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
+  try {
+    return await toolVerifyInner(input);
+  } catch (err) {
+    // The consent store failed its private-store checks (src/consent.ts,
+    // assertPrivateStore). Refused as a whole, before any record is trusted,
+    // written, claimed or deleted, and before the provider boundary. The
+    // sentence is fixed text: no path, no record content, no OS message.
+    if (err instanceof ConsentStoreError) {
+      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${CONSENT_STORE_GUIDANCE}`);
+    }
+    throw err;
+  }
+}
+
+async function toolVerifyInner(input: VerifyInput): Promise<ToolResult> {
   // Type validation first, before any filesystem access, on both arguments.
   if (typeof input?.fingerprint !== "string" || input.fingerprint.trim().length === 0) {
     return fail("fingerprint is required and must be a non-empty string.");

@@ -122,6 +122,17 @@ with an empty list.
 `secretloop approve <fingerprint>` in a terminal. See
 [Verification](verification.md#the-consent-gate).
 
+**"the consent store (.secretloop under your home directory) … consent records
+cannot be trusted"** (MCP `secretloop_verify` error, or `secretloop approve`
+exit 2) — **Unreleased.** On macOS and Linux the store's two directories must
+be real directories owned by you with mode `0700`; the message says which
+check failed (not a directory, a symbolic link, another account's directory,
+or too open and not repairable). Nothing was transmitted or approved. Look at
+`~/.secretloop` yourself: if you did not create it, move it aside instead of
+deleting or loosening it, then ask the client to request the verification
+again. SecretLoop does not change the permissions of your home directory or of
+anything it does not own.
+
 **`secretloop approve` refuses to run** — it needs an interactive terminal; it
 cannot be piped, scripted or driven by an agent. Ctrl-D is a no.
 
