@@ -508,7 +508,7 @@ test("no emitted metadata field is ever null, empty or the wrong type", () => wi
   // and nothing is ever emitted as an explicit null
   assert.ok(!/"(schemaVersion|toolVersion|root|configDigest|ruleSetDigest|suppressionDigest|scopeDigest|binaryDigest|incomplete)"\s*:\s*null/
     .test(JSON.stringify(d)), "a metadata field was emitted as null");
-  assert.strictEqual(d.schemaVersion, 4, "the contract gained a required field, `binaryDigest`, so the version must be 4");
+  assert.strictEqual(d.schemaVersion, 5, "4 -> 5: `incomplete` gained the opened-file check refusals, so the version must be 5");
   assert.match(d.scopeDigest, /^scope:[0-9a-f]{16}$/);
   assert.match(d.binaryDigest, /^binary:[0-9a-f]{16}$/);
 }));

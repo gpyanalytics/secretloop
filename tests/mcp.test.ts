@@ -1,4 +1,5 @@
 import { test, suite, finish, assert } from "./harness";
+import { emptyOpenedFileChecks, recordOpenedFileCheck } from "../src/walk";
 import {
   mkdirSync,
   mkdtempSync,
@@ -194,9 +195,15 @@ test("describeScope matches the CLI's, word for word", () => {
   // returning the same string, and the pin stayed green while the MCP surface
   // silently stopped disclosing skipped files. A pin that only exercises the
   // arguments that existed yesterday fails the same way tomorrow.
-  const NOTES: Array<Record<string, number>> = [
+  const CHECKS = emptyOpenedFileChecks();
+  recordOpenedFileCheck(CHECKS, { identity: "verified", kernelPath: "unavailable" });
+  recordOpenedFileCheck(CHECKS, { identity: "refused", kernelPath: "not-reached" });
+  const NOTES: Array<Record<string, unknown>> = [
     {},
     { generatedExcluded: 12 },
+    { replacedExcluded: 2 },
+    { openedFileChecks: emptyOpenedFileChecks() },
+    { unreadableExcluded: 1, replacedExcluded: 1, openedFileChecks: CHECKS },
     { suppressed: 3 },
     { outsideExcluded: 2 },
     { fixtureSuppressed: 7 },
@@ -226,14 +233,17 @@ test("describeScope matches the CLI's, word for word", () => {
   // And that the payload actually uses it, so exporting a matching function
   // that nothing calls cannot pass this suite.
   resetSessions();
+  const empty = payload(toolScan({ path: emptyDir }));
   assert.strictEqual(
-    payload(toolScan({ path: emptyDir })).scope.statement,
-    `Scanned ${cliDescribeScope(0, "file")}.`
+    empty.scope.statement,
+    `Scanned ${cliDescribeScope(0, "file", { openedFileChecks: empty.scope.openedFileChecks })}.`
   );
+  assert.strictEqual(empty.scope.openedFileChecks.opened, 0, "an empty tree opens nothing, and says so");
   resetSessions();
+  const clean = payload(toolScan({ path: cleanDir }));
   assert.strictEqual(
-    payload(toolScan({ path: cleanDir })).scope.statement,
-    `Scanned ${cliDescribeScope(1, "file")}.`
+    clean.scope.statement,
+    `Scanned ${cliDescribeScope(1, "file", { openedFileChecks: clean.scope.openedFileChecks })}.`
   );
 });
 
@@ -288,6 +298,9 @@ test("a scan that could not read a file discloses it, exactly as the CLI does", 
       // read. The parity being pinned is that both surfaces say the same thing
       // about the same tree -- and both now say which of the two it was.
       binaryExcluded: 1,
+      // The readers' own accounting, from the payload: the pin is on the
+      // sentence being built from the same numbers the object carries.
+      openedFileChecks: p.scope.openedFileChecks,
     })}.`,
     `MCP scope statement drifted from the CLI's: ${p.scope.statement}`
   );
@@ -301,7 +314,7 @@ test("a scan with nothing to skip says nothing about skips", () => {
   const dir = repo("no-skip-disclosure", { "a.js": "const ok = 1;\n" });
   resetSessions();
   const p = payload(toolScan({ path: dir }));
-  assert.strictEqual(p.scope.statement, `Scanned ${cliDescribeScope(1, "file")}.`);
+  assert.strictEqual(p.scope.statement, `Scanned ${cliDescribeScope(1, "file", { openedFileChecks: p.scope.openedFileChecks })}.`);
   assert.doesNotMatch(p.scope.statement, /not scanned/, "a clean scan claimed a skip");
 });
 

@@ -1,6 +1,7 @@
 import type { ComparisonMetadata } from "./report-metadata";
 import { Finding, UnknownReason, redactValue } from "./scanner";
 import { ArchiveAccounting, countOf } from "./archive";
+import type { OpenedFileChecks, CheckCounts } from "./walk";
 import { isFixturePath } from "./config";
 
 export type OutputFormat = "text" | "json" | "sarif";
@@ -92,6 +93,13 @@ export interface ReportOptions {
  */
 export interface ReportCoverage {
   limitations: string[];
+  /**
+   * Per-descriptor check accounting for the readers this scan ran (see
+   * walk.ts). ABSENT when the producer never ran them (a history scan);
+   * present with `opened: 0` when it ran them over nothing. Counts, never
+   * paths; descriptive, never an identity.
+   */
+  openedFileChecks?: OpenedFileChecks;
   suppression: {
     allowValuesCount: number;
     baselineApplied: boolean;
@@ -165,10 +173,42 @@ export interface ScopeNotes {
   notAFileExcluded?: number;
   /** Files that were gone before they could be read. */
   vanishedExcluded?: number;
+  /** Files whose opened object was not the inspected one; nothing read. */
+  replacedExcluded?: number;
   /** Texts recognized as API description documents and scanned without generic entropy. */
   apiDocumentsScoped?: number;
   /** What the scan met in the way of archives, counts only; omitted when none. */
   archives?: ArchiveAccounting;
+  /**
+   * What the readers' per-descriptor checks did, counts only; omitted by a
+   * producer that never ran them. Rendered as the LAST clause, always, when
+   * supplied -- including all-verified and `opened: 0` -- because "no clause"
+   * must never be readable as "every check passed".
+   */
+  openedFileChecks?: OpenedFileChecks;
+}
+
+/**
+ * One check's counts as prose: every non-zero outcome, in a fixed order. Shared
+ * word for word by report.ts and mcp-core.ts (parity is pinned by test).
+ */
+export function describeCheckCounts(counts: CheckCounts): string {
+  const parts: string[] = [];
+  if (counts.verified > 0) parts.push(`${counts.verified} verified`);
+  if (counts.refused > 0) parts.push(`${counts.refused} refused`);
+  if (counts.failed > 0) parts.push(`${counts.failed} failed`);
+  if (counts.unavailable > 0) parts.push(`${counts.unavailable} unavailable`);
+  if (counts.notReached > 0) parts.push(`${counts.notReached} not reached`);
+  return parts.join(", ");
+}
+
+/** The opened-file-checks clause, without its leading separator. */
+export function describeOpenedFileChecks(o: OpenedFileChecks): string {
+  if (o.opened === 0) return "0 descriptor(s) opened for content";
+  return (
+    `${o.opened} descriptor(s) opened for content: ` +
+    `identity ${describeCheckCounts(o.identity)}; kernel path ${describeCheckCounts(o.kernelPath)}`
+  );
 }
 
 export function describeScope(count: number, noun: string, notes: ScopeNotes = {}): string {
@@ -183,8 +223,10 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     unreadableExcluded = 0,
     notAFileExcluded = 0,
     vanishedExcluded = 0,
+    replacedExcluded = 0,
     apiDocumentsScoped = 0,
     archives,
+    openedFileChecks,
   } = notes;
   const base =
     count === 0
@@ -257,6 +299,12 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
   if (vanishedExcluded > 0) {
     out += `; ${vanishedExcluded} file(s) not scanned — gone before they could be read`;
   }
+  // A substitution observed on the opened descriptor. Worded as what was
+  // seen -- the object changed between inspection and read -- and not as a
+  // location, which the identity check does not observe.
+  if (replacedExcluded > 0) {
+    out += `; ${replacedExcluded} file(s) not scanned — replaced between inspection and read`;
+  }
   // Archives, after every file clause and never folded into one: a member is
   // not a file, a stopped walk is not a refused member, and a container that
   // would not open is not an ordinary binary. Reasons live in the structured
@@ -279,6 +327,12 @@ export function describeScope(count: number, noun: string, notes: ScopeNotes = {
     }
     if (notOpened > 0) out += `; ${notOpened} recognized archive container(s) not opened`;
   }
+  // Last, and unconditional once supplied. The accounting of the readers'
+  // own checks: how many descriptors were opened for content and what the
+  // identity and kernel-path checks did on each. Zero descriptors is said as
+  // zero; a platform without a kernel path says "unavailable" every time,
+  // because a sentence that omitted it would read like one where it ran.
+  if (openedFileChecks) out += `; ${describeOpenedFileChecks(openedFileChecks)}`;
   return out;
 }
 
@@ -636,7 +690,15 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
         invocations: [
           {
             executionSuccessful: true,
-            properties: { scope: options.scope ?? null, ...(options.archives ? { archives: options.archives } : {}) },
+            properties: {
+              scope: options.scope ?? null,
+              ...(options.archives ? { archives: options.archives } : {}),
+              // The same structured accounting the JSON report carries under
+              // summary.coverage, in the one bag SARIF provides for it.
+              ...(options.reportCoverage?.openedFileChecks
+                ? { openedFileChecks: options.reportCoverage.openedFileChecks }
+                : {}),
+            },
           },
         ],
         results: findings.map((f) => ({

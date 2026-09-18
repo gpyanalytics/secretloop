@@ -284,18 +284,41 @@ names an earlier release:
   on win32 the flag is undefined and the open is unchanged. Record:
   `secretloop-benchmark/compare-fifo-nonblocking-open/`.
 
-  **Concern A — OPEN.** A path approved by `isInsideRoot` can resolve outside
-  the root by the time the read opens it, at the final component *or through a
-  replaced parent directory*. **One descriptor does not close this**: `openSync`
-  resolves the name and follows symlinks, so the containment decision would have
-  to be made about the opened object, or the open would have to not follow
-  links. Measured on macOS: `O_NOFOLLOW` refuses a final-component symlink but
-  **does not block traversal through a symlinked parent**, so it is not
-  sufficient on its own; and Node exposes no `openat` equivalent, so
-  descriptor-relative traversal would need a native addon this product will not
-  take. The design options and their platform caveats are in
-  `secretloop-benchmark/f1-reproduction-design/`. Concern A is **not** a release
-  blocker and nothing here promotes it to one.
+  **Concern A — OPEN, with check-time hardening in the Unreleased candidate.**
+  A path approved by `isInsideRoot` can resolve outside the root by the time
+  the read opens it, at the final component *or through a replaced parent
+  directory*. **One descriptor does not close this**: `openSync` resolves the
+  name and follows symlinks, so the containment decision has to be made about
+  the opened object. The Unreleased candidate makes exactly that decision, on
+  every content descriptor, before its first read (`readChecked` in
+  `src/walk.ts`): identity capture by `lstat` one syscall before the open,
+  `fstat` comparison on the descriptor, and on Linux the kernel's own path for
+  the descriptor from `/proc/self/fd` checked by path component against the
+  canonical root. The binary header probe reads from that same checked
+  descriptor; it used to open on its own and handed the acceptor 16 bytes of
+  whatever that open resolved to. Every descriptor's outcome is disclosed
+  (`openedFileChecks`, see [coverage](coverage.md#opened-file-checks)).
+
+  **What that establishes, and what it does not.** Per descriptor, as the
+  block records it: `kernelPath: verified` means no bytes were read before the
+  kernel-recorded location, *at the check that immediately precedes the first
+  read*, was found inside the root; `identity: verified` means every byte came
+  from the object inspected one syscall before the open; `unavailable` means
+  the descriptor was read without that check, and is disclosed as such. Measured and recorded (`f1-containment-design-review` and its timing
+  addendum), the limits are: an outside object moved under the root after the
+  open and before the check is accepted and read (MI1/MI2); an inside object
+  moved out after the check is still read (MO1); the identity check alone
+  cannot see a parent replaced between path resolution and the capture, so on
+  darwin and Windows — no kernel path — that case is read (A2, B1); content can
+  change in place. Windows and macOS get risk reduction, not the Linux check.
+  Closing the open-time gap needs an open that cannot escape the root —
+  `openat2(RESOLVE_BENEATH)` or descriptor-relative traversal — which Node does
+  not expose and which would need a native addon this product will not take.
+  `O_NOFOLLOW` was measured insufficient (it does not block traversal through a
+  symlinked parent). The design options and their platform caveats are in
+  `secretloop-benchmark/f1-reproduction-design/` and the three
+  `f1-containment-design*` records. Concern A is **not** a release blocker and
+  nothing here promotes it to one.
 
   **Native Windows validation does not touch either concern.** The bounded
   readers now run on a Windows runner (see *Build and test*), which measures

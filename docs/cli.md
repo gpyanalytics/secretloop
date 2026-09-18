@@ -128,6 +128,11 @@ not scanned — binary
 On `main` the sentence also counts API description documents the entropy tier
 did not look at and, when archives are met, containers opened, members scanned,
 members refused, entries not inspected, and containers that would not open.
+**Unreleased:** every working-tree and staged scan ends the sentence with the
+readers' own check accounting — for example `; 74058 descriptor(s) opened for
+content: identity 74058 verified; kernel path 74058 unavailable` — and a file
+refused because the opened object was not the one inspected is counted as
+`N file(s) not scanned — replaced between inspection and read`.
 [Coverage](coverage.md) explains each clause.
 
 ## `mask`
