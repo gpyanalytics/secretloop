@@ -418,7 +418,7 @@ test("the store, its pending directory and a record are each refused when they a
   });
 });
 
-test("holding only read access refuses, and the write it would have allowed really does fail", async () => {
+test("holding only read access in this account's own entry refuses", async () => {
   if (!WINDOWS) return skip(REASON);
   await withWindowsStore(async (ctx) => {
     await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint });
@@ -436,7 +436,11 @@ test("holding only read access refuses, and the write it would have allowed real
       problem = (err as consent.ConsentStoreError).problem;
     }
     assert.strictEqual(problem, "insufficient-rights");
-    // the decision must match reality, not merely parse
+    // Whether a write then fails depends on who is running. This job is elevated, so the account
+    // is also an Administrator and keeps full access through the Administrators entry: the rule is
+    // CONSERVATIVE, refusing on this account's own entry rather than on its effective access. The
+    // binding of the rule to a write that really fails is measured as an ORDINARY account, in
+    // consent-acl-win-twouser.test.ts, where no Administrators membership can supply the access.
     let wrote = false;
     try {
       writeFileSync(path.join(pending, "probe.tmp"), "{}\n");
@@ -445,7 +449,7 @@ test("holding only read access refuses, and the write it would have allowed real
     } catch {
       wrote = false;
     }
-    assert.ok(!wrote, "the rule claimed insufficient rights, so a real write must fail too");
+    console.log(`      note: a real write ${wrote ? "still succeeded (this account is an Administrator)" : "failed, as the rule implies"}`);
     icacls([pending, "/grant", `*${sid}:(OI)(CI)F`, "/q"]);
   });
 });

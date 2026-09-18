@@ -166,6 +166,14 @@ jobs:
           "--- the planted record, as the runner sees it"; icacls $record
           "ACL_STORE=$store" >> $env:GITHUB_ENV
           "ACL_REPO=$repo" >> $env:GITHUB_ENV
+          # A second store whose pending directory grants the ordinary owner read access only.
+          # The rule refuses it; because that account is NOT an administrator, the write it
+          # governs must really fail, which an elevated job could never show.
+          $rx = Join-Path $LAB "private\\rxstore"
+          New-Item -ItemType Directory -Force (Join-Path $rx "pending") | Out-Null
+          icacls $rx /inheritance:r /grant:r "*$($env:ACL_SID1):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          icacls (Join-Path $rx "pending") /inheritance:r /grant:r "*$($env:ACL_SID1):(OI)(CI)RX" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          "ACL_RX_STORE=$rx" >> $env:GITHUB_ENV
       - name: What the second ordinary account can and cannot do
         shell: pwsh
         run: |
@@ -215,6 +223,7 @@ jobs:
             "set SECRETLOOP_WIN_TWOUSER_REPO=$env:ACL_REPO",
             "set SECRETLOOP_WIN_ATTACKER_SID=$env:ACL_SID2",
             ("set SECRETLOOP_WIN_PERMISSIVE_PARENT=" + (Join-Path $LAB "permissive")),
+            "set SECRETLOOP_WIN_RX_STORE=$env:ACL_RX_STORE",
             "node node_modules\ts-node\dist\bin.js --transpile-only tests\consent-acl-win-twouser.test.ts"
           )
           Set-Content -Path $runner -Value $lines -Encoding ASCII

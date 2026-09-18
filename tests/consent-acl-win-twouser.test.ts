@@ -1,5 +1,5 @@
 import { test, suite, finish, assert, skip } from "./harness";
-import { existsSync, readdirSync, realpathSync } from "fs";
+import { existsSync, readdirSync, realpathSync, writeFileSync, rmSync } from "fs";
 import * as path from "path";
 import {
   setAllowedRoots,
@@ -132,6 +132,38 @@ test("a parent the other account can write refuses before any store is created",
     assert.strictEqual(wire.count, 0);
   } finally {
     setAllowedRoots(savedRoots);
+    consent.setConsentRootForTests(undefined);
+  }
+});
+
+test("read-only rights refuse, and as an ordinary account the write really does fail", () => {
+  if (!CONFIGURED) return skip(REASON);
+  const rxStore = process.env.SECRETLOOP_WIN_RX_STORE;
+  if (!rxStore) return skip("NOT RUN: no read-only-rights store fixture was provided for this run");
+  const me = acl.currentUserSid();
+  assert.ok(me, "could not read this account");
+  // This account must NOT be an administrator, or the Administrators entry would supply the
+  // access and the case would measure nothing.
+  const pending = path.join(rxStore, "pending");
+  try {
+    consent.setConsentRootForTests(rxStore);
+    let problem: string | undefined;
+    try {
+      consent.listRecords();
+    } catch (err) {
+      problem = (err as consent.ConsentStoreError).problem;
+    }
+    assert.strictEqual(problem, "insufficient-rights", "an account holding only read access must be refused");
+    let wrote = false;
+    try {
+      writeFileSync(path.join(pending, "probe.tmp"), "{}\n");
+      wrote = true;
+      rmSync(path.join(pending, "probe.tmp"), { force: true });
+    } catch {
+      wrote = false;
+    }
+    assert.ok(!wrote, "the rule claimed insufficient rights, so the write it governs must really fail");
+  } finally {
     consent.setConsentRootForTests(undefined);
   }
 });
