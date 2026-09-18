@@ -175,3 +175,113 @@ jobs:
           $rec = Get-ChildItem "$env:RUNNER_TEMP\slprobe-root\store\pending" -Filter *.json -ErrorAction SilentlyContinue | Select-Object -First 1
           if ($rec) { icacls $rec.FullName; node "$env:RUNNER_TEMP\consent-probes.js" other-user --target $rec.FullName } else { "no record left by the slprobe lifecycle (it cleans up); planting one as slprobe instead" ; $out3="$env:RUNNER_TEMP\p3.txt"; Start-Process -FilePath $nodeExe -ArgumentList @("$env:RUNNER_TEMP\consent-probes.js","--out","$PWD\out","plant","--consent-root","$env:RUNNER_TEMP\slprobe-root\store") -Credential $cred -WorkingDirectory $env:RUNNER_TEMP -RedirectStandardOutput $out3 -RedirectStandardError "$env:RUNNER_TEMP\p3.err" -PassThru -NoNewWindow -Wait | Out-Null; Get-Content $out3; $P3 = (Get-Content $out3 | Select-String -Pattern '^PLANTED-PATH: ').Line -replace '^PLANTED-PATH: ',''; icacls $P3; node "$env:RUNNER_TEMP\consent-probes.js" other-user --target $P3 }
           exit 0
+
+  # ---------------------------------------------------------------------------
+  # WINDOWS CONSENT ACL PROTOTYPE (evidence-only, never merge). The elevated runner
+  # provisions two ORDINARY local users and a lab under RUNNER_TEMP. The prototype
+  # policy (tests/probes-f1/windows-acl-probes.js) runs AS the ordinary owner; the
+  # second ordinary user attacks the records; the real consent module decides.
+  # No continue-on-error: a probe that cannot run fails the job. Measured outcomes
+  # (allowed/denied) are printed, not asserted, except for the tooling-absent case,
+  # which must refuse.
+  # ---------------------------------------------------------------------------
+  acl-windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Build the product (tsc), no bundle
+        run: |
+          npm ci --no-audit --no-fund
+          npm run compile
+      - name: Provision two ordinary users and the lab
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe groups:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2 groups:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          "owner SID $sid1 / other SID $sid2"
+          $LAB = "$env:RUNNER_TEMP\acl"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          # both ordinary users may traverse the lab root and read the product build
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" | Out-Null
+          foreach ($d in @("$PWD\out", "$PWD\node_modules")) { icacls $d /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null }
+          Copy-Item tests\probes-f1\windows-acl-probes.js "$LAB\windows-acl-probes.js"
+          # per-user scratch (each F on its own)
+          New-Item -ItemType Directory -Force "$LAB\tmp1", "$LAB\tmp2" | Out-Null
+          icacls "$LAB\tmp1" /grant "*${sid1}:(OI)(CI)F" | Out-Null
+          icacls "$LAB\tmp2" /grant "*${sid2}:(OI)(CI)F" | Out-Null
+          # PERMISSIVE parents: 'rx' inherits the lab (other user RX); 'full' additionally grants Users F
+          New-Item -ItemType Directory -Force "$LAB\permissive\rx", "$LAB\permissive\full" | Out-Null
+          icacls "$LAB\permissive" /grant "*${sid1}:(OI)(CI)F" | Out-Null
+          icacls "$LAB\permissive\full" /grant "*S-1-5-32-545:(OI)(CI)F" | Out-Null
+          # PROFILE-LIKE parent: protected DACL, owner + SYSTEM + Administrators only (what a real profile gives)
+          New-Item -ItemType Directory -Force "$LAB\profile-like" | Out-Null
+          icacls "$LAB\profile-like" /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" | Out-Null
+          "--- lab ACLs (owner view)"; icacls $LAB; icacls "$LAB\permissive"; icacls "$LAB\permissive\rx"; icacls "$LAB\permissive\full"; icacls "$LAB\profile-like"
+          # hand the credentials to the next steps through files only the runner can read
+          $pw1 | Out-File -NoNewline "$env:RUNNER_TEMP\pw1.txt"; $pw2 | Out-File -NoNewline "$env:RUNNER_TEMP\pw2.txt"
+          "LAB=$LAB" >> $env:GITHUB_ENV; "SID1=$sid1" >> $env:GITHUB_ENV; "SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Prototype and consent consequences (owner = slprobe, attacker = slprobe2, third party = elevated runner)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:LAB; $OUT = "$PWD\out"; $nodeExe = (Get-Command node).Source; $probe = "$LAB\windows-acl-probes.js"
+          $c1 = New-Object System.Management.Automation.PSCredential("slprobe",  (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\pw1.txt") -AsPlainText -Force))
+          $c2 = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw "$env:RUNNER_TEMP\pw2.txt") -AsPlainText -Force))
+          $script:n = 0
+          function RunAs($cred, $tag, $argList) {
+            $script:n++; $o = "$env:RUNNER_TEMP\p$($script:n).out"; $e = "$env:RUNNER_TEMP\p$($script:n).err"
+            $p = Start-Process -FilePath $nodeExe -ArgumentList (@($probe) + $argList) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"; $out = @(Get-Content $o); $out; if (Test-Path $e) { Get-Content $e }
+            if ($p.ExitCode -ne 0) { throw "probe [$tag] exited $($p.ExitCode)" }
+            return $out
+          }
+          function RunHere($tag, $argList) {
+            "=== [$tag] as runner (elevated):"; $out = @(& $nodeExe $probe @argList); $out
+            if ($LASTEXITCODE -ne 0) { throw "probe [$tag] exited $LASTEXITCODE" }
+            return $out
+          }
+          function RecordPath($lines) { (($lines | Select-String -Pattern '^RECORD-PATH: ').Line -replace '^RECORD-PATH: ','') }
+          $T1 = "--tmp","$LAB\tmp1"; $T2 = "--tmp","$LAB\tmp2"
+          RunAs $c1 "facts" (@("facts","--root","$LAB\permissive") + $T1) | Out-Null
+          RunAs $c1 "owner-sid-via-powershell" (@("owner","--path","$LAB\permissive") + $T1) | Out-Null
+          $u = RunAs $c1 "tooling-absent" (@("inspect","--path","$LAB\permissive","--icacls","C:\nonexistent\icacls.exe") + $T1)
+          if (-not ($u | Select-String -Pattern 'acl-tooling-unavailable')) { throw "tooling-absent case did not refuse" }
+          RunAs $c1 "enforcement-failure-and-decision-table" (@("unavailable","--root","$LAB\permissive\unav") + $T1) | Out-Null
+          RunAs $c1 "inspect-permissive-parent"  @("inspect","--path","$LAB\permissive\full") + $T1 | Out-Null
+          RunAs $c1 "inspect-profile-like-parent" (@("inspect","--path","$LAB\profile-like") + $T1) | Out-Null
+          # Prototype creation under the permissive parent: does a protected DACL take, and do pending/records inherit it?
+          RunAs $c1 "prototype-create" (@("create","--root","$LAB\permissive\full\proto-store") + $T1) | Out-Null
+          # Scenario A: profile-like parent, product as merged
+          $A = RecordPath (RunAs $c1 "A.call1.profile-like" (@("call1","--out",$OUT,"--root","$LAB\profile-like\store","--repo","$LAB\profile-like\repo") + $T1))
+          # Scenario B1: permissive parent (other user inherits RX), product as merged
+          $B1 = RecordPath (RunAs $c1 "B1.call1.permissive-rx" (@("call1","--out",$OUT,"--root","$LAB\permissive\rx\store","--repo","$LAB\permissive\rx\repo") + $T1))
+          # Scenario B2: permissive parent (Users F), product as merged
+          $B2 = RecordPath (RunAs $c1 "B2.call1.permissive-full" (@("call1","--out",$OUT,"--root","$LAB\permissive\full\store","--repo","$LAB\permissive\full\repo") + $T1))
+          # Scenario C: same permissive parent (Users F) but the store was created by the prototype (protected DACL)
+          $C = RecordPath (RunAs $c1 "C.call1.permissive-full-protected" (@("call1","--out",$OUT,"--root","$LAB\permissive\full\proto-store","--repo","$LAB\permissive\full\repo-c") + $T1))
+          "--- record ACLs as the owner sees them"; icacls $A; icacls $B1; icacls $B2; icacls $C
+          # The attacker: list, read, plant, append, FLIP TO APPROVED, replace, rename, re-ACL
+          RunAs $c2 "A.other-user"  @("other-user","--store","$LAB\profile-like\store","--target",$A,"--flip") + $T2 | Out-Null
+          RunAs $c2 "B1.other-user" (@("other-user","--store","$LAB\permissive\rx\store","--target",$B1,"--flip") + $T2) | Out-Null
+          RunAs $c2 "B2.other-user" (@("other-user","--store","$LAB\permissive\full\store","--target",$B2,"--flip") + $T2) | Out-Null
+          RunAs $c2 "C.other-user"  @("other-user","--store","$LAB\permissive\full\proto-store","--target",$C,"--flip") + $T2 | Out-Null
+          # The owner's second call: is whatever the attacker left trusted?
+          foreach ($s in @(@("A",$A,"$LAB\profile-like\store","$LAB\profile-like\repo"), @("B1",$B1,"$LAB\permissive\rx\store","$LAB\permissive\rx\repo"), @("B2",$B2,"$LAB\permissive\full\store","$LAB\permissive\full\repo"), @("C",$C,"$LAB\permissive\full\proto-store","$LAB\permissive\full\repo-c"))) {
+            RunAs $c1 "$($s[0]).inspect-record-after-attack" (@("inspect","--path",$s[1]) + $T1) | Out-Null
+            RunAs $c1 "$($s[0]).call2" (@("call2","--out",$OUT,"--root",$s[2],"--repo",$s[3]) + $T1) | Out-Null
+          }
+          # Third party the policy ALLOWS: the elevated runner (Administrators) against the protected store C
+          RunHere "C.other-user.administrator" @("other-user","--store","$LAB\permissive\full\proto-store","--target",$C) | Out-Null
+          RunAs $c1 "C.inspect-after-admin" (@("inspect","--path",$C) + $T1) | Out-Null
+          "--- final ACLs"; icacls "$LAB\permissive\full\proto-store"; icacls "$LAB\permissive\full\proto-store\pending"; icacls $C
