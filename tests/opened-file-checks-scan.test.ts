@@ -78,6 +78,9 @@ const fs = require("fs"), path = require("path");
 const target = process.env.OFC_TARGET, fn = process.env.OFC_FN, nth = Number(process.env.OFC_NTH || "1");
 const outside = process.env.OFC_OUTSIDE, report = process.env.OFC_REPORT;
 const real = fs[fn]; let seen = 0, fired = false;
+// Captured BEFORE the wrapper replaces fs[fn]: when fn is realpathSync, the
+// wrapper has no native property of its own.
+const native = fs.realpathSync.native;
 // The CLI roots a repository scan at git's toplevel, which on Windows can spell
 // the same directory differently from the parent's realpath (long name versus
 // 8.3, forward slashes). Compare canonical native paths, case-insensitively
@@ -85,7 +88,7 @@ const real = fs[fn]; let seen = 0, fired = false;
 // while both names still resolve to the same file.
 function same(a) {
   try {
-    const x = fs.realpathSync.native(path.resolve(a)), y = fs.realpathSync.native(target);
+    const x = native(path.resolve(a)), y = native(target);
     return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
   } catch { return false; }
 }
@@ -366,10 +369,11 @@ test("the realpath-to-identity gap at the text reader: refused by the kernel pat
 suite("opened-file checks at scan level — the shared scanner, the MCP tool and the editor summary");
 
 /** Canonical-path equality, case-insensitive on win32; false when either name no longer resolves. */
+const NATIVE_REALPATH = fs.realpathSync.native;
 function sameFile(a: string, b: string): boolean {
   try {
-    const x = fs.realpathSync.native(path.resolve(a));
-    const y = fs.realpathSync.native(b);
+    const x = NATIVE_REALPATH(path.resolve(a));
+    const y = NATIVE_REALPATH(b);
     return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
   } catch {
     return false;
