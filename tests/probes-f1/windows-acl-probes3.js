@@ -9,6 +9,7 @@
  * written, and no execution-policy change is requested. Enforcement uses icacls at its fixed System32 path.
  * Only SecurityIdentifier values are compared -- never an account name -- so results do not depend on UI language.
  *
+ *   helper-source                            print the CONSTANT PowerShell script verbatim (runs anywhere)
  *   table                                    offline decision table (runs anywhere)
  *   facts                                    OS, filesystem, arch, Node, PowerShell/.NET, privileges
  *   chain        --path P                    the ancestor-chain rule over a real path, component by component
@@ -31,7 +32,7 @@ const has = (n) => args.includes(n);
 const log = (k, v) => console.log(`${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`);
 const code = (e) => (e && e.code) || String((e && e.message) || e);
 const WIN = process.platform === "win32";
-if (!WIN && mode !== "table") { console.log("PROBE-ERROR: win32 only (except table)"); process.exit(3); }
+if (!WIN && mode !== "table" && mode !== "helper-source") { console.log("PROBE-ERROR: win32 only (except table, helper-source)"); process.exit(3); }
 
 const SYSTEM_ROOT = process.env.SystemRoot || "C:\\Windows";
 const SYS32 = path.join(SYSTEM_ROOT, "System32");
@@ -129,10 +130,13 @@ const PS_SOURCE = [
   "$ErrorActionPreference='Stop'",
   "$ProgressPreference='SilentlyContinue'",
   "$raw=[Console]::In.ReadToEnd()",
-  "$paths=@($raw | ConvertFrom-Json)",
+  // One path per line. ConvertFrom-Json on an array can yield a single nested value in PowerShell 5.1, which
+  // made $p an array rather than a string; splitting lines has one unambiguous shape. Paths remain DATA on
+  // stdin and are never interpolated into this source.
+  "$paths=@($raw -split \"`r?`n\" | Where-Object { $_.Length -gt 0 })",
   "$out=New-Object System.Collections.ArrayList",
   "foreach($p in $paths){",
-  "  $o=[ordered]@{path=$p;ok=$false;exists=$false}",
+  "  $o=[ordered]@{path=[string]$p;ok=$false;exists=$false}",
   "  try{",
   "    $item=Get-Item -LiteralPath $p -Force",
   "    $o.exists=$true",
@@ -160,8 +164,10 @@ const probeRaw = (t) => String(t || "").slice(0, 400).replace(/\r?\n/g, " | ");
 function psInspect(paths) {
   psCalls++;
   if (!fs.existsSync(PS)) return { fail: "acl-tooling-unavailable" };
+  // A path carrying a line break could not be delivered unambiguously; refuse rather than guess.
+  if (paths.some((p) => /[\r\n]/.test(p))) return { fail: "acl-inspection-failed", detail: "unsupported-path" };
   const r = cp.spawnSync(PS, ["-NoProfile", "-NonInteractive", "-EncodedCommand", PS_B64],
-    { input: JSON.stringify(paths), encoding: "utf8", timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_OUTPUT, windowsHide: true });
+    { input: paths.join("\r\n") + "\r\n", encoding: "utf8", timeout: PS_TIMEOUT_MS, maxBuffer: PS_MAX_OUTPUT, windowsHide: true });
   if (r.error && (r.error.code === "ETIMEDOUT" || r.error.killed)) return { fail: "acl-inspection-failed", detail: "timeout" };
   if (r.error && r.error.code === "ENOBUFS") return { fail: "acl-inspection-failed", detail: "output-too-large" };
   if (r.error) return { fail: "acl-tooling-unavailable", detail: r.error.code };
@@ -485,7 +491,8 @@ function toolfail() {
 }
 (async () => {
   try {
-    if (mode === "table") table();
+    if (mode === "helper-source") { console.log(PS_SOURCE); console.log("--- delivered as -EncodedCommand, " + PS_B64.length + " base64 chars; paths arrive on stdin, one per line"); }
+    else if (mode === "table") table();
     else if (mode === "facts") facts();
     else if (mode === "chain") chainMode();
     else if (mode === "inspect") inspectMode();

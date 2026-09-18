@@ -531,6 +531,7 @@ jobs:
           $T1 = @("--tmp","$LAB\tmp1"); $T2 = @("--tmp","$LAB\tmp2")
           RunAs $c1 "environment facts (ordinary user)" (@("facts","--root",$LAB) + $T1) | Out-Null
           RunAs $c1 "offline decision table" (@("table")) | Out-Null
+          RunAs $c1 "the constant inspection script, verbatim" (@("helper-source")) | Out-Null
 
           # ---- P1 stock ancestor chain -------------------------------------------------
           if ($env:PROFILE1) { RunAs $c1 "P1 stock profile chain (C:\ , C:\Users , real profile)" (@("chain","--path","$env:PROFILE1\.secretloop") + $T1) | Out-Null }
