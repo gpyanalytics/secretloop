@@ -115,8 +115,9 @@ function lifecycle() {
     let wrote = "ok"; try { consent.writeRecord(r2); } catch (e) { wrote = "error:" + code(e); }
     const landed = fs.existsSync(path.join(elsewhere, r2.id + ".json"));
     log("redirect.pendingDir", { linkKind, write: wrote, recordLandedInRedirectTarget: landed, pendingStillLink: (() => { try { return fs.lstatSync(pend).isSymbolicLink(); } catch { return "gone"; } })(), pendingMode: octal(pend), targetMode: octal(elsewhere) });
-    log("redirect.readback", consent.readRecord(r2.id) ? "parsed (followed the link)" : "null");
-    log("redirect.list", consent.listRecords().length);
+    // On the merged product (PR #90) both readers refuse a linked store with ConsentStoreError; record that outcome.
+    try { log("redirect.readback", consent.readRecord(r2.id) ? "parsed (followed the link)" : "null"); } catch (e) { log("redirect.readback", "refused:" + (e.problem || code(e))); }
+    try { log("redirect.list", consent.listRecords().length); } catch (e) { log("redirect.list", "refused:" + (e.problem || code(e))); }
   }
   fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(elsewhere, { recursive: true, force: true });
   // 5. record path is itself a symlink to a file elsewhere

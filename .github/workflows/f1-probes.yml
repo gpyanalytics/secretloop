@@ -242,12 +242,12 @@ jobs:
           function RunAs($cred, $tag, $argList) {
             $script:n++; $o = "$env:RUNNER_TEMP\p$($script:n).out"; $e = "$env:RUNNER_TEMP\p$($script:n).err"
             $p = Start-Process -FilePath $nodeExe -ArgumentList (@($probe) + $argList) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
-            "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"; $out = @(Get-Content $o); $out; if (Test-Path $e) { Get-Content $e }
+            Write-Host "=== [$tag] as $($cred.UserName): exit $($p.ExitCode)"; $out = @(Get-Content $o); $out | ForEach-Object { Write-Host $_ }; if (Test-Path $e) { Get-Content $e | ForEach-Object { Write-Host "stderr: $_" } }
             if ($p.ExitCode -ne 0) { throw "probe [$tag] exited $($p.ExitCode)" }
             return $out
           }
           function RunHere($tag, $argList) {
-            "=== [$tag] as runner (elevated):"; $out = @(& $nodeExe $probe @argList); $out
+            Write-Host "=== [$tag] as runner (elevated):"; $out = @(& $nodeExe $probe @argList); $out | ForEach-Object { Write-Host $_ }
             if ($LASTEXITCODE -ne 0) { throw "probe [$tag] exited $LASTEXITCODE" }
             return $out
           }
