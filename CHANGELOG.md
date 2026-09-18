@@ -53,13 +53,23 @@
   Windows and macOS therefore get **risk reduction**, not a Linux-equivalent
   check. **F-1 Concern A remains open.** No native dependency, `openat2`
   binding or broader filesystem policy was added.
-- **Compatibility.** `REPORT_SCHEMA_VERSION` stays 4: the block is descriptive
-  and lives under `summary.coverage`, never beside the comparison identities;
-  the meaning of `incomplete` is unchanged and only gains causes, in the
-  conservative direction. On a stable tree, builds from either side produce
-  byte-identical findings, fingerprints and comparison identities; the only
-  differences are the new clause and the new block. The comparator is
-  unchanged. Reading a scope sentence that used to end at a known clause now
+- **`schemaVersion` is now `5`.** The refusals above **widen what `incomplete`
+  counts**: a version-4 producer read a substituted object and said
+  `incomplete: false`; a version-5 producer says `true` for the same event. That
+  is the documented bump trigger, so the version moves. Consequences, measured
+  with real reports: a published 0.6.0 (schema-4) report is byte-for-byte what
+  it was; the comparator in this build refuses a schema-4 report **on either
+  side** with `unsupported-schema` (exit 3, no difference computed) — a 4/5
+  pair additionally reports `mixed-schema`, and a 4/4 pair is refused too;
+  two schema-5 reports of a stable tree compare exactly as before; a file
+  refused by the checks still makes its report `incomplete` and the pair
+  ineligible. `BINARY_CONTRACT_VERSION` (2) and `SCOPE_CONTRACT_VERSION` (1)
+  are unchanged: neither representation moved. The `openedFileChecks` block
+  itself is descriptive and lives under `summary.coverage`, never beside the
+  identities. On a stable tree, builds from either side produce byte-identical
+  findings, fingerprints and every comparison identity except `schemaVersion`;
+  the other differences are the new clause and the new block. Reading a scope
+  sentence that used to end at a known clause now
   finds the accounting clause after it.
 
 ### Coverage
@@ -105,10 +115,12 @@
   skipped as `unreadable` instead. Every value that is actually a number behaves
   exactly as before, `Infinity` included — measured across the default, the exact
   size, one under, zero, a negative, and fractional caps.
-- No report or digest contract changed: `REPORT_SCHEMA_VERSION` stays 4,
-  `BINARY_CONTRACT_VERSION` 2, `SCOPE_CONTRACT_VERSION` 1, and no new skip reason
-  was introduced — an over-cap file is still `oversized`, still counted, and
-  still makes the report incomplete.
+- This change on its own altered no report or digest contract:
+  `BINARY_CONTRACT_VERSION` stays 2, `SCOPE_CONTRACT_VERSION` 1, and it
+  introduced no new skip reason — an over-cap file is still `oversized`, still
+  counted, and still makes the report incomplete. (`REPORT_SCHEMA_VERSION`
+  was still 4 here; the containment entry above moves it to 5 in this same
+  release.)
 - **A file replaced by a named pipe during scanning no longer causes the
   validated reader path to wait indefinitely for a writer.** Both readers
   classify a path before opening it, so a FIFO that is already there was always

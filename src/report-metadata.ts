@@ -51,8 +51,24 @@ import { ArchiveAccounting, countOf } from "./archive";
  * finding disappears. Version 4 makes the excluded SET part of eligibility, so
  * that pair is incomparable. The set of required fields changed, which is the
  * named trigger for a bump on its own.
+ *
+ * 4 -> 5 WIDENED WHAT `incomplete` COUNTS. The readers now check every opened
+ * descriptor before its first read (see walk.ts, readChecked): an object that
+ * is not the one inspected (`replaced`), one whose kernel-recorded location is
+ * outside the root (`outside`), or one whose check evidence could not be
+ * obtained (`unreadable`) is refused unread and counts as a coverage
+ * limitation. A version-4 producer read such an object and said
+ * `incomplete: false`; a version-5 producer says `true` for the same event.
+ * The boolean's meaning -- "could not cover what it set out to" -- is the same
+ * words, but the set of events it counts changed, and that is the trigger this
+ * comment names. The version moves so a version-4 `false` is never taken as
+ * equivalent to a version-5 `false`: the older one may be describing a scan
+ * that read a substituted object. The cost is the documented one -- every
+ * report written by a version-4 producer is ineligible against a version-5
+ * report, and this comparator refuses version-4 reports on BOTH sides, not
+ * only in mixed pairs.
  */
-export const REPORT_SCHEMA_VERSION = 4;
+export const REPORT_SCHEMA_VERSION = 5;
 
 /**
  * The version of the scope representation `scopeDigest` covers.

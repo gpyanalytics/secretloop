@@ -336,7 +336,7 @@ COMPARE
   A refused comparison lists invalid findings from BOTH reports by side and
   array index, within a per-report limit, and says how many were not listed.
 
-  Both reports must be working-tree scans carrying all nine schema-4 comparison
+  Both reports must be working-tree scans carrying all nine schema-5 comparison
   fields, with matching tool, repository, configuration, rule set, suppression,
   scope and binary-exclusion identities, and neither marked incomplete. Staged
   and history reports do not qualify: they omit a required field.

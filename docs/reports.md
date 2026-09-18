@@ -22,7 +22,7 @@ illustrative, not a claim about which release carries these fields.
   "tool": "secretloop",
 
   // Comparison-bearing. See the rule below: an absent key means UNKNOWN.
-  "schemaVersion": 4,
+  "schemaVersion": 5,
   "toolVersion": "0.5.1",
   "root": "git:af829fc833133fca",
   "configDigest": "3071344b11905ec5",
@@ -98,7 +98,7 @@ refuse the comparison**, never as "the same". The same applies to a
 
 `schemaVersion` is bumped when the **meaning** of one of these changes — what a
 digest covers, what `incomplete` counts, or the set of required fields. Adding a
-descriptive field does not bump it. **It is `4`**:
+descriptive field does not bump it. **It is `5`**:
 
 - version 1 had no `scopeDigest`, so a version-1 report cannot be shown to have
   examined any particular population;
@@ -108,10 +108,18 @@ descriptive field does not bump it. **It is `4`**:
   the binary set between two scans while every comparison field stayed equal —
   so a still-present credential could read as removed;
 - version 4 adds **`binaryDigest`**, making the excluded set part of
-  eligibility, which closes that.
+  eligibility, which closes that;
+- version 5 (**Unreleased**) **widens what `incomplete` counts**: a file refused
+  by the opened-file checks — `replaced`, a kernel-path `outside`, or failed
+  check evidence — is a coverage limitation. A version-4 producer read such an
+  object and said `incomplete: false`; a version-5 producer says `true` for the
+  same event, so the two booleans are not equivalent and the version moves.
 
-**Versions 1, 2 and 3 are unsupported by this contract.** A consumer
-implementing it accepts `4` and rejects everything else. The boolean fields
+**Versions 1 to 4 are unsupported by this contract.** A consumer implementing
+it accepts `5` and rejects everything else — including a pair of two version-4
+reports, not only a mixed pair. Published 0.6.0 reports are version 4 and stay
+exactly as they were written; they are simply ineligible against this contract,
+and against each other under this comparator. The boolean fields
 still type-check under every version, so nothing but the version number stops
 reports written against different meanings from comparing as though they agreed.
 
@@ -293,20 +301,15 @@ open, or a run that was stopped. **Unreleased:** also a file whose opened
 descriptor was not the object just inspected (`replaced`), or whose
 kernel-recorded location was outside the root at the check before its first
 read (`outside`), or whose check evidence could not be obtained (`unreadable`).
-These add causes without changing what the boolean means — "the scan could not
-cover what it set out to" — in the conservative direction: a report that would
-once have read a substituted object and said `incomplete: false` now says
-`true`. The rule above names "changing what `incomplete` counts" as a bump
-trigger; it was applied at 2 → 3, where a *class* of input stopped counting and
-a version-2 `true` could mean a version-3 `false` for the same tree. Here no
-class stops counting and no version-4 `false` becomes a `true` for an unchanged
-tree: two reports of a stable tree from either side of this change carry equal
-identities and equal `incomplete`, and only under a substitution does the newer
-report say `true`, which is the refusal a comparison should get. On that reading
-`REPORT_SCHEMA_VERSION` stays 4. It is a reading of the rule, recorded here so a
-maintainer who reads the rule literally can bump instead; a bump would make every
-existing report ineligible against new ones, which is the documented cost of a
-bump and not a safety gain here. A
+These change what `incomplete` counts — a version-4 producer read such an object
+and said `false`; a version-5 producer says `true` for the same event — and that
+is the bump trigger the rule above names, so **`REPORT_SCHEMA_VERSION` is 5**. The
+direction is conservative and stable-tree reports from either side carry equal
+identities, but a version-4 `false` may be describing a scan that read a
+substituted object, and the version is what stops it comparing as equivalent to
+a version-5 `false`. The cost is the documented one: every version-4 report is
+ineligible against a version-5 report, and this comparator refuses version-4
+reports on both sides. A
 check that was **unavailable** on the platform is disclosed in
 `summary.coverage.openedFileChecks` and does **not** make the report incomplete.
 
