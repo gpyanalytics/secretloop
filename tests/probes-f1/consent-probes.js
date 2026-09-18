@@ -221,7 +221,8 @@ function plant() {
   const { consent } = load();
   const root = opt("--consent-root", null); if (root) consent.setConsentRootForTests(root);
   const r = synthRecord(consent, consent.recordId("fp-plant", "/synthetic/root"));
-  consent.writeRecord(r);
+  // On the merged product (PR #90) a store that fails the private-store check is refused; record that and stop.
+  try { consent.writeRecord(r); } catch (e) { if (e && e.problem) { log("planted.dir", describe(consent.consentDir())); log("planted.pending", describe(consent.pendingDir())); console.log("PLANT-REFUSED: " + e.problem); return; } throw e; }
   const p = path.join(consent.pendingDir(), r.id + ".json");
   log("planted.dir", describe(consent.consentDir())); log("planted.pending", describe(consent.pendingDir())); log("planted.record", describe(p));
   console.log("PLANTED-PATH: " + p);

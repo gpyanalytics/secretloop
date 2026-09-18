@@ -108,9 +108,14 @@ jobs:
           echo "--- pre-existing store owned by ROOT with world-writable modes, then the runner writes into it (chmod must fail silently)"
           sudo rm -rf "$RUNNER_TEMP/rootowned"; sudo mkdir -p "$RUNNER_TEMP/rootowned/pending"; sudo chmod 777 "$RUNNER_TEMP/rootowned" "$RUNNER_TEMP/rootowned/pending"
           node tests/probes-f1/consent-probes.js --out "$PWD/out" plant --consent-root "$RUNNER_TEMP/rootowned" | tee /tmp/plant2.txt
-          P2=$(grep '^PLANTED-PATH: ' /tmp/plant2.txt | sed 's/^PLANTED-PATH: //')
-          ls -ld "$RUNNER_TEMP/rootowned" "$RUNNER_TEMP/rootowned/pending" "$P2"
-          echo "--- slprobe against the record inside the root-owned world-writable store"; sudo -u slprobe -H node "$PWD/tests/probes-f1/consent-probes.js" other-user --target "$P2" || true
+          if grep -q '^PLANT-REFUSED: ' /tmp/plant2.txt; then
+            echo "--- the merged product (PR #90) refused to write into the root-owned store; the cross-user attempt against its record is not applicable"
+            ls -ld "$RUNNER_TEMP/rootowned" "$RUNNER_TEMP/rootowned/pending"; ls -la "$RUNNER_TEMP/rootowned/pending"
+          else
+            P2=$(grep '^PLANTED-PATH: ' /tmp/plant2.txt | sed 's/^PLANTED-PATH: //')
+            ls -ld "$RUNNER_TEMP/rootowned" "$RUNNER_TEMP/rootowned/pending" "$P2"
+            echo "--- slprobe against the record inside the root-owned world-writable store"; sudo -u slprobe -H node "$PWD/tests/probes-f1/consent-probes.js" other-user --target "$P2" || true
+          fi
 
   consent-windows:
     runs-on: windows-latest

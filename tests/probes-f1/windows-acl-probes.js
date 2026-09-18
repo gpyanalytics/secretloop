@@ -170,38 +170,6 @@ function otherUser() {
 }
 function loadProduct() {
   const OUT = opt("--out"); if (!OUT) throw new Error("--out required");
-  return { consent: require(path.join(OUT, "consent.js")), mcp: require(path.join(OUT, "mcp-core.js")), cli: require(path.join(OUT, "cli.js")) };
-}
-function repoFixture(dir) {
-  fs.mkdirSync(dir, { recursive: true });
-  const a = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"; let v = "ghp_"; for (let i = 0; i < 36; i++) v += a[(i * 23 + 7) % a.length];
-  fs.writeFileSync(path.join(dir, "app.js"), `const t = "${v}";\n`);
-  return fs.realpathSync(dir);
-}
-async function call1() {
-  const { consent, mcp } = loadProduct(); const root = opt("--root"); const repo = repoFixture(opt("--repo"));
-  consent.setConsentRootForTests(root); mcp.setAllowedRoots([repo]); mcp.resetSessions();
-  let outbound = 0; mcp.setVerifyFetchForTests(async () => { outbound++; return new Response("{}", { status: 401 }); });
-  const scan = mcp.toolScan({ path: repo }); if (!scan.ok) throw new Error("scan failed");
-  const f = scan.payload.findings.find((x) => x.ruleId === "github-token"); if (!f) throw new Error("no github finding");
-  const r = await mcp.toolVerify({ path: repo, fingerprint: f.fingerprint });
-  const id = consent.recordId(f.fingerprint, repo); const rp = path.join(consent.pendingDir(), id + ".json");
-  log("call1", { state: r.ok ? r.payload.state : "fail:" + String(r.error).slice(0, 80), outbound, recordExists: fs.existsSync(rp) });
-  fs.writeFileSync(path.join(root, "..", path.basename(root) + ".fp"), f.fingerprint);
-  console.log("RECORD-PATH: " + rp);
-}
-async function call2() {
-  const { consent, mcp } = loadProduct(); const root = opt("--root"); const repo = fs.realpathSync(opt("--repo"));
-  const fp = fs.readFileSync(path.join(root, "..", path.basename(root) + ".fp"), "utf8");
-  consent.setConsentRootForTests(root); mcp.setAllowedRoots([repo]); mcp.resetSessions();
-  let outbound = 0; mcp.setVerifyFetchForTests(async () => { outbound++; return new Response("{}", { status: 401 }); });
-  const id = consent.recordId(fp, repo); let parsed = null; try { parsed = consent.readRecord(id); } catch (e) { parsed = "store-refused:" + (e.problem || code(e)); }
-  const stateBefore = parsed && parsed.state ? parsed.state : String(parsed);
-  const r = await mcp.toolVerify({ path: repo, fingerprint: fp });
-  log("call2", { recordStateSeen: stateBefore, state: r.ok ? r.payload.state : "fail:" + String(r.error).slice(0, 100), outboundAttempted: outbound, network: r.ok ? r.payload.network : null });
-}
-function loadProduct() {
-  const OUT = opt("--out"); if (!OUT) throw new Error("--out required");
   return { consent: require(path.join(OUT, "consent.js")), mcp: require(path.join(OUT, "mcp-core.js")) };
 }
 function repoFixture(dir) {
@@ -233,6 +201,25 @@ async function call2() {
   const id = consent.recordId(fp, repo); let seen; try { const rec = consent.readRecord(id); seen = rec ? rec.state : "absent"; } catch (e) { seen = "store-refused:" + (e.problem || code(e)); }
   const r = await mcp.toolVerify({ path: repo, fingerprint: fp });
   log("call2", { recordStateSeen: seen, state: r.ok ? r.payload.state : "fail:" + String(r.error).slice(0, 100), outboundAttempted: outbound, externalTransmission: r.ok && r.payload.network ? r.payload.network.externalTransmission : null });
+}
+function unavailable() {
+  const root = opt("--root"); const sid = currentSid();
+  // 1. enforcement failure: an invalid SID makes icacls fail; the caller must see a failure, not success.
+  fs.mkdirSync(root, { recursive: true });
+  const bad = protect(root, "S-1-5-21-0-0-0-99999999");
+  log("enforcement-failure.invalid-sid", bad);
+  const still = inspect(root, sid, true); log("enforcement-failure.state-after", { ok: still.ok, reason: still.reason, advisories: still.advisories });
+  // 2. malformed inspection: parse a non-SDDL string.
+  log("decision.malformed", decide("garbage", sid, true).reason);
+  // 3. decision table on fixed SDDL inputs (SID-only, language independent).
+  log("decision.foreign-users", decide(`D:PAI(A;OICI;FA;;;${sid})(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-5-32-544)(A;OICI;FA;;;S-1-5-32-545)`, sid, true).reason);
+  log("decision.foreign-everyone-inherited", decide(`D:AI(A;OICIID;FA;;;S-1-1-0)(A;OICIID;FA;;;${sid})`, sid, true).reason);
+  log("decision.deny-ace", decide(`D:PAI(D;OICI;FA;;;S-1-1-0)(A;OICI;FA;;;${sid})(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-5-32-544)`, sid, true).reason);
+  const unp = decide(`D:AI(A;OICIID;FA;;;${sid})(A;OICIID;FA;;;S-1-5-18)(A;OICIID;FA;;;S-1-5-32-544)`, sid, true); log("decision.unprotected-but-private", { reason: unp.reason, advisories: unp.advisories });
+  log("decision.owner-missing", decide(`D:PAI(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-5-32-544)`, sid, true).reason);
+  log("decision.private", decide(`D:PAI(A;OICI;FA;;;${sid})(A;OICI;FA;;;S-1-5-18)(A;OICI;FA;;;S-1-5-32-544)`, sid, true).reason);
+  log("decision.record-private", decide(`D:AI(A;ID;FA;;;${sid})(A;ID;FA;;;S-1-5-18)(A;ID;FA;;;S-1-5-32-544)`, sid, false).reason);
+  fs.rmSync(root, { recursive: true, force: true });
 }
 (async () => {
   try {
