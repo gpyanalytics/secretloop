@@ -258,7 +258,7 @@ jobs:
           $u = RunAs $c1 "tooling-absent" (@("inspect","--path","$LAB\permissive","--icacls","C:\nonexistent\icacls.exe") + $T1)
           if (-not ($u | Select-String -Pattern 'acl-tooling-unavailable')) { throw "tooling-absent case did not refuse" }
           RunAs $c1 "enforcement-failure-and-decision-table" (@("unavailable","--root","$LAB\permissive\unav") + $T1) | Out-Null
-          RunAs $c1 "inspect-permissive-parent"  @("inspect","--path","$LAB\permissive\full") + $T1 | Out-Null
+          RunAs $c1 "inspect-permissive-parent"  (@("inspect","--path","$LAB\permissive\full") + $T1) | Out-Null
           RunAs $c1 "inspect-profile-like-parent" (@("inspect","--path","$LAB\profile-like") + $T1) | Out-Null
           # Prototype creation under the permissive parent: does a protected DACL take, and do pending/records inherit it?
           RunAs $c1 "prototype-create" (@("create","--root","$LAB\permissive\full\proto-store") + $T1) | Out-Null
@@ -272,10 +272,10 @@ jobs:
           $C = RecordPath (RunAs $c1 "C.call1.permissive-full-protected" (@("call1","--out",$OUT,"--root","$LAB\permissive\full\proto-store","--repo","$LAB\permissive\full\repo-c") + $T1))
           "--- record ACLs as the owner sees them"; icacls $A; icacls $B1; icacls $B2; icacls $C
           # The attacker: list, read, plant, append, FLIP TO APPROVED, replace, rename, re-ACL
-          RunAs $c2 "A.other-user"  @("other-user","--store","$LAB\profile-like\store","--target",$A,"--flip") + $T2 | Out-Null
+          RunAs $c2 "A.other-user"  (@("other-user","--store","$LAB\profile-like\store","--target",$A,"--flip") + $T2) | Out-Null
           RunAs $c2 "B1.other-user" (@("other-user","--store","$LAB\permissive\rx\store","--target",$B1,"--flip") + $T2) | Out-Null
           RunAs $c2 "B2.other-user" (@("other-user","--store","$LAB\permissive\full\store","--target",$B2,"--flip") + $T2) | Out-Null
-          RunAs $c2 "C.other-user"  @("other-user","--store","$LAB\permissive\full\proto-store","--target",$C,"--flip") + $T2 | Out-Null
+          RunAs $c2 "C.other-user"  (@("other-user","--store","$LAB\permissive\full\proto-store","--target",$C,"--flip") + $T2) | Out-Null
           # The owner's second call: is whatever the attacker left trusted?
           foreach ($s in @(@("A",$A,"$LAB\profile-like\store","$LAB\profile-like\repo"), @("B1",$B1,"$LAB\permissive\rx\store","$LAB\permissive\rx\repo"), @("B2",$B2,"$LAB\permissive\full\store","$LAB\permissive\full\repo"), @("C",$C,"$LAB\permissive\full\proto-store","$LAB\permissive\full\repo-c"))) {
             RunAs $c1 "$($s[0]).inspect-record-after-attack" (@("inspect","--path",$s[1]) + $T1) | Out-Null
