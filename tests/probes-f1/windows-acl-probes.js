@@ -139,8 +139,15 @@ function create() {
   const before2 = inspect(planted, sid, false);
   const p3 = run(ICACLS, [root2, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, `*${SID_SYSTEM}:(OI)(CI)F`, `*${SID_ADMINS}:(OI)(CI)F`, "/t", "/q"]);
   const after2 = inspect(planted, sid, false);
-  log("late-protect.tree", { treeStatus: p3.status, plantedBefore: { ok: before2.ok, reason: before2.reason }, plantedAfterTree: { ok: after2.ok, reason: after2.reason, principals: after2.principals } });
-  fs.rmSync(root2, { recursive: true, force: true });
+  const oldAfterTree = inspect(r2, sid, false);
+  log("late-protect.tree", { treeStatus: p3.status, plantedBefore: { ok: before2.ok, reason: before2.reason }, plantedAfterTree: { ok: after2.ok, reason: after2.reason, principals: after2.principals }, oldRecordAfterTree: { ok: oldAfterTree.ok, reason: oldAfterTree.reason, principals: oldAfterTree.principals } });
+  // Can the OWNER still reach a record the tree operation left with an empty DACL, and recover it (implicit WRITE_DAC)?
+  let lstatAfterTree; try { fs.lstatSync(r2); lstatAfterTree = "ok"; } catch (e) { lstatAfterTree = "error:" + code(e); }
+  const regrant = run(ICACLS, [r2, "/grant", `*${sid}:F`, "/q"]);
+  let lstatAfterRegrant; try { fs.lstatSync(r2); lstatAfterRegrant = "ok"; } catch (e) { lstatAfterRegrant = "error:" + code(e); }
+  log("late-protect.tree.owner-recovery", { lstatAfterTree, regrantStatus: regrant.status, lstatAfterRegrant });
+  run(ICACLS, [planted, "/grant", `*${sid}:F`, "/q"]);
+  try { fs.rmSync(root2, { recursive: true, force: true }); log("late-protect.cleanup", "removed"); } catch (e) { log("late-protect.cleanup", "error:" + code(e) + " (lab directory left in place)"); }
   console.log("CREATED: " + root);
 }
 function owner() {
