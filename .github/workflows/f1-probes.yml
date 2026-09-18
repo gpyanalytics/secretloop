@@ -41,9 +41,21 @@ jobs:
         with:
           node-version: 20
       - name: Runner facts
+        # Diagnostics only: every line is allowed to fail without failing the job,
+        # so a facts command cannot stop the probes from running.
         shell: pwsh
+        continue-on-error: true
         run: |
-          [System.Environment]::OSVersion.VersionString; node --version; node -p process.versions.uv; whoami; whoami /priv | Select-String -Pattern "SeCreateSymbolicLinkPrivilege" ; fsutil fsinfo volumeinfo (Get-Location).Drive.Root | Select-String -Pattern "File System Name"
+          $ErrorActionPreference = "Continue"
+          [System.Environment]::OSVersion.VersionString
+          node --version
+          node -p process.versions.uv
+          whoami
+          whoami /priv | Select-String -Pattern "SeCreateSymbolicLinkPrivilege"
+          $drive = (Get-Location).Drive.Name + ":"
+          "drive $drive"
+          fsutil fsinfo fstype $drive
+          exit 0
       - name: Windows probes W0-W6
         run: node probes/f1/windows-probes.js
       - name: POSIX challenge file on Windows (documents what cannot run here)
