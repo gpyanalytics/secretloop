@@ -123,9 +123,19 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
 - **F-1 FIFO open window** — **corrected in the Unreleased candidate**
   (slice 1 of `f1-containment-design`). Non-blocking content opens plus
   post-open classification; validated on darwin and Linux, a plain read-only
-  fallback on win32 stated as such. Concern A (containment between the
-  check and the open) is slice 2 and remains open; its Windows evidence
-  (probes W1–W4 in the design record) is still NOT RUN.
+  fallback on win32 stated as such.
+- **F-1 Concern A, slice 2 (check-time containment hardening)** —
+  **implemented in the Unreleased candidate**, as reviewed in
+  `f1-containment-design-review` and its timing addendum: identity capture and
+  `fstat` comparison on every content descriptor (2a, all platforms), the
+  Linux kernel-path check (2b), and the `openedFileChecks` disclosure (2c),
+  with the binary header probe folded into the one checked descriptor. The
+  Windows probes W1–W6 are RUN (native, elevated NTFS runner) and the
+  identity check is validated there as risk reduction. **Concern A stays
+  open**: the checks prove location at the check, not at the open, and an
+  object moved in before the check or out after it is read by design;
+  see [development](../development.md#open-items). Not taken: a native
+  `openat2` binding, a snapshot of content, or a broader filesystem policy.
 - **Comparator FIFO input** — **corrected in the Unreleased candidate.**
   `secretloop compare` given a report path that is a named pipe waited for a
   writer indefinitely; the report-file open is now non-blocking where the

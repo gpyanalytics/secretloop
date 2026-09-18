@@ -1,4 +1,5 @@
 import { test, suite, finish, assert } from "./harness";
+import { describeOpenedFileChecks } from "../src/report";
 import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -152,13 +153,19 @@ test("the staged path discloses the same way", () => {
   });
 });
 
-test("a clean tree gains no clause at all", () => {
-  // The other direction. A disclosure that always fires says nothing.
+test("a clean tree gains no skip clause at all", () => {
+  // The other direction. A disclosure that always fires says nothing -- with
+  // ONE deliberate exception: the readers' own check accounting is not a skip
+  // and is printed on every scan, all-verified included, because a sentence
+  // that omitted it would read like one where every check ran. The expected
+  // clause is taken from the same tree's JSON block, never typed by hand.
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-scope-"));
   try {
     writeFileSync(path.join(dir, "app.js"), "const ok = 1;\n", "utf8");
+    const checks = JSON.parse(cli(["scan", "--format", "json"], dir).stdout).summary.coverage.openedFileChecks;
     const out = cli(["scan"], dir);
-    assert.strictEqual(out.stdout.trim(), "Scanned 1 file(s). No secrets found.");
+    assert.strictEqual(out.stdout.trim(), `Scanned 1 file(s); ${describeOpenedFileChecks(checks)}. No secrets found.`);
+    assert.doesNotMatch(out.stdout, /not scanned|excluded|suppressed/, "a clean tree claimed a skip");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -285,9 +285,16 @@ test("scope is counts and one sentence: no path, no credential, no digest", () =
   assert.ok(!/scopeDigest/.test(JSON.stringify(list)), "and it is not the comparator's scopeDigest");
   for (const key of Object.keys(list.scope)) {
     assert.ok(
-      ["filesScanned", "outsideExcluded", "apiDocumentsScoped", "archives", "statement"].includes(key),
+      ["filesScanned", "outsideExcluded", "apiDocumentsScoped", "archives", "openedFileChecks", "statement"].includes(key),
       `unexpected scope key ${key}`
     );
+  }
+  // The readers' check accounting is numbers all the way down: no path, no
+  // name, no platform string.
+  const leaves = (v: unknown): unknown[] =>
+    v && typeof v === "object" ? Object.values(v as object).flatMap(leaves) : [v];
+  for (const leaf of leaves(list.scope.openedFileChecks)) {
+    assert.strictEqual(typeof leaf, "number", `openedFileChecks carries a non-count: ${String(leaf)}`);
   }
 });
 

@@ -8,7 +8,8 @@ import { isApiDocument, API_DOCUMENT_YAML_HEAD } from "../src/api-document";
 import { scanText, Finding } from "../src/scanner";
 import { mergeConfig, defaultConfig, loadConfig } from "../src/config";
 import { scanFiles, scanWorkspaceScan } from "../src/workspace";
-import { describeScope } from "../src/report";
+import { describeScope, describeOpenedFileChecks } from "../src/report";
+import type { OpenedFileChecks } from "../src/walk";
 import { toolScan, setAllowedRoots, ToolResult } from "../src/mcp-core";
 import { buildZip } from "./archive-builders";
 
@@ -92,7 +93,7 @@ function write(root: string, rel: string, text: string): void {
 function cli(cwd: string, ...args: string[]) {
   return spawnSync("node", [CLI, ...args], { cwd, encoding: "utf8" });
 }
-function cliJson(cwd: string, ...args: string[]): { findings: Finding[]; summary: { scope: string } } {
+function cliJson(cwd: string, ...args: string[]): { findings: Finding[]; summary: { scope: string; coverage: { openedFileChecks: OpenedFileChecks } } } {
   const res = cli(cwd, ...args, "--format", "json", "--fail-on", "never");
   assert.strictEqual(res.status, 0, res.stderr);
   return JSON.parse(res.stdout);
@@ -344,7 +345,8 @@ test("scan: entropy off, default, project restore, flag over project false, flag
 
     const on = cliJson(dir, "scan", "--include-entropy");
     assert.deepStrictEqual(generic(on.findings).map((f) => f.file), ["config/app.json"]);
-    assert.ok(on.summary.scope.endsWith(CLAUSE), on.summary.scope);
+    // Followed only by the readers' check accounting, which is always last.
+    assert.ok(on.summary.scope.endsWith(`${CLAUSE}; ${describeOpenedFileChecks(on.summary.coverage.openedFileChecks)}`), on.summary.scope);
 
     write(dir, ".secretloop.json", JSON.stringify({ entropyPassEnabled: true, includeApiDocumentEntropy: true }));
     const cfg = cliJson(dir, "scan");
@@ -373,7 +375,7 @@ test("scan: text, JSON and SARIF carry the same clause; no path or value in it",
     const text = cli(dir, "scan", "--include-entropy", "--fail-on", "never");
     assert.match(text.stdout, /Scanned 2 file\(s\); 1 API description document\(s\) scanned without generic entropy/);
     const sarif = JSON.parse(cli(dir, "scan", "--include-entropy", "--format", "sarif", "--fail-on", "never").stdout);
-    assert.ok(String(sarif.runs[0].invocations[0].properties.scope).endsWith(CLAUSE));
+    assert.ok(String(sarif.runs[0].invocations[0].properties.scope).includes(`${CLAUSE}; `), "SARIF lost the clause");
     const json = cliJson(dir, "scan", "--include-entropy");
     const clause = json.summary.scope.slice(json.summary.scope.indexOf("; 1 API"));
     assert.doesNotMatch(clause, /openapi|api\//, "no path in the disclosure");
@@ -408,7 +410,7 @@ test("staged: same rule as scan, flag raises", () => {
     spawnSync("git", ["add", "-A"], { cwd: dir });
     const on = cliJson(dir, "staged", "--include-entropy");
     assert.deepStrictEqual(generic(on.findings).map((f) => f.file), ["config/app.json"]);
-    assert.ok(on.summary.scope.endsWith(CLAUSE), on.summary.scope);
+    assert.ok(on.summary.scope.endsWith(`${CLAUSE}; ${describeOpenedFileChecks(on.summary.coverage.openedFileChecks)}`), on.summary.scope);
     const back = cliJson(dir, "staged", "--include-entropy", "--include-api-document-entropy");
     assert.deepStrictEqual(generic(back.findings).map((f) => f.file).sort(), ["api/openapi.json", "config/app.json"]);
   } finally {

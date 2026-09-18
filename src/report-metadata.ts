@@ -144,8 +144,17 @@ export interface CoverageFacts {
   notAFileExcluded?: number;
   /** Paths that were gone by the time the read reached them. */
   vanishedExcluded?: number;
-  /** Files refused because a symlink resolved outside the scan root. */
+  /**
+   * Files refused because the name resolved outside the scan root -- a symlink
+   * before the open, or (Linux) the opened object's kernel-recorded location
+   * at the check before its first read.
+   */
   outsideExcluded?: number;
+  /**
+   * Files refused because the opened object was not the object inspected one
+   * syscall before the open (device or inode differed). Nothing was read.
+   */
+  replacedExcluded?: number;
   /** Archive accounting, when the scan met a container. */
   archives?: ArchiveAccounting;
   /** The scan was stopped before it finished. */
@@ -573,6 +582,7 @@ export function coverageLimitations(facts: CoverageFacts): string[] {
     notAFileExcluded = 0,
     vanishedExcluded = 0,
     outsideExcluded = 0,
+    replacedExcluded = 0,
     archives,
     cancelled = false,
   } = facts;
@@ -591,6 +601,15 @@ export function coverageLimitations(facts: CoverageFacts): string[] {
   }
   if (outsideExcluded > 0) {
     out.push(`${outsideExcluded} file(s) not scanned — resolved outside the scan root`);
+  }
+  // A positive observation of a substitution between the inspection and the
+  // open. The scan intended to read the inspected object and refused to read
+  // the one it got, so this is a gap, not a decision. NOT here: a check that
+  // was UNAVAILABLE (see OpenedFileChecks) -- the read still happened under the
+  // checks that were possible, and that is disclosed beside the counts rather
+  // than counted as a failure to look.
+  if (replacedExcluded > 0) {
+    out.push(`${replacedExcluded} file(s) not scanned — replaced between inspection and read`);
   }
   if (archives) {
     const refused = countOf(archives.members.refused);

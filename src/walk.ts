@@ -7,8 +7,10 @@ import {
   readSync,
   closeSync,
   realpathSync,
+  readlinkSync,
   existsSync,
   constants as fsConstants,
+  BigIntStats,
 } from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
@@ -235,103 +237,353 @@ export type SkipReason =
   | "vanished"
   /** The read itself failed -- permission, I/O -- or the reason is unknown. */
   | "unreadable"
-  | "outside";
+  /**
+   * The name resolved outside the scan root -- before the open (a symlink,
+   * as always) or, on Linux, after it: the kernel's own record of the OPENED
+   * object's location lay outside the root at the check that precedes the
+   * first read. See readChecked.
+   */
+  | "outside"
+  /**
+   * The object that was opened is not the object that was inspected and
+   * approved one syscall earlier: its device or inode differs. A positive
+   * observation of a SUBSTITUTION, and only that -- the substitute may be
+   * outside the root or an inside file an editor just saved atomically over
+   * the name, and the identity check cannot tell which. That is why this is
+   * not reported as `outside` (a location it did not observe) and not as
+   * `unreadable` (a reason it does know). Nothing is read from such an object.
+   */
+  | "replaced";
 
 export type ReadResult = { text: string } | { skipped: SkipReason };
 
 /**
- * Reads a file as text, or says why it could not.
+ * What happened to ONE content descriptor's two checks. Recorded per
+ * descriptor, never per file: a file may be opened by up to three readers and
+ * each open is checked, and accounted for, on its own.
  *
- * The reason is the whole point of this signature. `readTextFile` returned null
- * for four different situations and the caller dropped the file without
- * counting it, so a tree of 500 files where 480 were over the size cap reported
- * "Scanned 20 file(s). No secrets found." -- a scan that could not look, printed
- * in the words of one that found nothing. Every other skip this scanner
- * performs is disclosed; this was the largest one and the only silent one.
+ *   verified     the check ran on this descriptor and passed
+ *   refused      the check ran and observed a violation; the file was refused
+ *   unavailable  the platform or the object gave the check nothing to work with;
+ *                the read continued under the remaining checks and says so
+ *   failed       the attempt to obtain the evidence itself failed; the file was
+ *                refused (`unreadable`) -- a failure is not an absence
+ *   not-reached  the descriptor was refused before this check ran
+ *
+ * `verified` is written only after the comparison or the link read actually
+ * succeeded on the descriptor in hand. It is never inferred from the platform
+ * name or from an earlier descriptor.
  */
+export type CheckOutcome = "verified" | "refused" | "unavailable" | "failed" | "not-reached";
+
+export interface OpenedFileCheck {
+  /** Pre-open (dev, ino) of the inspected object against `fstat` of the opened one. */
+  identity: CheckOutcome;
+  /** Linux only: the kernel's path for the descriptor, inside the root by component boundary. */
+  kernelPath: CheckOutcome;
+}
+
+/** Counts of one check's outcomes over a scan. Sums to `opened`. */
+export interface CheckCounts {
+  verified: number;
+  refused: number;
+  unavailable: number;
+  failed: number;
+  notReached: number;
+}
+
 /**
- * Reads a whole file from ONE descriptor, with the byte cap enforced WHILE
- * reading.
+ * The per-scan accounting of every content descriptor the readers opened.
+ * Counts only, and counts only ever grow, so a later verified descriptor
+ * cannot erase an earlier gap: a capability that stops working part-way
+ * through a scan leaves the earlier `verified` and the later `unavailable`
+ * side by side rather than averaged into a label.
  *
- * WHY THIS EXISTS. The previous shape was `statSync(full)` then
- * `readFileSync(full)`: two independent resolutions of the same name, and the
- * second had no bound at all -- `readFileSync` takes no maximum-bytes option.
- * The cap therefore described the file `stat` HAPPENED TO SEE, not the bytes
- * actually read. A file that grew between the two calls was read in full at
- * whatever size it had reached. That was reproduced deterministically: a 64-byte
- * cap, a 10-byte file at stat time, 4096 bytes read.
- *
- * WHAT ONE DESCRIPTOR DOES BUY. Every byte comes from the object that was
- * opened, so replacing the PATH after the open cannot change which bytes arrive,
- * and `fstat` describes that same object rather than whatever the name resolves
- * to next.
- *
- * WHAT IT DOES NOT BUY, AND MUST NOT BE READ AS BUYING:
- *   - It does NOT prove the opened object is inside the scan root. `openSync`
- *     resolves the name and follows symlinks like any other resolution, so a
- *     final-component or PARENT-DIRECTORY replacement between the containment
- *     check and this open is still followed. That is F-1 Concern A, and it
- *     remains OPEN. The callers' existing `isInsideRoot` check stays exactly
- *     where it was; this changes nothing about containment in either direction.
- *   - It is NOT a snapshot. A writer holding the same file can still change the
- *     bytes between two reads of this descriptor. A descriptor fixes WHICH
- *     object is read, never what is in it.
- *
- * The cap is enforced in the loop, not by the `fstat` size check above it: that
- * check is an optimization that avoids reading an already-huge file, and the
- * loop does not trust it.
+ * `opened: 0` is a positive statement (this scan opened nothing). A producer
+ * that never runs these readers -- the history scan -- omits the object
+ * entirely, which is this codebase's existing way of saying "not established".
  */
-function readBoundedFile(
-  full: string,
+export interface OpenedFileChecks {
+  opened: number;
+  identity: CheckCounts;
+  kernelPath: CheckCounts;
+}
+
+function emptyCheckCounts(): CheckCounts {
+  return { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 };
+}
+
+export function emptyOpenedFileChecks(): OpenedFileChecks {
+  return { opened: 0, identity: emptyCheckCounts(), kernelPath: emptyCheckCounts() };
+}
+
+function countOutcome(counts: CheckCounts, outcome: CheckOutcome): void {
+  switch (outcome) {
+    case "verified": counts.verified++; break;
+    case "refused": counts.refused++; break;
+    case "unavailable": counts.unavailable++; break;
+    case "failed": counts.failed++; break;
+    case "not-reached": counts.notReached++; break;
+    default: {
+      const never: never = outcome;
+      void never;
+    }
+  }
+}
+
+/** Adds one descriptor's record to the scan's accounting. */
+export function recordOpenedFileCheck(acc: OpenedFileChecks, check: OpenedFileCheck): void {
+  acc.opened++;
+  countOutcome(acc.identity, check.identity);
+  countOutcome(acc.kernelPath, check.kernelPath);
+}
+
+/**
+ * Hooks a reader accepts. `afterOpen` is the TEST-ONLY SEAM every bounded-read
+ * test already uses: it runs after the descriptor is open and checked and
+ * before the first read. `onOpenedFileCheck` is the production accounting
+ * callback, fired exactly once per opened descriptor from the reader's
+ * `finally`, whatever the outcome. A bare function is accepted as `afterOpen`
+ * so the existing call sites are unchanged.
+ */
+export interface ReadHooks {
+  afterOpen?: () => void;
+  onOpenedFileCheck?: (check: OpenedFileCheck) => void;
+}
+export type ReadHooksArg = (() => void) | ReadHooks | undefined;
+
+function hooksOf(arg: ReadHooksArg): ReadHooks {
+  if (arg === undefined) return {};
+  return typeof arg === "function" ? { afterOpen: arg } : arg;
+}
+
+/**
+ * The reader's own containment locator: the same two resolutions as
+ * isInsideRoot, returning the canonical root and the resolved name so the
+ * readers can inspect and open the RESOLVED object rather than resolving the
+ * name a third time. `isInsideRoot` itself is left byte-identical: it is one
+ * of the functions the security review pins.
+ *
+ * Splits the two ways resolution can fail exactly as the readers always have:
+ * a name that resolves OUTSIDE is a containment refusal, one that does not
+ * resolve at all is a file that vanished.
+ */
+function locateInsideRoot(
+  root: string,
+  relPath: string
+): { realRoot: string; real: string } | { skipped: "outside" | "vanished" } {
+  const outsideOrGone = (): { skipped: "outside" | "vanished" } => ({
+    skipped: existsSync(path.join(root, relPath)) ? "outside" : "vanished",
+  });
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(path.resolve(root));
+  } catch {
+    return outsideOrGone();
+  }
+  let real: string;
+  try {
+    real = realpathSync(path.join(realRoot, relPath));
+  } catch {
+    return outsideOrGone();
+  }
+  const rel = path.relative(realRoot, real);
+  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return { realRoot, real };
+  return { skipped: "outside" };
+}
+
+/**
+ * Whether a kernel-recorded path lies under the canonical root BY PATH
+ * COMPONENT, on the raw bytes.
+ *
+ * Never a bare string prefix: `<root>2/x` starts with `<root>` and is a
+ * sibling directory, not a child (measured as the prefix trap B1 in
+ * f1-containment-design-review). Never normalised and never stripped: proc(5)
+ * appends " (deleted)" to the link of an unlinked file, and the raw string
+ * still begins with `<root>/`, so a deleted inside file is accepted as inside
+ * and a deleted outside file is still refused. Compared as bytes so a name the
+ * kernel reports in a non-UTF-8 encoding is not mangled on the way in.
+ */
+export function kernelPathInside(kernelPath: Buffer, realRoot: string): boolean {
+  const root = Buffer.from(realRoot, "utf8");
+  if (kernelPath.equals(root)) return true;
+  const prefix = realRoot.endsWith("/") ? root : Buffer.concat([root, Buffer.from("/")]);
+  return kernelPath.length > prefix.length && kernelPath.subarray(0, prefix.length).equals(prefix);
+}
+
+/**
+ * The kernel's own record of where an open descriptor points, or why there is
+ * none. Only Linux procfs semantics are read here: `/proc/self/fd/N` is
+ * documented (proc(5)) as the kernel's path for the file, and no other
+ * platform's `/proc` is given that meaning. On Linux the answer is MEASURED per
+ * descriptor, never assumed from the platform name:
+ *
+ *   - the link reads             -> its raw bytes
+ *   - it does not, and there is no readable /proc/self/fd directory
+ *                                -> `unavailable` (the capability is absent;
+ *                                   disclosed, read continues)
+ *   - it does not, but /proc/self/fd is there
+ *                                -> `failed` (evidence for THIS descriptor
+ *                                   could not be obtained; that is a signal,
+ *                                   and the file is refused)
+ */
+function kernelPathOf(fd: number): { path: Buffer } | { outcome: "unavailable" | "failed" } {
+  if (process.platform !== "linux") return { outcome: "unavailable" };
+  try {
+    return { path: readlinkSync(`/proc/self/fd/${fd}`, { encoding: "buffer" }) };
+  } catch {
+    let present = false;
+    try {
+      present = statSync("/proc/self/fd").isDirectory();
+    } catch {
+      present = false;
+    }
+    return { outcome: present ? "failed" : "unavailable" };
+  }
+}
+
+/** The pre-open identity of the inspected object. Bigint: an NTFS file index is 64 bits. */
+interface ObjectIdentity {
+  dev: bigint;
+  ino: bigint;
+}
+
+/**
+ * Reads a whole file from ONE CHECKED descriptor, with the byte cap enforced
+ * WHILE reading.
+ *
+ * THE SEQUENCE, in this order and no other (f1-containment-design-review,
+ * sequence-options-acceptance, steps 5-9; the pre-open steps are the callers'):
+ *
+ *   5  open, non-blocking where the platform has the flag (READ_OPEN_FLAGS)
+ *   6  fstat the DESCRIPTOR; refuse a non-file; size optimisation; cap sanity
+ *   7  IDENTITY: the descriptor's (dev, ino) must equal the identity the caller
+ *      captured with lstat one syscall before the open. A mismatch is a
+ *      substitution and the file is refused as `replaced`. An inspected object
+ *      reporting (0, 0) has no identity to compare; that is recorded as
+ *      `unavailable` and the read continues.
+ *   8  KERNEL PATH (Linux): the kernel's path for the descriptor must lie under
+ *      the canonical root by component boundary (kernelPathInside). Outside is
+ *      refused as `outside`. No procfs: `unavailable`, disclosed, continue.
+ *      procfs present but this link unreadable: `failed`, refused.
+ *   9  the reads -- the optional header probe and then the bulk read -- from
+ *      THIS descriptor, positionally, with the cap enforced in the loop.
+ *
+ * WHAT THIS ESTABLISHES, EXACTLY. On Linux with procfs: no bytes are read from
+ * an object whose kernel-recorded location, AT THE INSTANT OF THE CHECK THAT
+ * IMMEDIATELY PRECEDES THE FIRST READ, lies outside the root. On every
+ * platform: no bytes are read from an object other than the one inspected
+ * one syscall before the open, where that object had an identity.
+ *
+ * WHAT IT DOES NOT ESTABLISH, stated so nothing above is read as more:
+ *   - location AT THE OPEN. An outside object opened through a replaced parent
+ *     and renamed under the root before step 8 passes both checks and is read
+ *     (measured: f1-containment-design-review-addendum-timing, MI1/MI2). Only an
+ *     open that cannot escape the root -- openat2(RESOLVE_BENEATH), which Node
+ *     does not expose -- would make the open the guarantee.
+ *   - location THROUGHOUT THE READ. An inside object moved out after step 8 is
+ *     still read (MO1); the reads are not re-validated.
+ *   - the parent case without a kernel path. On darwin and win32 a parent
+ *     replaced between realpath and the caller's lstat is captured as approved
+ *     and passes step 7; step 8 is unavailable there. Risk reduction, disclosed.
+ *   - content. A descriptor fixes which object is read, never what it holds.
+ *
+ * ONE DESCRIPTOR SERVES THE HEADER PROBE AND THE BULK READ. The probe used to
+ * open on its own, and handed the acceptor 16 bytes of whatever that open
+ * resolved to before any bulk-read check could act (measured, same addendum).
+ * Now the head is read from the descriptor that passed the checks, and the
+ * bulk read continues from the same one. No acceptor receives a byte before
+ * the checks that apply to the descriptor it came from.
+ */
+function readChecked(
+  name: string,
+  realRoot: string,
+  expected: ObjectIdentity,
   limit: number,
-  /**
-   * TEST-ONLY SEAM, mirroring `compare.ts`'s reader. Runs after the descriptor
-   * is open and before the first read, so a regression can change the file
-   * deterministically at exactly the point the old code was vulnerable --
-   * without sleeping, racing or patching `fs`. Production callers pass nothing.
-   */
-  afterOpen?: () => void
+  hooks: ReadHooks,
+  header?: { bytes: number; accepts: (head: Buffer, size: number) => boolean }
 ): { bytes: Buffer } | { skipped: SkipReason } {
   let fd: number;
   try {
-    // Non-blocking where the platform has the flag (see READ_OPEN_FLAGS): a
-    // FIFO swapped in since the caller's type check no longer holds the open.
-    fd = openSync(full, READ_OPEN_FLAGS);
+    fd = openSync(name, READ_OPEN_FLAGS);
   } catch {
     // Matches the previous classification: a name that cannot be opened is not
-    // distinguishable here from one that cannot be read.
+    // distinguishable here from one that cannot be read. Nothing was opened,
+    // so nothing is recorded.
     return { skipped: "unreadable" };
   }
+  // Written as each step actually completes; reported from the finally below.
+  const check: OpenedFileCheck = { identity: "not-reached", kernelPath: "not-reached" };
   try {
+    let st: BigIntStats;
+    try {
+      st = fstatSync(fd, { bigint: true });
+    } catch {
+      // The evidence itself could not be obtained. A failure, not an absence,
+      // and the file is refused.
+      check.identity = "failed";
+      return { skipped: "unreadable" };
+    }
     // The OPENED object is classified here, whatever the name resolved to
     // between the caller's check and this open. A FIFO or device that got
     // through is refused before any read, and the descriptor is closed below.
-    const st = fstatSync(fd);
     if (!st.isFile()) return { skipped: "not-a-file" };
+    const size = Number(st.size);
     // Optimization only. The loop below is the guard.
-    if (st.size > limit) return { skipped: "oversized" };
+    if (size > limit) return { skipped: "oversized" };
 
     // THE CAP MUST BE A USABLE NUMBER FROM HERE ON, because it sizes an
     // allocation. `loadConfig` does not validate `maxFileSizeBytes` -- it is
     // `raw.maxFileSizeBytes ?? default` -- so a project file saying
     // `"maxFileSizeBytes": "abc"` reaches this function as a string. JSON
     // cannot express NaN, but an embedder calling the API directly can.
-    //
-    // Refuse rather than compute with it. Without this line `"abc" + 1` is
-    // `"abc1"`, `Math.min` of that is NaN, and `Buffer.allocUnsafe(NaN)` throws
-    // into the catch below -- the same refusal, but by accident and with no
-    // way to read the intent. Note the comparison is deliberately `>= 0` and
-    // not `Number.isFinite`: `Infinity` is a real way to say "no cap" and both
-    // the previous code and this one honour it.
-    //
-    // This is the one behaviour this change does NOT preserve: the previous
-    // reader ignored an unusable cap and read the file whole. Refusing is the
-    // fail-closed direction, it is disclosed as a skip rather than silent, and
-    // it does not invent a limit -- but it is a difference, and it is
-    // documented as one.
+    // Refuse rather than compute with it; `Infinity` is a real way to say
+    // "no cap" and is honoured. This is the fail-closed direction and it is
+    // disclosed as a skip rather than silent.
     if (!(limit >= 0)) return { skipped: "unreadable" };
 
-    afterOpen?.();
+    // 7  IDENTITY. Compared as bigints: a double loses the low bits of a
+    // 64-bit NTFS file index, and two files that differ only there would
+    // otherwise compare equal.
+    if (expected.dev === 0n && expected.ino === 0n) {
+      check.identity = "unavailable";
+    } else if (st.dev !== expected.dev || st.ino !== expected.ino) {
+      check.identity = "refused";
+      return { skipped: "replaced" };
+    } else {
+      check.identity = "verified";
+    }
+
+    // 8  KERNEL PATH.
+    const kp = kernelPathOf(fd);
+    if ("path" in kp) {
+      if (kernelPathInside(kp.path, realRoot)) {
+        check.kernelPath = "verified";
+      } else {
+        check.kernelPath = "refused";
+        return { skipped: "outside" };
+      }
+    } else {
+      check.kernelPath = kp.outcome;
+      if (kp.outcome === "failed") return { skipped: "unreadable" };
+    }
+
+    hooks.afterOpen?.();
+
+    // 9  THE READS, positionally, so the header probe and the bulk read are
+    // independent of the descriptor's file position on every platform.
+    if (header) {
+      const head = Buffer.alloc(Math.min(header.bytes, size));
+      let got = 0;
+      while (got < head.length) {
+        const n = readSync(fd, head, got, head.length - got, got);
+        if (n === 0) break;
+        got += n;
+      }
+      // Not this format. Not a failure and never counted -- the caller discards
+      // every candidate skip -- but named honestly rather than as "unreadable".
+      if (!header.accepts(head.subarray(0, got), size)) return { skipped: "not-a-file" };
+    }
 
     // Bounded by the cap as well as by the chunk size, so a small configured
     // limit does not allocate a large buffer to read a few bytes. The `+ 1` is
@@ -343,7 +595,7 @@ function readBoundedFile(
     for (;;) {
       const buf = Buffer.allocUnsafe(chunkSize);
       // A short read is normal and is not end-of-file; only 0 is.
-      const n = readSync(fd, buf, 0, chunkSize, null);
+      const n = readSync(fd, buf, 0, chunkSize, total);
       if (n === 0) break;
       total += n;
       // At most one chunk is ever read past the cap. That bounded overflow is
@@ -362,6 +614,8 @@ function readBoundedFile(
     } catch {
       /* already closed or invalid; nothing further to do */
     }
+    // Reported on every path too, after the close, exactly once per open.
+    hooks.onOpenedFileCheck?.(check);
   }
 }
 
@@ -369,46 +623,41 @@ export function readTextFileResult(
   root: string,
   relPath: string,
   config: SecretLoopConfig,
-  /** TEST-ONLY SEAM. See readBoundedFile. Production callers pass nothing. */
-  afterOpen?: () => void
+  /** A bare function is the TEST-ONLY `afterOpen` seam; an object may also carry the accounting callback. */
+  hooks?: ReadHooksArg
 ): ReadResult {
   // Enforced at the read as well as at the walk. A caller with its own file
   // list -- the staged set, or anything that never goes through listFiles --
   // would otherwise follow a link straight out of the root.
-  if (!isInsideRoot(root, relPath)) {
-    // isInsideRoot answers false for two different things: a path that resolves
-    // OUTSIDE the root, and one that does not resolve at all. Conflating them is
-    // right at the walk, where both mean "not a file this scan owns" -- and
-    // wrong here, because these land in different clauses. A file deleted
-    // between enumeration and read would otherwise be disclosed as a symlink
-    // escaping the scan root, which is the same class of overstatement as
-    // counting a node_modules skip against the generated-file group.
-    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "vanished" };
-  }
-  const full = path.join(root, relPath);
+  //
+  // Two different failures are kept apart: a path that resolves OUTSIDE the
+  // root, and one that does not resolve at all. A file deleted between
+  // enumeration and read would otherwise be disclosed as a symlink escaping
+  // the scan root, which is the same class of overstatement as counting a
+  // node_modules skip against the generated-file group.
+  const located = locateInsideRoot(root, relPath);
+  if ("skipped" in located) return located;
+  const { realRoot, real } = located;
   try {
-    // CLASSIFY THE TYPE BEFORE OPENING. This stat is NOT the size guard -- the
-    // read loop is, and using a stat's SIZE to bound a later read is the exact
-    // defect this change removes. It is here for TYPE only, because `openSync`
-    // on a FIFO with no writer BLOCKS INDEFINITELY, and this function is reached
-    // with caller-supplied paths (the staged set) that never went through the
-    // walk. Opening first turned a prompt "not-a-file" into a hang; the binary
-    // reader never had that problem because its lstat gate already ran first.
+    // 4  INSPECT THE RESOLVED OBJECT BEFORE OPENING, and capture its identity.
+    // `lstat` on the resolved name, not `stat` on the enumerated one: the
+    // resolution above already followed every in-root link, so a symlink
+    // swapped in at the final component after it is a non-file here and is
+    // refused without being followed. This is a TYPE check and an identity
+    // capture; the size guard is the read loop.
     //
-    // A regular file replaced by a FIFO between this stat and the open used to
-    // block the open indefinitely; the open is now non-blocking where the
-    // platform supports it (READ_OPEN_FLAGS) and the opened object is
-    // classified again from its descriptor. Containment between this check and
-    // the open -- F-1 Concern A -- is a separate question and remains OPEN.
-    const stat = statSync(full);
+    // A regular file replaced by a FIFO between here and the open used to
+    // block the open indefinitely; the open is non-blocking where the platform
+    // supports it (READ_OPEN_FLAGS) and the opened object is classified again
+    // from its descriptor. What the name resolves to between here and the open
+    // is what the identity and kernel-path checks in readChecked are about.
+    const stat = lstatSync(real, { bigint: true });
     if (!stat.isFile()) return { skipped: "not-a-file" };
 
-    // ONE DESCRIPTOR for the content. `fstat` describes the opened object and
-    // every byte comes from it, with the cap enforced while reading -- see
-    // readBoundedFile. The oversized/unreadable classifications are the same
-    // ones this function has always returned; what changed is that the cap now
-    // bounds the READ instead of describing a separate stat.
-    const read = readBoundedFile(full, config.maxFileSizeBytes, afterOpen);
+    // ONE DESCRIPTOR for the content, checked before the first read. The
+    // oversized/unreadable classifications are the ones this function has
+    // always returned; `replaced` and the post-open `outside` are the checks'.
+    const read = readChecked(real, realRoot, { dev: stat.dev, ino: stat.ino }, config.maxFileSizeBytes, hooksOf(hooks));
     if (!("bytes" in read)) return read;
     const buf = read.bytes;
     // THE BINARY CLASSIFIER, AND EXACTLY WHAT IT IS.
@@ -461,20 +710,21 @@ export type BinaryCandidate = { bytes: Buffer } | { skipped: SkipReason };
  * Two differences from readTextFileResult, both required by the frozen PKCS#12
  * design and neither of which changes text scanning:
  *
- *   NON-DEREFERENCING. This uses `lstatSync`, not `statSync`, so a symlink is
- *   rejected as a candidate before any byte is read. The text path follows an
- *   in-root link on purpose; the binary detector must not, or one container
- *   would report twice under two paths. `isInsideRoot` is still consulted, but
- *   only to establish containment.
+ *   NON-DEREFERENCING. This uses `lstatSync` on the ENUMERATED name, so a
+ *   symlink is rejected as a candidate before any byte is read. The text path
+ *   follows an in-root link on purpose; the binary detector must not, or one
+ *   container would report twice under two paths. Containment is still
+ *   established first, exactly as in the text path.
  *
  *   SIZE BEFORE READ. The effective `maxFileSizeBytes` gate runs against the
  *   entry's own size and rejects before opening for content. The default is an
  *   operational default, not a parser ceiling: an operator who raises it is
  *   supported, so nothing here assumes a bound smaller than the configured one.
  *
- * `headerAccepts` is an optional cheap prefilter. Only the first
- * `headerBytes` are read for it, so scanning a large tree does not pay a full
- * read per file for a format almost no file has.
+ * `headerAccepts` is an optional cheap prefilter. Only the first `headerBytes`
+ * are read for it -- FROM THE SAME CHECKED DESCRIPTOR the bulk read then
+ * continues from (see readChecked), so the acceptor never sees a byte of an
+ * object the checks have not covered. One open per candidate.
  */
 export function readBinaryCandidate(
   root: string,
@@ -482,44 +732,31 @@ export function readBinaryCandidate(
   config: SecretLoopConfig,
   headerAccepts?: (head: Buffer, size: number) => boolean,
   headerBytes = 16,
-  /** TEST-ONLY SEAM. See readBoundedFile. Production callers pass nothing. */
-  afterOpen?: () => void
+  /** A bare function is the TEST-ONLY `afterOpen` seam; an object may also carry the accounting callback. */
+  hooks?: ReadHooksArg
 ): BinaryCandidate {
-  if (!isInsideRoot(root, relPath)) {
-    return { skipped: existsSync(path.join(root, relPath)) ? "outside" : "vanished" };
-  }
+  const located = locateInsideRoot(root, relPath);
+  if ("skipped" in located) return located;
   const full = path.join(root, relPath);
   try {
-    // lstat: the entry itself, never its target.
-    const stat = lstatSync(full);
+    // lstat: the entry itself, never its target. DELIBERATELY KEPT as the
+    // gate: it does not dereference, so a final-component symlink present at
+    // this moment is refused as "not-a-file" without being followed. It is
+    // also the identity capture the open is checked against.
+    const stat = lstatSync(full, { bigint: true });
     // A symlink lands here too, by design (see above). "not a regular file" is
     // the same answer for both, and this reason is never counted: the caller
     // discards a candidate skip and lets the text path account for the file.
     if (!stat.isFile()) return { skipped: "not-a-file" };
-    if (stat.size > config.maxFileSizeBytes) return { skipped: "oversized" };
-    if (headerAccepts) {
-      const head = Buffer.alloc(Math.min(headerBytes, stat.size));
-      // The same non-blocking open as the bulk read, for the same reason: this
-      // probe is a second resolution of the name after the lstat gate, and a
-      // FIFO swapped in between them blocked here too (measured). The opened
-      // object is classified before its head is read; the descriptor is closed
-      // on every path.
-      const fd = openSync(full, READ_OPEN_FLAGS);
-      try {
-        if (!fstatSync(fd).isFile()) return { skipped: "not-a-file" };
-        readSync(fd, head, 0, head.length, 0);
-      } finally {
-        closeSync(fd);
-      }
-      // Not this format. Not a failure and never counted -- the caller discards
-      // every candidate skip -- but named honestly rather than as "unreadable".
-      if (!headerAccepts(head, stat.size)) return { skipped: "not-a-file" };
-    }
-    // The lstat gate above is DELIBERATELY KEPT: it does not dereference, so a
-    // final-component symlink present at that moment is still refused as
-    // "not-a-file". Replacing it with fstat-on-an-open-descriptor would have
-    // silently removed that refusal. Only the unbounded bulk read is replaced.
-    const read = readBoundedFile(full, config.maxFileSizeBytes, afterOpen);
+    if (Number(stat.size) > config.maxFileSizeBytes) return { skipped: "oversized" };
+    const read = readChecked(
+      full,
+      located.realRoot,
+      { dev: stat.dev, ino: stat.ino },
+      config.maxFileSizeBytes,
+      hooksOf(hooks),
+      headerAccepts ? { bytes: headerBytes, accepts: headerAccepts } : undefined
+    );
     if (!("bytes" in read)) return read;
     return { bytes: read.bytes };
   } catch {

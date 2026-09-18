@@ -5,6 +5,11 @@ import {
   readTextFileResult,
   readBinaryCandidate,
   SkipReason,
+  OpenedFileCheck,
+  OpenedFileChecks,
+  ReadHooks,
+  emptyOpenedFileChecks,
+  recordOpenedFileCheck,
 } from "./walk";
 import {
   detectPkcs12Bytes,
@@ -103,6 +108,29 @@ export interface ScanFilesOptions {
    * opened, never as an ordinary binary skip for the same failure.
    */
   onContainerNotOpened?: (reason: ContainerNotOpenedReason) => void;
+  /**
+   * Called once per CONTENT DESCRIPTOR a reader opened for this scan, with what
+   * its identity and kernel-path checks actually did (see walk.ts). Per
+   * descriptor, not per file: a file is opened by up to three readers and each
+   * open is accounted for on its own, so approval is never carried from one
+   * open to the next. `relPath` is the file the descriptor was opened for; the
+   * record itself carries no path.
+   */
+  onOpenedFileCheck?: (check: OpenedFileCheck, relPath: string) => void;
+}
+
+/**
+ * The refusals a binary probe may NOT discard. Every other candidate skip --
+ * "not this format", oversized, a symlink at the enumerated name -- is a
+ * reason the text path decides again for itself. These two are positive
+ * observations made on an opened descriptor: the object was outside the root
+ * or was not the object inspected. Falling through to the text reader would
+ * open the same name again and, if the substitution had been undone by then,
+ * read it and report a scanned file -- the refusal would vanish into a
+ * successful re-read. So the FILE is refused, counted once, and not reopened.
+ */
+function probeRefusal(candidate: { skipped: SkipReason }): SkipReason | null {
+  return candidate.skipped === "outside" || candidate.skipped === "replaced" ? candidate.skipped : null;
 }
 
 /** Scans a caller-supplied list — the staged set, say — through the same guards. */
@@ -114,18 +142,31 @@ export function scanFiles(
 ): ScannedFile[] {
   const scanned: ScannedFile[] = [];
   for (const relPath of files) {
+    // Every reader below reports each descriptor it opens through this one
+    // hook, so the three opens a file may get are three records, not one.
+    const hooks: ReadHooks = {
+      onOpenedFileCheck: (check) => options.onOpenedFileCheck?.(check, relPath),
+    };
     // The file-level PKCS#12 detector runs first and independently. It has its
     // own non-dereferencing, size-gated read (see readBinaryCandidate), because
     // a DER container is NUL-dense and never survives the text path's binary
     // check -- so no SecretRule could ever see one. Content-driven and
     // extension-independent: a renamed .bin still reports.
-    const { finding: binary, admitted: pkcs12Admitted } = detectPkcs12(root, relPath, config);
+    const { finding: binary, admitted: pkcs12Admitted, refused: pkcs12Refused } = detectPkcs12(root, relPath, config, hooks);
+    if (pkcs12Refused) {
+      options.onSkipped?.(pkcs12Refused, relPath);
+      continue;
+    }
 
     // The container layer, one level deep, beside the PKCS#12 hook and through
     // the same non-dereferencing, size-gated read. An archive is scanned as
     // ONE file whose findings come from its members; nothing is extracted.
-    const archive = binary ? null : scanArchive(root, relPath, config, options);
+    const archive = binary ? null : scanArchive(root, relPath, config, options, hooks);
     let unopenedContainer = false;
+    if (archive && "refused" in archive) {
+      options.onSkipped?.(archive.refused, relPath);
+      continue;
+    }
     if (archive && "notOpened" in archive) {
       options.onContainerNotOpened?.(archive.notOpened);
       unopenedContainer = true;
@@ -139,7 +180,7 @@ export function scanFiles(
     // it is already text.
     let text = options.textFor?.(relPath);
     if (text === undefined) {
-      const read = readTextFileResult(root, relPath, config);
+      const read = readTextFileResult(root, relPath, config, hooks);
       if (!("text" in read)) {
         // A container the binary detector reported was scanned, so it is not a
         // skip. Counting it as "binary or unreadable" as well would disclose a
@@ -235,16 +276,24 @@ export function scanFiles(
  * whole file", which many DER files that are not keystores satisfy. That is why
  * `admitted` steers toward caution and never toward a stronger claim.
  */
-function detectPkcs12(root: string, relPath: string, config: SecretLoopConfig) {
+function detectPkcs12(
+  root: string,
+  relPath: string,
+  config: SecretLoopConfig,
+  hooks: ReadHooks
+): { finding: Finding | null; admitted: boolean; refused: SkipReason | null } {
   const candidate = readBinaryCandidate(
     root,
     relPath,
     config,
     pkcs12HeaderAccepts,
-    PKCS12_HEADER_BYTES
+    PKCS12_HEADER_BYTES,
+    hooks
   );
-  if (!("bytes" in candidate)) return { finding: null, admitted: false };
-  return { finding: detectPkcs12Bytes(candidate.bytes, relPath), admitted: true };
+  // `refused` is set only for the two observations a probe may not discard
+  // (probeRefusal); every other skip is dropped here as before.
+  if (!("bytes" in candidate)) return { finding: null, admitted: false, refused: probeRefusal(candidate) };
+  return { finding: detectPkcs12Bytes(candidate.bytes, relPath), admitted: true, refused: null };
 }
 
 /**
@@ -266,10 +315,14 @@ function scanArchive(
   root: string,
   relPath: string,
   config: SecretLoopConfig,
-  options: ScanFilesOptions
-): ScannedFile | { notOpened: ContainerNotOpenedReason } | null {
-  const candidate = readBinaryCandidate(root, relPath, config, archiveHeaderAccepts, ARCHIVE_HEADER_BYTES);
-  if (!("bytes" in candidate)) return null;
+  options: ScanFilesOptions,
+  hooks: ReadHooks
+): ScannedFile | { notOpened: ContainerNotOpenedReason } | { refused: SkipReason } | null {
+  const candidate = readBinaryCandidate(root, relPath, config, archiveHeaderAccepts, ARCHIVE_HEADER_BYTES, hooks);
+  if (!("bytes" in candidate)) {
+    const refused = probeRefusal(candidate);
+    return refused ? { refused } : null;
+  }
   const listing = openArchive(candidate.bytes, relPath, config.maxFileSizeBytes);
   if (!listing) return null;
   if ("notOpened" in listing) return listing;
@@ -368,6 +421,13 @@ export interface WorkspaceScan {
    * produced but nothing carried is a skip nobody is told about.
    */
   outsideExcluded: number;
+  /**
+   * Every content descriptor the readers opened, and what its checks did.
+   * Always present for this scan path: `opened: 0` means nothing was opened
+   * (every file came from a buffer, or there were none), which is a statement,
+   * not an absence.
+   */
+  openedFileChecks: OpenedFileChecks;
 }
 
 /**
@@ -382,9 +442,20 @@ export function scanWorkspaceScan(
   options: ScanFilesOptions = {}
 ): WorkspaceScan {
   const listed = listFilesWithExclusions(root, config);
+  const openedFileChecks = emptyOpenedFileChecks();
+  const scanned = scanFiles(root, listed.files, config, {
+    ...options,
+    // Accumulated here AND forwarded, so a caller that already counts (the
+    // CLI, MCP) and one that does not (the editor) both get the same numbers.
+    onOpenedFileCheck: (check, relPath) => {
+      recordOpenedFileCheck(openedFileChecks, check);
+      options.onOpenedFileCheck?.(check, relPath);
+    },
+  });
   return {
-    scanned: scanFiles(root, listed.files, config, options),
+    scanned,
     generatedExcluded: listed.generatedExcluded,
     outsideExcluded: listed.outsideExcluded,
+    openedFileChecks,
   };
 }

@@ -7,7 +7,7 @@ import { gzipSync } from "zlib";
 import { openArchive, ArchiveListing } from "../src/archive";
 import { scanFiles, ScannedFile } from "../src/workspace";
 import { mergeConfig, loadConfig } from "../src/config";
-import { describeScope } from "../src/report";
+import { describeScope, describeOpenedFileChecks } from "../src/report";
 import { describeScope as mcpDescribeScope, toolScan, setAllowedRoots, ToolResult } from "../src/mcp-core";
 import { buildZip, buildTar, buildGzip } from "./archive-builders";
 
@@ -218,21 +218,24 @@ test("CLI text, JSON and SARIF carry the sentence; JSON and SARIF carry the stru
   const dir = project();
   try {
     const json = JSON.parse(spawnSync("node", [CLI, "scan", "--format", "json", "--fail-on", "never"], { cwd: dir, encoding: "utf8" }).stdout);
-    assert.strictEqual(json.summary.scope, PROJECT_SENTENCE);
+    // The archive clauses, then the readers' check accounting, which is always
+    // the last clause and is taken from the same report's structured block.
+    const tail = (checks: unknown) => describeOpenedFileChecks(checks as Parameters<typeof describeOpenedFileChecks>[0]);
+    assert.strictEqual(json.summary.scope, `${PROJECT_SENTENCE}; ${tail(json.summary.coverage.openedFileChecks)}`);
     assert.deepStrictEqual(json.summary.archives, PROJECT_ACC);
     assert.strictEqual(json.findings.length, 0);
     const sarif = JSON.parse(spawnSync("node", [CLI, "scan", "--format", "sarif", "--fail-on", "never"], { cwd: dir, encoding: "utf8" }).stdout);
-    assert.strictEqual(sarif.runs[0].invocations[0].properties.scope, PROJECT_SENTENCE);
+    assert.strictEqual(sarif.runs[0].invocations[0].properties.scope, `${PROJECT_SENTENCE}; ${tail(sarif.runs[0].invocations[0].properties.openedFileChecks)}`);
     assert.deepStrictEqual(sarif.runs[0].invocations[0].properties.archives, PROJECT_ACC);
     const txt = spawnSync("node", [CLI, "scan", "--fail-on", "never"], { cwd: dir, encoding: "utf8" });
     assert.strictEqual(txt.status, 0);
-    assert.ok(txt.stdout.includes(`Scanned ${PROJECT_SENTENCE}.`), txt.stdout);
+    assert.ok(txt.stdout.includes(`Scanned ${PROJECT_SENTENCE}; `), txt.stdout);
     // no archives -> no object, sentence unchanged
     const plain = tmp();
     try {
       write(plain, "readme.txt", TXT("r"));
       const j = JSON.parse(spawnSync("node", [CLI, "scan", "--format", "json", "--fail-on", "never"], { cwd: plain, encoding: "utf8" }).stdout);
-      assert.strictEqual(j.summary.scope, "1 file(s)");
+      assert.strictEqual(j.summary.scope, `1 file(s); ${tail(j.summary.coverage.openedFileChecks)}`);
       assert.ok(!("archives" in j.summary));
       const s = JSON.parse(spawnSync("node", [CLI, "scan", "--format", "sarif", "--fail-on", "never"], { cwd: plain, encoding: "utf8" }).stdout);
       assert.ok(!("archives" in s.runs[0].invocations[0].properties));
@@ -245,7 +248,7 @@ test("MCP: statement word-for-word plus the structured object, present only when
   try {
     setAllowedRoots([dir]);
     const p = payload(toolScan({ path: dir }));
-    assert.strictEqual(p.scope.statement, `Scanned ${PROJECT_SENTENCE}.`);
+    assert.strictEqual(p.scope.statement, `Scanned ${PROJECT_SENTENCE}; ${describeOpenedFileChecks(p.scope.openedFileChecks)}.`);
     assert.deepStrictEqual(p.scope.archives, PROJECT_ACC);
     assert.strictEqual(p.scope.filesScanned, 2);
     assert.ok(!JSON.stringify(p.scope).includes("enc.txt"), "no member name in the disclosure");

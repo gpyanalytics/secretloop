@@ -65,6 +65,25 @@ the top of a large source file therefore costs you the whole file. A binary file
 whose first 8,000 bytes carry no NUL is *not* caught and is scanned as text. If you keep credentials in a
 UTF-16 file, convert it to UTF-8 to bring it into scope.
 
+**`N file(s) not scanned — replaced between inspection and read`** —
+**Unreleased.** The reader inspected a file, opened it, and found the opened
+object was not the one it had inspected: its device or inode differed. Nothing
+was read from it and the report is incomplete. In an ordinary tree this means
+something rewrote the file in the instant between the two operations — an
+editor's atomic save, a build step — and rerunning the scan reads it. In a
+tree someone else can write to, it is the substitution the check exists to
+catch, and it says so rather than guessing which.
+
+**`N descriptor(s) opened for content: identity …; kernel path …`** —
+**Unreleased**, on every working-tree and staged scan, last in the sentence.
+The readers' own accounting: how many descriptors they opened and what the
+identity and kernel-path checks did on each. `kernel path N unavailable` is
+what macOS and Windows always say — there is no kernel record of an open
+descriptor's path there, and the sentence says so instead of leaving it out.
+`failed` means the evidence for a descriptor could not be obtained and that
+file was refused as `could not be read`. See
+[coverage](coverage.md#opened-file-checks) for every outcome.
+
 **`N file(s) not scanned — could not be read`** — **new in 0.6.0; see above.**
 The scan meant to read these and could not: a permission or I/O
 failure, or a binary format it supports but

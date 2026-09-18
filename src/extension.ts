@@ -1,3 +1,4 @@
+import type { OpenedFileChecks } from "./walk";
 import * as vscode from "vscode";
 import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import { scanText, maskFindings, Finding } from "./scanner";
@@ -22,7 +23,7 @@ import {
 } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
 import { setting, resolveSetting, describeOrigin, SETTINGS_NAMESPACE } from "./settings";
-import { UNKNOWN_REASONS, describeScope } from "./report";
+import { UNKNOWN_REASONS, describeScope, describeOpenedFileChecks } from "./report";
 import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
 import { verifyScannedFiles } from "./workspace-verify";
 import * as path from "path";
@@ -596,7 +597,7 @@ async function scanWorkspace() {
   );
   const buffers = openBuffers(root);
   const archiveTotals = emptyArchiveAccounting();
-  const { scanned, generatedExcluded, outsideExcluded } = scanWorkspaceScan(root, config, {
+  const { scanned, generatedExcluded, outsideExcluded, openedFileChecks } = scanWorkspaceScan(root, config, {
     textFor: (p) => buffers.get(p),
     onContainerNotOpened: (reason) => {
       archiveTotals.containersNotOpened[reason] = (archiveTotals.containersNotOpened[reason] ?? 0) + 1;
@@ -616,6 +617,7 @@ async function scanWorkspace() {
         ? `; ${apiDocumentsScoped} API description document(s) scanned without generic entropy`
         : "") +
       (archives ? `; ${archives.containersOpened} archive(s) opened` : "") +
+      `; ${describeOpenedFileChecks(openedFileChecks)}` +
       "."
   );
 
@@ -633,7 +635,8 @@ async function scanWorkspace() {
       archives,
       suppressed,
       fixtureSuppressed,
-      suppressedWithReason
+      suppressedWithReason,
+      openedFileChecks
     )
   );
 }
@@ -671,7 +674,14 @@ export function workspaceScanSummary(
    * disclosure added to this signature before it, so existing calls are
    * unchanged and produce the sentence they always produced.
    */
-  suppressedWithReason = 0
+  suppressedWithReason = 0,
+  /**
+   * The readers' per-descriptor check accounting, when the caller has it.
+   * Last and optional, like every disclosure added before it; the existing
+   * shorter calls keep their sentence, and a caller that supplies it gets the
+   * same closing clause the CLI and MCP print.
+   */
+  openedFileChecks?: OpenedFileChecks
 ): string {
   // Through describeScope, so the editor and the CLI cannot describe the same
   // scan differently — the same reason workspace.ts exists at all. The two
@@ -688,6 +698,7 @@ export function workspaceScanSummary(
     suppressed,
     suppressedWithReason,
     fixtureSuppressed,
+    ...(openedFileChecks ? { openedFileChecks } : {}),
   });
   return findings.length > 0
     ? `SecretLoop: scanned ${scope}. ${livenessCounts(findings)}.`

@@ -43,6 +43,13 @@ illustrative, not a claim about which release carries these fields.
     "scopeNoun": "file",
     "coverage": {                    // DESCRIPTIVE, not comparison-bearing
       "limitations": [],
+      // Unreleased: per-descriptor check accounting for the readers this scan
+      // ran (see coverage.md, "Opened-file checks"); absent for a history scan
+      "openedFileChecks": {
+        "opened": 6,
+        "identity":   { "verified": 6, "refused": 0, "unavailable": 0, "failed": 0, "notReached": 0 },
+        "kernelPath": { "verified": 0, "refused": 0, "unavailable": 6, "failed": 0, "notReached": 0 }
+      },
       "suppression": {
         "allowValuesCount": 0,
         "baselineApplied": false,
@@ -282,7 +289,15 @@ suppression identity.
 look at**: a file over `maxFileSizeBytes`, a file it could not read, a path that
 was not a regular file or had vanished, a symlink refused by the containment
 guard, an archive it could not finish enumerating, a container it could not
-open, or a run that was stopped.
+open, or a run that was stopped. **Unreleased:** also a file whose opened
+descriptor was not the object just inspected (`replaced`), or whose
+kernel-recorded location was outside the root at the check before its first
+read (`outside`), or whose check evidence could not be obtained (`unreadable`).
+These add causes without changing what the boolean means, in the conservative
+direction — a report that would once have read a substituted object and said
+`incomplete: false` now says `true` — so `REPORT_SCHEMA_VERSION` stays 4. A
+check that was **unavailable** on the platform is disclosed in
+`summary.coverage.openedFileChecks` and does **not** make the report incomplete.
 
 Deliberate policy is **not** incompleteness. Generated-file exclusions, fixture
 suppression, API-document scoping and configured `excludePaths` are decisions;
@@ -674,6 +689,15 @@ producer cannot close it, which is why the list is normative here.
 decide it, and **two equal coverage blocks do not make two scans comparable**.
 Nothing in it may be used as an identity — least of all `inlineSuppressed`, for
 the reason in the table above.
+
+`summary.coverage.openedFileChecks` (**Unreleased**) is descriptive in the same
+way. Two complete reports whose blocks differ — one scanned on Linux with the
+kernel-path check verified, one on macOS with it unavailable — remain
+comparable, exactly as every report written before the block existed compares
+today; the difference is visible in each report and is not an identity. A
+check **refusal** makes the report `incomplete` and therefore ineligible,
+because the scan did not cover that file. The comparator reads nothing from
+this block.
 
 ## Compatibility
 

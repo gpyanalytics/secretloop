@@ -2,6 +2,64 @@
 
 ## Unreleased
 
+### Containment
+
+- **The scanner now checks the file it actually opened before reading it, and
+  says what it checked.** Both readers — the text reader and the binary
+  detectors' candidate reader, header probe included — inspect a file, capture
+  its device and inode, open it, and then compare the opened descriptor against
+  that identity before the first byte is read. On Linux they also read the
+  kernel's own record of the opened descriptor's path (`/proc/self/fd`) and
+  require it to lie under the scan root by path component. What this buys, in
+  plain terms: certain file substitutions between the inspection and the read
+  are **detected before anything is read**, an observed violation **refuses
+  the file**, and every scan **reports when a check could not run**.
+- **What is refused, and how it is reported.** A descriptor whose identity
+  differs from the inspected object is refused as **`replaced`** — a new skip
+  reason, disclosed as `N file(s) not scanned — replaced between inspection and
+  read`, counted as a coverage limitation, and making the report `incomplete`.
+  A descriptor whose kernel-recorded path is outside the root is refused with
+  the existing **`outside`** reason. A refusal on the binary probe's descriptor
+  refuses the whole file; the text reader is not tried again on that name.
+  Nothing is read from a refused descriptor. An ordinary per-file refusal never
+  stops the scan.
+- **New disclosure: `openedFileChecks`.** Every working-tree and staged scan
+  now accounts for each descriptor its readers opened for content — three per
+  ordinary file, one per reader — and what the two checks did on each:
+  `verified`, `refused`, `unavailable`, `failed` or `notReached`, for
+  `identity` and for `kernelPath`. It appears as `summary.coverage.openedFileChecks`
+  in JSON, in the SARIF invocation properties, in the MCP `scope` object and as
+  the **last clause of every scope sentence**, for example
+  `; 12 descriptor(s) opened for content: identity 12 verified; kernel path 12 unavailable`.
+  The clause is printed on every scan, all-verified included, so a sentence
+  without it cannot be mistaken for one where every check ran. A history scan
+  never runs these readers and omits the block. `unavailable` is disclosed but
+  is **not** a coverage limitation.
+- **The guarantee, stated exactly, and its limits.** On Linux with a readable
+  `/proc/self/fd`: no bytes are read from an object whose kernel-recorded
+  location, *at the check that immediately precedes its first read*, lies
+  outside the root. Every platform: no bytes are read from an object other
+  than the one inspected one syscall before the open, where that object had an
+  identity. It does **not** establish containment at the moment of the open,
+  throughout the read, or against every filesystem race — measured, not
+  supposed: an outside object moved under the root after the open and before
+  the check is accepted with its outside-origin bytes read; an inside object
+  moved out after the check is still read; the identity check alone cannot see
+  a parent replaced between path resolution and the identity capture (on
+  darwin and Windows there is no kernel path, so that case is read there and
+  the block says `kernel path N unavailable`); and content can change in place.
+  Windows and macOS therefore get **risk reduction**, not a Linux-equivalent
+  check. **F-1 Concern A remains open.** No native dependency, `openat2`
+  binding or broader filesystem policy was added.
+- **Compatibility.** `REPORT_SCHEMA_VERSION` stays 4: the block is descriptive
+  and lives under `summary.coverage`, never beside the comparison identities;
+  the meaning of `incomplete` is unchanged and only gains causes, in the
+  conservative direction. On a stable tree, builds from either side produce
+  byte-identical findings, fingerprints and comparison identities; the only
+  differences are the new clause and the new block. The comparator is
+  unchanged. Reading a scope sentence that used to end at a known clause now
+  finds the accounting clause after it.
+
 ### Coverage
 
 - **The file-size cap now bounds the READ, not an earlier look at the name.**

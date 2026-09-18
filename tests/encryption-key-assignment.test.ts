@@ -1,4 +1,5 @@
 import { test, suite, finish, assert } from "./harness";
+import { describeOpenedFileChecks } from "../src/report";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
@@ -338,7 +339,7 @@ test("scan reports it in JSON with the frozen fingerprint, at default settings, 
     const d = JSON.parse(cli(["scan", "--format", "json", "--fail-on", "never"], dir).stdout);
     assert.deepStrictEqual(d.findings.map((f: any) => [f.ruleId, f.line, f.severity, f.confidence]), [[RULE, 3, "high", "format-match"]]);
     assert.strictEqual(d.findings[0].fingerprint, `test/integration/x_test.go:${RULE}:${digest16(v)}`);
-    assert.strictEqual(d.summary.scope, "1 file(s)");
+    assert.strictEqual(d.summary.scope, `1 file(s); ${describeOpenedFileChecks(d.summary.coverage.openedFileChecks)}`);
   });
 });
 

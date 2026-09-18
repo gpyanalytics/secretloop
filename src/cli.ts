@@ -30,7 +30,11 @@ import {
   BASELINE_VERSION,
   SecretLoopConfig,
 } from "./config";
-import { listFilesWithExclusions, filterGenerated, getStagedFiles, findRepoRoot } from "./walk";
+import { listFilesWithExclusions, filterGenerated, getStagedFiles, findRepoRoot,
+  OpenedFileChecks,
+  emptyOpenedFileChecks,
+  recordOpenedFileCheck,
+} from "./walk";
 import { scanFiles } from "./workspace";
 import { scanHistory, isGitRepo, InvalidRevRangeError } from "./history";
 import { render, OutputFormat, sortFindings, UNKNOWN_REASONS, describeScope } from "./report";
@@ -640,6 +644,10 @@ interface ScannedList {
   notAFile: number;
   vanished: number;
   outside: number;
+  /** The opened object was not the inspected one; refused unread. A limitation. */
+  replaced: number;
+  /** Every content descriptor the readers opened, and what its checks did. */
+  openedFileChecks: OpenedFileChecks;
   /**
    * The paths excluded as binary, from the scan's own events. Feeds
    * `binaryIdentity`; never rebuilt by a second walk of the tree.
@@ -659,10 +667,16 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
   let notAFile = 0;
   let vanished = 0;
   let outside = 0;
+  let replaced = 0;
+  const openedFileChecks = emptyOpenedFileChecks();
   const archives = emptyArchiveAccounting();
   // Same enumeration and same guards the editor uses, so the two cannot report
   // different files for the same project.
   const scanned = scanFiles(root, files, config, {
+    // One record per descriptor a reader opened, from the reader's own
+    // finally. Never rebuilt from the file list: the number of opens per file
+    // is the readers' business, and a count re-derived here would be a guess.
+    onOpenedFileCheck: (check) => recordOpenedFileCheck(openedFileChecks, check),
     // Exhaustive on purpose. The previous `else unreadable++` meant a new skip
     // reason silently became "binary or unreadable"; the compiler now refuses a
     // reason nobody decided how to disclose.
@@ -676,6 +690,7 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
         case "vanished": vanished++; break;
         case "unreadable": unreadable++; break;
         case "outside": outside++; break;
+        case "replaced": replaced++; break;
         default: {
           const never: never = reason;
           void never;
@@ -707,6 +722,8 @@ function scanFileList(root: string, files: string[], config: SecretLoopConfig): 
     notAFile,
     vanished,
     outside,
+    replaced,
+    openedFileChecks,
     binaryPaths,
   };
 }
@@ -918,6 +935,12 @@ async function main(): Promise<void> {
   // conflated -- an omitted field makes a pair ineligible, an empty set makes
   // it comparable.
   let binaryExclusions: string[] | undefined;
+  /**
+   * The readers' per-descriptor check accounting. Set ONLY by the branch that
+   * runs the readers; undefined omits it from the report, which is the
+   * "not established" answer, distinct from `opened: 0`.
+   */
+  let openedFileChecks: OpenedFileChecks | undefined;
 
   if (args.command === "history") {
     if (!isGitRepo(root)) {
@@ -1033,7 +1056,9 @@ async function main(): Promise<void> {
       unreadableExcluded: result.unreadable,
       notAFileExcluded: result.notAFile,
       vanishedExcluded: result.vanished,
+      replacedExcluded: result.replaced,
       archives,
+      openedFileChecks: result.openedFileChecks,
     });
     selection = { mode: args.command === "staged" ? "staged" : "worktree" };
     inlineSuppressed = result.suppressed;
@@ -1048,7 +1073,11 @@ async function main(): Promise<void> {
     coverage.notAFileExcluded = result.notAFile;
     coverage.vanishedExcluded = result.vanished;
     coverage.outsideExcluded = listed.outsideExcluded + result.outside;
+    coverage.replacedExcluded = result.replaced;
     coverage.archives = archives;
+    // Present for every file scan, `opened: 0` included. The history branch
+    // never sets it, and the report omits it there -- the readers never ran.
+    openedFileChecks = result.openedFileChecks;
   }
 
   // An annotation the parser had to argue with, said once per distinct
@@ -1142,6 +1171,7 @@ async function main(): Promise<void> {
     },
     reportCoverage: {
       limitations,
+      ...(openedFileChecks ? { openedFileChecks } : {}),
       suppression: {
         allowValuesCount: config.allowValues.length,
         baselineApplied: Boolean(args.baseline),

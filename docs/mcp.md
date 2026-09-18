@@ -64,7 +64,11 @@ has no input of its own for the tier. The current count is in
 
   **What it establishes:** which working-tree scan of which root produced these
   findings, and what that scan inspected — `filesScanned`, `outsideExcluded`,
-  `apiDocumentsScoped`, any `archives` accounting, and the scope sentence.
+  `apiDocumentsScoped`, any `archives` accounting, the scope sentence and
+  (**Unreleased**) `openedFileChecks`, the per-descriptor accounting of the
+  readers' identity and kernel-path checks — counts only, no path — described
+  in [coverage](coverage.md#opened-file-checks). The scope statement ends with
+  the same accounting as its last clause.
 
   **What it does not establish:** freshness. `source: "session-cache"` and
   `scannedAt` already say these findings describe an *earlier* observation, and
