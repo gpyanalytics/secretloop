@@ -260,19 +260,32 @@ function createSequence(store, userSid) {
   const chain = checkChain(store, userSid, info);
   steps.push({ step: "C2 ancestor chain", ok: chain.ok, reason: chain.reason, failedAt: chain.failedAt });
   if (!chain.ok) return { ok: false, reason: "unsafe-parent", created: false, createdAnything: fs.existsSync(store), chain, steps };
-  fs.mkdirSync(store);                                            // C3 -- fails EEXIST if anything is already there
+  const pend = path.join(store, "pending");
+  // C3. A name that already exists is NOT adopted: the caller evaluates it as an existing store instead.
+  let madeStore = false, madePending = false;
+  try { fs.mkdirSync(store); madeStore = true; }
+  catch (e) {
+    if (e && e.code === "EEXIST") return { ok: false, reason: "store-already-exists", created: false, evaluateAsExisting: true, steps };
+    return { ok: false, reason: "acl-enforcement-failed", detail: code(e), created: false, steps };
+  }
   steps.push({ step: "C3 mkdir", ok: true });
+  // Undo for THIS call only: rmdir (never recursive) on the empty directories this call just created. It is not a
+  // repair of a user's store -- nothing pre-existing is touched, and a non-empty directory would refuse to go.
+  const undo = () => { const r = { removedPending: false, removedStore: false };
+    if (madePending) { try { fs.rmdirSync(pend); r.removedPending = true; } catch { /* left in place */ } }
+    if (madeStore) { try { fs.rmdirSync(store); r.removedStore = true; } catch { /* left in place */ } }
+    return r; };
   const en = enforce(store, userSid);
   steps.push({ step: "C4 protect", ok: en.ok, reason: en.reason });
-  if (!en.ok) return { ok: false, reason: en.reason, created: true, steps };
-  const pend = path.join(store, "pending");
-  fs.mkdirSync(pend);                                             // C6
+  if (!en.ok) return { ok: false, reason: en.reason, created: false, undone: undo(), steps };
+  fs.mkdirSync(pend); madePending = true;                         // C6
   const after = psInspect([store, pend]);
-  if (after.fail) return { ok: false, reason: after.fail, created: true, steps };
+  if (after.fail) return { ok: false, reason: after.fail, created: false, undone: undo(), steps };
   const s5 = checkStoreObject(store, userSid, after, true), s6 = checkStoreObject(pend, userSid, after, true);
   steps.push({ step: "C5 verify store", ok: s5.ok, reason: s5.reason, owner: s5.ownerSid, protectedDacl: s5.protectedDacl });
   steps.push({ step: "C6 verify pending", ok: s6.ok, reason: s6.reason, owner: s6.ownerSid });
-  return { ok: s5.ok && s6.ok, reason: s5.ok && s6.ok ? "created-private" : (s5.ok ? s6.reason : s5.reason), created: true, steps };
+  if (!(s5.ok && s6.ok)) return { ok: false, reason: s5.ok ? s6.reason : s5.reason, created: false, undone: undo(), steps };
+  return { ok: true, reason: "created-private", created: true, steps };
 }
 /** THE FULL PER-OPERATION SEQUENCE (D1-D6) over the store, pending and every record present. */
 function operateSequence(store, userSid) {
