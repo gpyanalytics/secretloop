@@ -78,6 +78,17 @@ const fs = require("fs"), path = require("path");
 const target = process.env.OFC_TARGET, fn = process.env.OFC_FN, nth = Number(process.env.OFC_NTH || "1");
 const outside = process.env.OFC_OUTSIDE, report = process.env.OFC_REPORT;
 const real = fs[fn]; let seen = 0, fired = false;
+// The CLI roots a repository scan at git's toplevel, which on Windows can spell
+// the same directory differently from the parent's realpath (long name versus
+// 8.3, forward slashes). Compare canonical native paths, case-insensitively
+// on win32, instead of strings; the match is only evaluated before the swap,
+// while both names still resolve to the same file.
+function same(a) {
+  try {
+    const x = fs.realpathSync.native(path.resolve(a)), y = fs.realpathSync.native(target);
+    return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
+  } catch { return false; }
+}
 function act() {
   const sub = path.dirname(target), root = path.dirname(sub);
   fs.renameSync(sub, path.join(root, "..", "sub.moved"));
@@ -85,7 +96,7 @@ function act() {
 }
 fs[fn] = function (...a) {
   const r = real.apply(this, a);
-  if (!fired && typeof a[0] === "string" && path.resolve(a[0]) === target && ++seen === nth) {
+  if (!fired && typeof a[0] === "string" && same(a[0]) && ++seen === nth) {
     fired = true;
     try { act(); fs.writeFileSync(report, "fired"); }
     catch (e) { fs.writeFileSync(report, "error:" + String(e && e.code || e)); throw e; }
@@ -354,13 +365,24 @@ test("the realpath-to-identity gap at the text reader: refused by the kernel pat
 // ===========================================================================
 suite("opened-file checks at scan level — the shared scanner, the MCP tool and the editor summary");
 
+/** Canonical-path equality, case-insensitive on win32; false when either name no longer resolves. */
+function sameFile(a: string, b: string): boolean {
+  try {
+    const x = fs.realpathSync.native(path.resolve(a));
+    const y = fs.realpathSync.native(b);
+    return process.platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
+  } catch {
+    return false;
+  }
+}
+
 /** In-process wrapper: fires once, after the real call, on the nth matching call. */
 function fireAfter(name: "lstatSync", target: string, nth: number, action: () => void) {
   const real = (fs as any)[name];
   const state = { fired: false, seen: 0, error: null as null | string };
   (fs as any)[name] = function (this: unknown, ...args: unknown[]) {
     const r = real.apply(this, args);
-    if (!state.fired && typeof args[0] === "string" && path.resolve(args[0]) === target && ++state.seen === nth) {
+    if (!state.fired && typeof args[0] === "string" && sameFile(args[0], target) && ++state.seen === nth) {
       state.fired = true;
       try { action(); } catch (e) { state.error = String((e as NodeJS.ErrnoException).code ?? e); throw e; }
     }
