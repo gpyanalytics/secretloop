@@ -325,7 +325,13 @@ function hold() {
   const attempt = (n, f) => { try { const r = f(); res[n] = r === undefined ? "ok" : r; } catch (e) { res[n] = "error:" + code(e); } };
   if (fd !== null) {
     attempt("retained.read", () => { const b = Buffer.alloc(64); const n = fs.readSync(fd, b, 0, 64, 0); return `READ ${n} bytes`; });
-    attempt("retained.write", () => { const n = fs.writeSync(fd, Buffer.from(" "), 0, 1, 0); return `WROTE ${n} byte`; });
+    attempt("retained.write", () => {
+      // Non-destructive on purpose: writing a different byte would corrupt the record and the LATER
+      // question ("does the product trust it?") would measure this probe instead of the product.
+      const b = Buffer.alloc(1); fs.readSync(fd, b, 0, 1, 0);
+      const n = fs.writeSync(fd, b, 0, 1, 0);
+      return `WROTE ${n} byte (same value written back; write access proven, record left intact)`;
+    });
   }
   if (dh !== null) attempt("retained.directory-enumerate", () => { const e = dh.readSync(); return e ? `LISTED (${e.name.slice(0, 12)}…)` : "empty"; });
   // and a FRESH open by path, which the new DACL should govern
@@ -397,6 +403,28 @@ async function trust() {
   const scan = mcp.toolScan({ path: repo }); if (!scan.ok) throw new Error("scan failed: " + scan.error);
   const f = scan.payload.findings.find((x) => x.ruleId === "github-token"); if (!f) throw new Error("no github finding");
   const id = consent.recordId(f.fingerprint, repo);
+  const rp = path.join(root, "pending", id + ".json");
+  let fixture = { exists: fs.existsSync(rp) };
+  if (fixture.exists) {
+    fixture.bytes = fs.statSync(rp).size;
+    try {
+      const raw = JSON.parse(fs.readFileSync(rp, "utf8"));
+      const required = ["id", "fingerprint", "path", "file", "ruleId", "provider", "commitment", "createdAt"];
+      const badStrings = required.filter((k) => typeof raw[k] !== "string" || raw[k].length === 0);
+      fixture.parses = true;
+      fixture.fieldProblems = [
+        ...badStrings.map((k) => `not-a-string:${k}`),
+        raw.version === 1 ? null : "version",
+        raw.state === "pending" || raw.state === "approved" ? null : "state",
+        typeof raw.line === "number" ? null : "line",
+        /^[0-9a-f]{64}$/.test(String(raw.commitment)) ? null : "commitment-not-sha256",
+        raw.state === "approved" && typeof raw.expiresAt !== "string" ? "expiresAt" : null,
+        raw.path === repo ? null : "path-mismatch",
+      ].filter(Boolean);
+      fixture.state = raw.state;
+    } catch (e) { fixture.parses = false; fixture.jsonError = code(e); }
+  }
+  log("window.trust.fixture", fixture);   // a malformed fixture is a NON-MEASUREMENT, never a product pass
   let listed = "n/a", seen = "n/a";
   try { listed = consent.listRecords().length; } catch (e) { listed = "store-refused:" + (e.problem || code(e)); }
   try { const r = consent.readRecord(id); seen = r ? r.state : "absent"; } catch (e) { seen = "store-refused:" + (e.problem || code(e)); }

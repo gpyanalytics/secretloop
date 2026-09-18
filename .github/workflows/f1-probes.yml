@@ -376,7 +376,9 @@ jobs:
           }
           # A directory the victim owns, for comparison
           New-Item -ItemType Directory -Force "$LAB\tmp1\own" | Out-Null
-          RunAs $c1 "owner-of a directory the victim owns" (@("owner-of","--path","$LAB\tmp1\own","--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c1 "owner-of a directory created by the ELEVATED RUNNER (not by the victim)" (@("owner-of","--path","$LAB\tmp1\own","--tmp","$LAB\tmp1")) | Out-Null
+          RunAs $c1 "owner-of a directory the victim itself created" (@("make-repo","--repo","$LAB\tmp1\made-by-victim")) | Out-Null
+          RunAs $c1 "owner-of that victim-created directory" (@("owner-of","--path","$LAB\tmp1\made-by-victim","--tmp","$LAB\tmp1")) | Out-Null
           # THE CASE: an object the ATTACKER owns whose DACL names only the principals the policy allows
           $oc = RunAs $c2 "attacker builds an object it owns with a policy-clean DACL" (@("own-clean","--dir","$LAB\tmp2","--owner-sid",$env:SID1,"--tmp","$LAB\tmp2"))
           $P = (($oc | Select-String -Pattern '^ATTACKER-OWNED-PATH: ').Line -replace '^ATTACKER-OWNED-PATH: ','')
