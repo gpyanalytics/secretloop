@@ -56,7 +56,10 @@ if (!out || !store || !repoDir) {
 
   const first = await mcp.toolVerify({ path: repo, fingerprint: finding.fingerprint });
   if (!first.ok || first.payload.state !== "CONSENT_REQUIRED") {
-    throw new Error("the first request did not ask for consent");
+    // Say what actually came back. A fixture that cannot explain its own failure turns a
+    // diagnosable problem into a guess.
+    const detail = first.ok ? `state ${first.payload.state}` : `refused: ${String(first.error).slice(0, 160)}`;
+    throw new Error(`the first request did not ask for consent (${detail})`);
   }
   if (outbound !== 0) throw new Error("the first request attempted to transmit");
 
