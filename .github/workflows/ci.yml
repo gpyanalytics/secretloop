@@ -321,6 +321,100 @@ jobs:
       - name: Smoke the VSIX
         run: npm run smoke:vsix
 
+  test-macos:
+    # Native macOS, which this workflow did not have. The macOS consent rules -- the extended-ACL
+    # refusal from PR #93 and the ancestor rule here -- skip on Linux and Windows with their
+    # reason, so before this job they were exercised only on a developer machine and never in CI.
+    #
+    # Added beside the existing jobs and taking nothing away: every existing job, check name and
+    # permission is untouched, so branch protection keeps requiring exactly what it required
+    # before. `macos-latest` is a standard GitHub-hosted runner and this repository is public, so
+    # it costs no minutes and needs no plan change, no larger runner and no billing change.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [18, 20]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      # A fresh build BEFORE anything runs the bundled CLI: several suites spawn out/cli.js, and a
+      # stale bundle would test the wrong code. The repository's own freshness check then confirms
+      # it rather than assuming it.
+      - run: npm run compile
+      - name: Record the environment this ran in
+        run: |
+          set -e
+          echo "runner image : $ImageOS  $ImageVersion"
+          echo "arch         : $(uname -m)"
+          echo "macOS        : $(sw_vers -productVersion) build $(sw_vers -buildVersion)"
+          echo "node         : $(node -v)  ($(node -p 'process.arch'))"
+          echo "euid         : $(id -u)  user: $(whoami)"
+          echo "TMPDIR chain :"
+          p=$(cd "${TMPDIR:-/tmp}" && pwd -P)
+          while :; do
+            printf '  mode=%s uid=%s %s\n' "$(stat -f '%OLp' "$p")" "$(stat -f '%u' "$p")" "$p"
+            up=$(dirname "$p"); [ "$up" = "$p" ] && break; p=$up
+          done
+      - run: node scripts/check-build-fresh.js
+      - name: The consent, ACL, parser, creation and parent-chain suites, natively
+        run: |
+          set -e
+          npx ts-node --transpile-only tests/consent-store.test.ts
+          npx ts-node --transpile-only tests/consent-record-file.test.ts
+          npx ts-node --transpile-only tests/consent-acl-macos.test.ts
+          npx ts-node --transpile-only tests/consent-parent-chain.test.ts
+          npx ts-node --transpile-only tests/verify-consent.test.ts
+      - name: The full suite
+        run: npm test
+      - name: Packaging smoke
+        run: npm run smoke:tarball
+
+  test-macos-two-user:
+    # The cross-user half, which no macOS evidence has ever covered: the product running as an
+    # ordinary owner while a SECOND ordinary account attempts the attacks. Everything before this
+    # was single-account, and a single-account result is not a substitute.
+    #
+    # Provisioning needs administrative rights and is kept in its own step, separate from every
+    # step that runs the product. If provisioning cannot work on a hosted runner, this job FAILS
+    # there and says so rather than skipping quietly into a false green.
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: Can this runner create a second ordinary account at all?
+        id: provision
+        run: |
+          set -e
+          echo "whoami: $(whoami) uid=$(id -u)"
+          echo "sudo  : $(sudo -n true 2>&1 && echo 'passwordless' || echo 'NOT available')"
+          NEXT=4001
+          sudo sysadminctl -addUser slattack -password slattackpw -UID $NEXT 2>&1 | tail -5 || true
+          if id -u slattack >/dev/null 2>&1; then
+            echo "second account created: uid=$(id -u slattack)"
+            echo "created=yes" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::sysadminctl could not create a second ordinary account on this runner."
+            echo "created=no" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+      - name: The two-account cases, product as the owner and attacks as the second account
+        if: steps.provision.outputs.created == 'yes'
+        env:
+          SECRETLOOP_MAC_ATTACKER: slattack
+        run: npx ts-node --transpile-only tests/consent-macos-two-user.test.ts
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.

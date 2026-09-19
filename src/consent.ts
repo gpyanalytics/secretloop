@@ -19,6 +19,7 @@ import { createHash, randomBytes } from "crypto";
 import { homedir } from "os";
 import * as path from "path";
 import { checkMacAcl, type MacAclTarget } from "./consent-acl-macos";
+import { checkParentChain } from "./consent-parent-chain";
 import {
   CheckTarget,
   checkWindowsStore,
@@ -115,6 +116,9 @@ export type ConsentStoreProblem =
   | "extended-acl"
   | "acl-tool-unavailable"
   | "acl-unreadable"
+  // POSIX only. The path ABOVE the store, which no earlier check looked at.
+  | "unsafe-parent-posix"
+  | "parent-unreadable"
   | "record-permissive"
   | "symlink"
   | "foreign-owner"
@@ -186,6 +190,12 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       return `SecretLoop could not run the built-in macOS tool it uses to inspect extended access-control lists, so consent records cannot be trusted.`;
     case "acl-unreadable":
       return `SecretLoop could not obtain a complete, well-formed answer about the extended access-control lists on ${where}, so consent records cannot be trusted.`;
+    case "unsafe-parent-posix":
+      // Names the class of problem, never the component. Which directory it was is something the
+      // user can see for themselves and is not worth echoing back into a tool response.
+      return `a directory on the path to ${where} can be modified by another account, so the store could be replaced and consent records cannot be trusted; SecretLoop refuses rather than changing anyone's permissions.`;
+    case "parent-unreadable":
+      return `SecretLoop could not inspect every directory on the path to ${where}, so consent records cannot be trusted.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -233,6 +243,8 @@ export const CONSENT_STORE_GUIDANCE_WINDOWS =
 export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
   if (problem === "extended-acl" || problem === "acl-tool-unavailable" || problem === "acl-unreadable")
     return CONSENT_MACOS_ACL_GUIDANCE;
+  if (problem === "unsafe-parent-posix" || problem === "parent-unreadable")
+    return CONSENT_PARENT_CHAIN_GUIDANCE;
   // "record-too-large" is the one refusal that is not about the store, so it must not send the
   // user to inspect a store that is perfectly healthy. The default stays the store guidance,
   // including when no problem is given.
@@ -245,6 +257,19 @@ export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
  * or to re-permission a tree: removing an entry now says nothing about who read the store before,
  * cannot establish ownership, and cannot revoke a descriptor another process already holds.
  */
+/**
+ * Fixed guidance for the ancestor rule. It names the two directories a person can actually act on
+ * and stops there. It does NOT say to loosen anything, and it does NOT suggest a recursive chmod:
+ * making a whole home tree private to silence a message is worse than the message.
+ */
+export const CONSENT_PARENT_CHAIN_GUIDANCE =
+  "Check the directories above .secretloop with `ls -ld`, starting at your home directory. " +
+  "SecretLoop works only when every directory on that path is owned by you or by root and is not " +
+  "writable by anyone else, because an account that can write one of them could replace the store. " +
+  "A home directory that is group- or world-writable is the usual cause. Fix only the directory " +
+  "that is too open, ask an administrator if it is not yours, and do not make a whole tree private " +
+  "to clear the message.";
+
 export const CONSENT_MACOS_ACL_GUIDANCE =
   "Inspect .secretloop in your home directory yourself with `ls -lde`. SecretLoop works only with " +
   "a store that has no extended access-control entries, including ones inherited from a parent " +
@@ -337,6 +362,7 @@ function assertStoreScope(scope: StoreScope): void {
     // Every consent operation routes through here, so hooking the macOS check in at this one
     // point covers reading, listing, writing, approving, claiming and deleting together, the
     // same way the Windows branch below does.
+    assertSafeAncestors();
     assertNoExtendedAcl(scope);
     return;
   }
@@ -364,6 +390,54 @@ function absent(p: string): boolean {
 }
 
 /** One directory against the policy above. */
+/**
+ * POSIX only. The path above the store, checked before the store itself is trusted.
+ *
+ * On macOS each component also has to answer the extended-ACL question, because the mode says
+ * nothing about it there. That is a subprocess per component, so the work is bounded twice: by
+ * the component cap inside `checkParentChain`, and by counting the inspections this one call has
+ * already spent. Nothing is cached between calls -- a cached "safe" answer would keep asserting a
+ * property of a directory that may since have changed, which is exactly the guarantee this check
+ * exists to provide.
+ */
+function assertSafeAncestors(): void {
+  if (process.platform === "win32" || typeof process.geteuid !== "function") return;
+  let spent = 0;
+  const hook =
+    process.platform === "darwin"
+      ? (component: string): { ok: true } | { ok: false; problem: ConsentStoreProblem } => {
+          if (++spent > MAX_ANCESTOR_INSPECTIONS) return { ok: false, problem: "parent-unreadable" };
+          // The filesystem root has no parent to hand the child as a working directory, and
+          // `path.basename("/")` is the empty string, which is not an inspectable name. Naming it
+          // "." from inside itself inspects the same object and prints a name the validator can
+          // match exactly. Verified: `ls -lden -- .` with cwd "/" prints "." and nothing else.
+          const isRoot = path.dirname(component) === component;
+          const verdict = checkMacAcl([
+            isRoot
+              ? { parent: component, basename: "." }
+              : { parent: path.dirname(component), basename: path.basename(component) },
+          ]);
+          if (verdict.ok) return { ok: true };
+          // An ACE on an ANCESTOR is an unsafe parent, not the store's own `extended-acl`: the
+          // object at fault is not the store and the guidance differs. But a tool that could not
+          // run, or an answer that did not validate, keeps its own code -- telling someone their
+          // filesystem is unsafe when the real problem is a broken inspection would be wrong.
+          return verdict.problem === "extended-acl"
+            ? { ok: false, problem: "unsafe-parent-posix" }
+            : { ok: false, problem: verdict.problem };
+        }
+      : undefined;
+  const verdict = checkParentChain(consentDir(), process.geteuid(), hook);
+  if (!verdict.ok) throw new ConsentStoreError(verdict.problem);
+}
+
+/**
+ * The most ancestor inspections one consent operation will pay for on macOS. The root component
+ * has no parent to pass as a working directory, and a path deep enough to exceed this is refused
+ * rather than walked.
+ */
+const MAX_ANCESTOR_INSPECTIONS = 40;
+
 /**
  * macOS only, and a no-op everywhere else.
  *
@@ -489,6 +563,10 @@ function ensureDir(): void {
     ensureDirWindows();
     return;
   }
+  // Before `mkdir`, not after: a store created under a parent another account can write is a
+  // store that could already have been replaced by the time it is inspected, and on macOS it
+  // would have inherited that parent's ACEs while being created.
+  assertSafeAncestors();
   const madeStore = !existsSync(consentDir());
   const madePending = !existsSync(pendingDir());
   try {

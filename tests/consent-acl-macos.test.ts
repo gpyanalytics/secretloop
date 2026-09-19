@@ -134,7 +134,12 @@ test("a store created under a parent with inheritance ACEs is refused BEFORE any
     const store = path.join(home, ".secretloop");
     consent.setConsentRootForTests(store);
 
-    assert.strictEqual(refusal(() => consent.writeRecord(record(ID_OK))), "extended-acl");
+    // Since the ancestor rule landed this is caught EARLIER and for a better reason: the parent
+    // itself is an unsafe ancestor, so the refusal happens before the store is created rather
+    // than after it has inherited. Before the ancestor rule this same case returned
+    // `extended-acl`, detected on the store the product had already made. Both refuse and both
+    // write nothing; the new code names the object actually at fault.
+    assert.strictEqual(refusal(() => consent.writeRecord(record(ID_OK))), "unsafe-parent-posix");
 
     // The point of checking at creation rather than after the write: no record content ever
     // reached the disk, so there is nothing whose exposure a later check would have to undo.

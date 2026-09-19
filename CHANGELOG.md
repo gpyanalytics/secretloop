@@ -80,6 +80,35 @@
   with inheritance entries is checked while it still holds nothing but empty directories, and a
   refusal removes only what that call created. A check that ran after the record was written could
   refuse the record but could not unwrite it.
+- **The path above the store is now checked too, on macOS and Linux.** Every earlier check looked
+  at the store, its `pending` directory and the records inside; none looked at the directories
+  ABOVE them. Measured: an account that can write the store's parent renamed the whole store away
+  and created its own in its place. Against that substituted store SecretLoop refused on ownership
+  and transmitted nothing, so in the cases measured the effect was denial of service rather than
+  disclosure — but on macOS the same position is worse, because an inheritance entry on the
+  parent is inherited by a store and a record your own process creates. SecretLoop now requires
+  every directory from the store up to the filesystem root to be a real directory owned by you or
+  by root and not writable by anyone else, and on macOS to carry no extended entry. The check runs
+  before the store is created, not after.
+- **Configurations this now refuses, which used to work.** A **group-writable home directory** is
+  refused, even when the group contains only you: there is no portable way to ask who else is in a
+  group, so every group-write bit is treated as a grant. A home under a directory owned by another
+  ordinary account is refused. A world-writable directory on the path is refused unless it also has
+  the sticky bit and is owned by you or root — `/tmp` keeps working, a world-writable directory
+  without sticky does not. A path more than 64 directories deep is refused rather than walked.
+- **Why sticky is allowed at all, and how far it goes.** Measured as a second ordinary account in a
+  sticky, root-owned, world-writable directory: deleting and renaming your store are **denied**,
+  which is what earns the exception. But **creating a name that does not exist yet is allowed**, so
+  your store can be pre-planted before you ever run SecretLoop. What answers that is a different
+  check: a pre-planted store belongs to whoever made it, and SecretLoop refuses a store it does not
+  own. The residual is a denial of service the path rule does not close, and if the sticky
+  directory is owned by the attacker rather than root it gives no protection at all — which is
+  why it is accepted only under a trusted owner.
+- **What the path check does not establish.** A sequence of inspections at different instants is
+  not a snapshot of the filesystem: a directory re-permissioned after it was looked at is not seen,
+  the check is not atomic with the store checks that follow it or with any later open, and it
+  revokes nothing that another process already has open. It describes the path now, and says
+  nothing about who could reach the store in the past.
 - **What the macOS check does not establish.** It runs on a path, not on a descriptor: `/bin/ls`
   has no file-descriptor form, so the inspection and the later open are two lookups of the same
   name and the lifecycle is no more atomic than before. If the tool is missing, times out, or

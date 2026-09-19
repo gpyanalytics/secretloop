@@ -62,10 +62,18 @@ refused, and an unsafe record is refused rather than repaired. What that does
 not give you: judging and reading through one open file is not the same as
 making the whole lifecycle atomic, and not following the record's own name says
 nothing about the directories above it. It inspects the
-store's own two directories by mode bits and ownership, not the path above
-them, so any account that can write your home directory can still rename the
-store away and put its own there; and it closes no window against a process
-already running as you.
+store's own two directories by mode bits and ownership, **and now the whole path
+above them as well**: every directory from the store to the filesystem root must
+be a real directory owned by you or by root and not writable by anyone else, and
+on macOS must carry no extended access-control entry. A mount boundary is not
+treated as a stopping point, because whoever can write the directory a filesystem
+is mounted on can arrange what appears there. A world-writable directory on the
+path is accepted only when it is sticky AND owned by you or root; measured, a
+second ordinary account cannot then rename or delete your store, though it can
+still create the name before you do, which the ownership rule answers separately.
+This refuses some working setups, and the ones it refuses are listed in
+`docs/mcp.md`. It closes no window against a process already running as you, and
+a directory re-permissioned after it was inspected is not seen.
 
 **Access-control lists differ by platform, and the difference is measured.** On
 **Linux** the POSIX ACL mask and the group bits of the mode move together, so
