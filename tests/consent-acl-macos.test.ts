@@ -134,7 +134,12 @@ test("a store created under a parent with inheritance ACEs is refused BEFORE any
     const store = path.join(home, ".secretloop");
     consent.setConsentRootForTests(store);
 
-    assert.strictEqual(refusal(() => consent.writeRecord(record(ID_OK))), "extended-acl");
+    // Since the ancestor rule landed this is caught EARLIER and for a better reason: the parent
+    // itself is an unsafe ancestor, so the refusal happens before the store is created rather
+    // than after it has inherited. Before the ancestor rule this same case returned
+    // `extended-acl`, detected on the store the product had already made. Both refuse and both
+    // write nothing; the new code names the object actually at fault.
+    assert.strictEqual(refusal(() => consent.writeRecord(record(ID_OK))), "unsafe-parent-posix");
 
     // The point of checking at creation rather than after the write: no record content ever
     // reached the disk, so there is nothing whose exposure a later check would have to undo.
@@ -254,10 +259,22 @@ test("the suffix character is never consulted", () => {
     const before = execFileSync("/bin/ls", ["-lden", "--", path.basename(p)], { cwd: f.pending, encoding: "utf8" });
     addAce(p);
     const after = execFileSync("/bin/ls", ["-lden", "--", path.basename(p)], { cwd: f.pending, encoding: "utf8" });
-    assert.strictEqual(before.slice(0, 11), after.slice(0, 11),
-      "the suffix did not change when the ACL appeared, which is exactly why it is not used");
-    assert.deepStrictEqual(macacl.parseLsAclOutput(before, path.basename(p)), { ok: true, aceCount: 0 });
-    assert.deepStrictEqual(macacl.parseLsAclOutput(after, path.basename(p)), { ok: true, aceCount: 1 });
+    // The suffix is MACHINE-DEPENDENT, which is the whole reason it cannot be relied on. On a
+    // developer machine carrying the unremovable `com.apple.provenance` attribute it stays "@"
+    // when an ACL appears, so a suffix-only check reports "no ACL" for a file that has one. On a
+    // clean CI runner with no such attribute it changes to "+". An earlier version of this case
+    // asserted that it does NOT change, which was true of one machine and failed on the other:
+    // the assertion was about the environment, not about the product. What the product must do is
+    // the same either way, so that is what is asserted now, and the suffix is only reported.
+    const suffixBefore = before.slice(10, 11);
+    const suffixAfter = after.slice(10, 11);
+    assert.deepStrictEqual(macacl.parseLsAclOutput(before, path.basename(p)), { ok: true, aceCount: 0, allowCount: 0 },
+      `no ACE must read as 0 whatever the suffix says (it said ${JSON.stringify(suffixBefore)})`);
+    assert.deepStrictEqual(macacl.parseLsAclOutput(after, path.basename(p)), { ok: true, aceCount: 1, allowCount: 1 },
+      `one ACE must read as 1 whatever the suffix says (it said ${JSON.stringify(suffixAfter)})`);
+    // And pin the reason the suffix is unusable: it is not a function of the ACL alone.
+    assert.ok([" ", "+", "@", "."].includes(suffixAfter),
+      `unexpected suffix character ${JSON.stringify(suffixAfter)}`);
   } finally {
     done(f);
   }
@@ -283,9 +300,9 @@ test("SIMULATED tool output: every ambiguity refuses and none reads as 'no ACL'"
     assert.deepStrictEqual(macacl.parseLsAclOutput(out, ".secretloop"), { ok: false },
       `${label} must refuse, never count as no ACL`);
   }
-  assert.deepStrictEqual(macacl.parseLsAclOutput(head + "\n", ".secretloop"), { ok: true, aceCount: 0 });
+  assert.deepStrictEqual(macacl.parseLsAclOutput(head + "\n", ".secretloop"), { ok: true, aceCount: 0, allowCount: 0 });
   assert.deepStrictEqual(macacl.parseLsAclOutput(head + "\n 0: 1234 allow read\n", ".secretloop"),
-    { ok: true, aceCount: 1 });
+    { ok: true, aceCount: 1, allowCount: 1 });
 });
 
 test("SIMULATED helper failures: unavailable, failed and timed out each refuse", () => {
