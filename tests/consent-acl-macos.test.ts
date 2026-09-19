@@ -259,10 +259,22 @@ test("the suffix character is never consulted", () => {
     const before = execFileSync("/bin/ls", ["-lden", "--", path.basename(p)], { cwd: f.pending, encoding: "utf8" });
     addAce(p);
     const after = execFileSync("/bin/ls", ["-lden", "--", path.basename(p)], { cwd: f.pending, encoding: "utf8" });
-    assert.strictEqual(before.slice(0, 11), after.slice(0, 11),
-      "the suffix did not change when the ACL appeared, which is exactly why it is not used");
-    assert.deepStrictEqual(macacl.parseLsAclOutput(before, path.basename(p)), { ok: true, aceCount: 0 });
-    assert.deepStrictEqual(macacl.parseLsAclOutput(after, path.basename(p)), { ok: true, aceCount: 1 });
+    // The suffix is MACHINE-DEPENDENT, which is the whole reason it cannot be relied on. On a
+    // developer machine carrying the unremovable `com.apple.provenance` attribute it stays "@"
+    // when an ACL appears, so a suffix-only check reports "no ACL" for a file that has one. On a
+    // clean CI runner with no such attribute it changes to "+". An earlier version of this case
+    // asserted that it does NOT change, which was true of one machine and failed on the other:
+    // the assertion was about the environment, not about the product. What the product must do is
+    // the same either way, so that is what is asserted now, and the suffix is only reported.
+    const suffixBefore = before.slice(10, 11);
+    const suffixAfter = after.slice(10, 11);
+    assert.deepStrictEqual(macacl.parseLsAclOutput(before, path.basename(p)), { ok: true, aceCount: 0 },
+      `no ACE must read as 0 whatever the suffix says (it said ${JSON.stringify(suffixBefore)})`);
+    assert.deepStrictEqual(macacl.parseLsAclOutput(after, path.basename(p)), { ok: true, aceCount: 1 },
+      `one ACE must read as 1 whatever the suffix says (it said ${JSON.stringify(suffixAfter)})`);
+    // And pin the reason the suffix is unusable: it is not a function of the ACL alone.
+    assert.ok([" ", "+", "@", "."].includes(suffixAfter),
+      `unexpected suffix character ${JSON.stringify(suffixAfter)}`);
   } finally {
     done(f);
   }

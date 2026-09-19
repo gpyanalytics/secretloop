@@ -18,23 +18,30 @@ import {
  * second account exists — never on a developer machine, where none is created.
  *
  * The product always runs as the ordinary owner. Every attack runs as the second account through
- * `su`, and its real exit status is what is recorded; a printed ACL is never a substitute for an
- * operation. Administrative setup happened in a separate CI step, not here.
+ * passwordless `sudo -u`, and its real exit status is what is recorded; a printed ACL is never a
+ * substitute for an operation. Administrative setup happened in a separate CI step, not here.
  */
 
 const ATTACKER = process.env.SECRETLOOP_MAC_ATTACKER;
 const MAC = process.platform === "darwin";
 
+/**
+ * Run one command as the second account.
+ *
+ * `sudo -n -u`, not `su`. On a GitHub-hosted macOS runner `su` answers "Sorry" even for an
+ * account that exists, because it wants a password the job does not have; the runner user does
+ * have passwordless sudo. That was an ENVIRONMENT failure, not a product one, and it is worth
+ * recording that the identity assertion below is what caught it: without that assertion every
+ * "denied" here would have been a command that never ran.
+ *
+ * The argv is passed as an array with no shell anywhere, so a path never has to be quoted and
+ * nothing this file did not compose is ever interpreted.
+ */
 function asAttacker(argv: string[]): { ok: boolean; out: string } {
-  // `su -m <user> -c` runs the command as that account. The command is a fixed string built from
-  // argv elements that this file composes; no external text is interpolated into it.
-  const r = spawnSync("/usr/bin/su", ["-m", ATTACKER as string, "-c", argv.join(" ")], {
+  const r = spawnSync("/usr/bin/sudo", ["-n", "-u", ATTACKER as string, "--", ...argv], {
     encoding: "utf8", timeout: 30_000,
   });
   return { ok: r.status === 0, out: (r.stdout || "") + (r.stderr || "") };
-}
-function q(p: string): string {
-  return "'" + p.replace(/'/g, "'\\''") + "'";
 }
 function refusal(fn: () => unknown): string {
   try {
@@ -84,7 +91,7 @@ test("CONTROL: a deliberately readable record IS readable by the second account"
     mkdirSync(open, { mode: 0o755 });
     const f = path.join(open, "readable.json");
     writeFileSync(f, "{}\n", { mode: 0o644 });
-    const r = asAttacker(["/bin/cat", q(f)]);
+    const r = asAttacker(["/bin/cat", f]);
     assert.ok(r.ok, "the control must succeed, or nothing here is evidence: " + r.out);
   } finally {
     rmSync(base, { recursive: true, force: true });
@@ -102,10 +109,10 @@ test("a private parent denies the second account create, rename and delete", () 
     writeFileSync(path.join(store, "pending", `${ID}.json`),
       JSON.stringify(record(ID), null, 2) + "\n", { mode: 0o600 });
     for (const [what, argv] of [
-      ["create in the store", ["/usr/bin/touch", q(path.join(store, "pending", "planted.json"))]],
-      ["rename the store", ["/bin/mv", q(store), q(path.join(home, "stolen"))]],
-      ["delete the store", ["/bin/rm", "-rf", q(store)]],
-      ["read the record", ["/bin/cat", q(path.join(store, "pending", `${ID}.json`))]],
+      ["create in the store", ["/usr/bin/touch", path.join(store, "pending", "planted.json")]],
+      ["rename the store", ["/bin/mv", store, path.join(home, "stolen")]],
+      ["delete the store", ["/bin/rm", "-rf", store]],
+      ["read the record", ["/bin/cat", path.join(store, "pending", `${ID}.json`)]],
     ] as Array<[string, string[]]>) {
       assert.ok(!asAttacker(argv).ok, `${what} must be denied by a 0700 parent`);
     }
@@ -125,9 +132,9 @@ test("PERMISSIVE CONTROL: a writable parent lets the second account replace the 
     chmodSync(home, 0o777);
     const store = path.join(home, ".secretloop");
     mkdirSync(path.join(store, "pending"), { recursive: true, mode: 0o700 });
-    assert.ok(asAttacker(["/bin/mv", q(store), q(path.join(home, "stolen"))]).ok,
+    assert.ok(asAttacker(["/bin/mv", store, path.join(home, "stolen")]).ok,
       "a world-writable parent must let the store be renamed away");
-    assert.ok(asAttacker(["/bin/mkdir", "-p", q(path.join(store, "pending"))]).ok,
+    assert.ok(asAttacker(["/bin/mkdir", "-p", path.join(store, "pending")]).ok,
       "and must let a replacement be created");
   } finally {
     rmSync(base, { recursive: true, force: true });
@@ -167,7 +174,7 @@ test("BASELINE EXPOSURE: an inherited ACE really does let the second account rea
     mkdirSync(store, { recursive: true, mode: 0o700 });
     const f = path.join(store, `${ID}.json`);
     writeFileSync(f, JSON.stringify(record(ID), null, 2) + "\n", { mode: 0o600 });
-    const r = asAttacker(["/bin/cat", q(f)]);
+    const r = asAttacker(["/bin/cat", f]);
     assert.ok(r.ok,
       "an inherited ACE must actually grant the read, or the macOS refusal protects nothing: " + r.out);
   } finally {
@@ -257,12 +264,12 @@ test("sticky: accepted with a trusted owner, and the attacker still cannot take 
     consent.setConsentRootForTests(store);
     assert.deepStrictEqual(consent.listRecords(), [], "sticky + trusted owner is accepted");
     // and sticky must actually stop the attacker taking it
-    assert.ok(!asAttacker(["/bin/mv", q(store), q(path.join(home, "stolen"))]).ok,
+    assert.ok(!asAttacker(["/bin/mv", store, path.join(home, "stolen")]).ok,
       "sticky must deny renaming an entry the attacker does not own");
-    assert.ok(!asAttacker(["/bin/rm", "-rf", q(store)]).ok,
+    assert.ok(!asAttacker(["/bin/rm", "-rf", store]).ok,
       "and deny deleting it");
     // what sticky does NOT stop: creating a name that is not there yet
-    assert.ok(asAttacker(["/bin/mkdir", q(path.join(home, ".secretloop-other"))]).ok,
+    assert.ok(asAttacker(["/bin/mkdir", path.join(home, ".secretloop-other")]).ok,
       "sticky does not restrict CREATE; the ownership rule is what answers a pre-planted store");
   } finally {
     consent.setConsentRootForTests(undefined);
