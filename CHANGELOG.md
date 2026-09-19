@@ -57,6 +57,36 @@
   bytes back, because approval adds 88 and a request that can be made must be one that can be
   granted. The refusal says the path is too long and says the store is fine, rather than sending
   you to inspect a healthy store.
+- **macOS: an extended access-control list on the store or a record now refuses.** The mode
+  check that settles this on Linux settles nothing on macOS. Measured, in both directions: on
+  Linux the POSIX ACL mask and the group bits of the mode move together, so `0700` really does
+  mean no other account has effective access through a named entry — six different ways of
+  writing such an entry were tried on two filesystems and none granted access while the group and
+  other bits were zero. macOS ACLs are NFSv4-style and have no mask, and nothing about them
+  reaches `st_mode`. Measured with SecretLoop's own writer: under a parent directory carrying
+  inheritance entries, it created a store, a pending directory and a record at modes 0700, 0700
+  and 0600 — and every one of them carried `everyone inherited allow`, the record granting read
+  and write to everyone. Node reported only the modes. On macOS SecretLoop now inspects the store,
+  the pending directory and each record with the built-in `/bin/ls`, and refuses any that carries
+  an extended entry. **Nothing is repaired**: an entry removed now says nothing about who read the
+  store before, cannot establish who owns it, and cannot revoke a descriptor another process
+  already holds.
+- **The macOS refusal is a support restriction, not a verdict on your ACL.** SecretLoop refuses
+  every extended entry because it does not evaluate them, so it also refuses entries that grant
+  nobody anything — a `deny`-only entry, an entry naming only you, an inherit-only entry, and
+  entries placed by backup software or by an employer's device management. Those stores are
+  refused although they may be perfectly private. `docs/mcp.md` lists them and says what to do.
+- **The inspection happens before anything is written, not after.** A store created under a parent
+  with inheritance entries is checked while it still holds nothing but empty directories, and a
+  refusal removes only what that call created. A check that ran after the record was written could
+  refuse the record but could not unwrite it.
+- **What the macOS check does not establish.** It runs on a path, not on a descriptor: `/bin/ls`
+  has no file-descriptor form, so the inspection and the later open are two lookups of the same
+  name and the lifecycle is no more atomic than before. If the tool is missing, times out, or
+  returns anything that does not fully validate, SecretLoop refuses rather than assuming there is
+  no entry. A record whose name could split the tool's output is refused rather than inspected.
+  And on a filesystem that cannot report access-control lists at all, "no entries" would mean the
+  filesystem declined to answer — that case is **not yet tested**.
 - **What the record check does not establish.** Judging and reading through one descriptor is not
   the same as making the lifecycle atomic: a record can still be replaced between one operation
   and the next, and the claim that guards a verification is still the atomic rename, not this
