@@ -18,6 +18,7 @@ import {
 import { createHash, randomBytes } from "crypto";
 import { homedir } from "os";
 import * as path from "path";
+import { checkMacAcl, type MacAclTarget } from "./consent-acl-macos";
 import {
   CheckTarget,
   checkWindowsStore,
@@ -109,6 +110,11 @@ export type ConsentStoreProblem =
   | "not-a-regular-file"
   | "oversized-record"
   | "record-too-large"
+  // macOS only. The mode says nothing about extended ACL entries there, so these name the
+  // ways that inspection can go. See src/consent-acl-macos.ts.
+  | "extended-acl"
+  | "acl-tool-unavailable"
+  | "acl-unreadable"
   | "record-permissive"
   | "symlink"
   | "foreign-owner"
@@ -172,6 +178,14 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       // The write side of the same bound, and a different situation: nothing untrustworthy was
       // found — SecretLoop declined to create a record it could never read back.
       return `this finding's workspace path or file name is so long that its consent record would be larger than SecretLoop reads back, so no record was written and this verification cannot be requested.`;
+    case "extended-acl":
+      // Deliberately does not say the ACL is dangerous: it may grant nobody anything. It says
+      // SecretLoop will not work with a store it cannot reason about, which is what is true.
+      return `${where}, its pending directory, or a record in it carries an extended access-control list, which SecretLoop cannot evaluate, so consent records are not trusted; it refuses rather than changing it.`;
+    case "acl-tool-unavailable":
+      return `SecretLoop could not run the built-in macOS tool it uses to inspect extended access-control lists, so consent records cannot be trusted.`;
+    case "acl-unreadable":
+      return `SecretLoop could not obtain a complete, well-formed answer about the extended access-control lists on ${where}, so consent records cannot be trusted.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -217,12 +231,25 @@ export const CONSENT_STORE_GUIDANCE_WINDOWS =
 
 /** The guidance for the platform this process is running on. */
 export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
+  if (problem === "extended-acl" || problem === "acl-tool-unavailable" || problem === "acl-unreadable")
+    return CONSENT_MACOS_ACL_GUIDANCE;
   // "record-too-large" is the one refusal that is not about the store, so it must not send the
   // user to inspect a store that is perfectly healthy. The default stays the store guidance,
   // including when no problem is given.
   if (problem === "record-too-large") return CONSENT_RECORD_TOO_LARGE_GUIDANCE;
   return process.platform === "win32" ? CONSENT_STORE_GUIDANCE_WINDOWS : CONSENT_STORE_GUIDANCE;
 }
+
+/**
+ * Fixed guidance for the macOS ACL refusals. It deliberately does NOT tell anyone to strip ACLs
+ * or to re-permission a tree: removing an entry now says nothing about who read the store before,
+ * cannot establish ownership, and cannot revoke a descriptor another process already holds.
+ */
+export const CONSENT_MACOS_ACL_GUIDANCE =
+  "Inspect .secretloop in your home directory yourself with `ls -lde`. SecretLoop works only with " +
+  "a store that has no extended access-control entries, including ones inherited from a parent " +
+  "directory. Move a store you did not configure aside rather than editing its permissions, then " +
+  "ask the client to request the verification again.";
 
 /** Fixed guidance for the one refusal that is about the finding's path, not about the store. */
 export const CONSENT_RECORD_TOO_LARGE_GUIDANCE =
@@ -307,6 +334,10 @@ function assertStoreScope(scope: StoreScope): void {
   if (process.platform !== "win32") {
     assertPrivateDir(consentDir());
     if (scope.includePending) assertPrivateDir(pendingDir());
+    // Every consent operation routes through here, so hooking the macOS check in at this one
+    // point covers reading, listing, writing, approving, claiming and deleting together, the
+    // same way the Windows branch below does.
+    assertNoExtendedAcl(scope);
     return;
   }
   const userSid = currentUserSid();
@@ -333,6 +364,44 @@ function absent(p: string): boolean {
 }
 
 /** One directory against the policy above. */
+/**
+ * macOS only, and a no-op everywhere else.
+ *
+ * Each object is inspected by handing its PARENT to the child as a working directory and its
+ * BASENAME as the only operand, so the uncontrolled part of the path is never printed and cannot
+ * split the output. A record whose name could break that is refused rather than inspected.
+ */
+function assertNoExtendedAcl(scope: StoreScope): void {
+  if (process.platform !== "darwin") return;
+  const targets: MacAclTarget[] = [
+    { parent: path.dirname(consentDir()), basename: path.basename(consentDir()) },
+  ];
+  if (scope.includePending) {
+    targets.push({ parent: consentDir(), basename: path.basename(pendingDir()) });
+  }
+  for (const record of scope.records) {
+    // lstat, not existsSync: a record that is not there yet has no ACL to read, and the directory
+    // check above is what keeps the one about to be created clean, because an ACE can only be
+    // inherited from a parent that has one.
+    let st;
+    try {
+      st = lstatSync(record);
+    } catch {
+      continue; // absent, or a dangling link: `absent()` and the reader already answer for it
+    }
+    // A symbolic link is refused by its own rule -- `assertPrivateDir` for a directory, O_NOFOLLOW
+    // for a record -- and that is the more useful reason to give. It also cannot be inspected
+    // safely: `ls -lde` appends "-> target" to the header, so the name it prints is not the
+    // basename and the validator would reject the output. Let the symlink rule have it.
+    if (st.isSymbolicLink()) continue;
+    targets.push({ parent: path.dirname(record), basename: path.basename(record) });
+  }
+  const verdict = checkMacAcl(targets);
+  // MacAclProblem is a subset of ConsentStoreProblem by construction, so no translation table is
+  // needed here -- unlike Windows, whose codes are its own.
+  if (!verdict.ok) throw new ConsentStoreError(verdict.problem);
+}
+
 function assertPrivateDir(dir: string): void {
   let st;
   try {
@@ -420,12 +489,36 @@ function ensureDir(): void {
     ensureDirWindows();
     return;
   }
+  const madeStore = !existsSync(consentDir());
+  const madePending = !existsSync(pendingDir());
   try {
     mkdirSync(pendingDir(), { recursive: true, mode: 0o700 });
   } catch {
     throw new ConsentStoreError("inaccessible");
   }
-  assertPrivateStore();
+  // A directory created under a parent carrying inheritance ACEs carries them too, and on macOS
+  // the mode does not show it. Inspect HERE, while the store holds nothing but empty directories,
+  // rather than after a record has been written into it: a check that runs after the write does
+  // not undo the write. Undo only what this call created, so a refusal leaves no half-made store.
+  try {
+    assertPrivateStore();
+  } catch (err) {
+    if (madePending) {
+      try {
+        rmdirSync(pendingDir());
+      } catch {
+        /* not empty, or gone: left exactly as found */
+      }
+    }
+    if (madeStore) {
+      try {
+        rmdirSync(consentDir());
+      } catch {
+        /* not empty, or gone: left exactly as found */
+      }
+    }
+    throw err;
+  }
 }
 
 /**
