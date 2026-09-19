@@ -23,6 +23,7 @@
  */
 
 import { execFileSync } from "child_process";
+import { BudgetExceededError, remainingBytes, remainingMs, spendHelperBytes, spendHelperCall } from "./consent-budget";
 
 /**
  *   extended-acl         the object carries at least one extended ACL entry
@@ -83,7 +84,7 @@ export function isInspectableBasename(basename: string): boolean {
 export function parseLsAclOutput(
   stdout: string,
   expectedBasename: string
-): { ok: true; aceCount: number } | { ok: false } {
+): { ok: true; aceCount: number; allowCount: number } | { ok: false } {
   if (typeof stdout !== "string") return { ok: false };
   if (Buffer.byteLength(stdout, "utf8") > MAX_OUTPUT_BYTES) return { ok: false };
 
@@ -100,10 +101,14 @@ export function parseLsAclOutput(
 
   const aces = lines.slice(1);
   if (aces.length > MAX_ACE_LINES) return { ok: false };
+  let allowCount = 0;
   for (const line of aces) {
     if (!ACE_LINE.test(line)) return { ok: false };
+    // One token of the grammar that is already validated strictly, and no more: an entry is
+    // either an `allow` or a `deny`. This is NOT an evaluation of rights or principals.
+    if (/ allow /.test(line)) allowCount++;
   }
-  return { ok: true, aceCount: aces.length };
+  return { ok: true, aceCount: aces.length, allowCount };
 }
 
 /** Swappable for tests only, so bounded-failure behaviour can be driven without a real tool. */
@@ -115,23 +120,38 @@ export function setLsRunnerForTests(fn: LsRunner | undefined): void {
 }
 
 function runLs(target: MacAclTarget): ReturnType<LsRunner> {
+  // Charged BEFORE the child starts, so an exhausted allowance stops the work rather than
+  // reporting it afterwards. Throws out of here; the public entry point translates it.
+  spendHelperCall();
   if (runner) return runner(target);
   let stdout: string;
   try {
     stdout = execFileSync(LS, ["-lden", "--", target.basename], {
       cwd: target.parent,
       encoding: "utf8",
-      timeout: TIMEOUT_MS,
+      // The child gets what is LEFT of the operation, not a fresh full timeout each time.
+      // Otherwise 512 children at five seconds each is not a bounded operation.
+      timeout: remainingMs(TIMEOUT_MS),
       // The child is killed outright rather than asked politely, so a wedged inspection cannot
       // outlive the call.
       killSignal: "SIGKILL",
-      maxBuffer: MAX_OUTPUT_BYTES,
+      // The smaller of this call's cap and what is left of the whole operation's output
+      // allowance. A fixed 64 KiB would let a child buffer far more than the aggregate still
+      // permits before anything could refuse it -- the cap has to bind BEFORE the data is
+      // accepted, not after it has been read.
+      maxBuffer: Math.min(MAX_OUTPUT_BYTES, remainingBytes(MAX_OUTPUT_BYTES)),
       // A fixed, minimal environment: the C locale so the text is the text that was measured,
       // and a PATH that is never consulted anyway because the executable is absolute.
       env: { LC_ALL: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (err) {
+    // The allowance is read twice around this call -- once when charging the invocation, and once
+    // by `remainingMs` INSIDE this try, as an argument. If it runs out at the second read, the
+    // error is raised in here, and a catch-all would relabel a TIME problem as an unreadable ACL
+    // and hand the user ACL guidance for it. Measured with a stepped clock: expiring at that exact
+    // read returned `acl-unreadable` instead of refusing on the budget. It must pass through.
+    if (err instanceof BudgetExceededError) throw err;
     const e = err as NodeJS.ErrnoException & { status?: number | null };
     // The tool itself being absent or unusable is a different answer from the tool running and
     // failing, because the first is an environment SecretLoop does not support and the second
@@ -141,24 +161,55 @@ function runLs(target: MacAclTarget): ReturnType<LsRunner> {
     }
     return { ok: false, problem: "acl-unreadable" };
   }
+  spendHelperBytes(Buffer.byteLength(stdout, "utf8"));
   return { ok: true, stdout };
 }
 
+/**
+ * How strict to be about entries that are present.
+ *
+ *   "any"          no extended entry at all. For the STORE and its records, which SecretLoop
+ *                  creates itself: a pristine object is achievable there, so it is required.
+ *   "allow-only"   entries are tolerated as long as none of them is an `allow`. For ANCESTORS,
+ *                  which are pre-existing system state nobody chose.
+ *
+ * WHY "allow-only" EXISTS, and it is not a convenience. Measured: every stock macOS home
+ * directory carries `0: group:everyone deny delete`, which Apple puts there by default. It grants
+ * nobody anything -- a deny entry can only remove access, never add it. Requiring ancestors to
+ * have no entry at all therefore refuses EVERY unmodified macOS installation, which a
+ * GitHub-hosted runner demonstrated by refusing its own `/Users/runner` during the packaging
+ * smoke. Telling users to delete an entry Apple ships would be worse advice than the message.
+ *
+ * RATIFIED. D-ACL-2 approved "refuse any extended ACE" for the STORE and its records, and that is
+ * unchanged. This conservative ancestor rule is now approved separately and on its own terms:
+ * refuse any `allow` entry on an ancestor, including one that names only the owner; do not refuse
+ * a valid deny-only entry merely because it exists; and still refuse anything malformed,
+ * unsupported or ambiguous.
+ *
+ * Refusing an owner-only `allow` is a COMPATIBILITY RESTRICTION, not a finding. It is not evidence
+ * that the entry grants an attacker anything — it grants only the owner. It is refused because
+ * deciding otherwise would mean resolving a principal UUID to a uid and evaluating rights, which
+ * is far more interpretation of this output than anything else here does, and getting that wrong
+ * fails open. The cost is documented in docs/mcp.md rather than hidden.
+ */
+export type AceStrictness = "any" | "allow-only";
+
 /** One object. Any doubt refuses. */
-export function inspectMacAcl(target: MacAclTarget): MacAclVerdict {
+export function inspectMacAcl(target: MacAclTarget, strictness: AceStrictness = "any"): MacAclVerdict {
   if (!isInspectableBasename(target.basename)) return { ok: false, problem: "acl-unreadable" };
   const run = runLs(target);
   if (!run.ok) return { ok: false, problem: run.problem };
   const parsed = parseLsAclOutput(run.stdout, target.basename);
   if (!parsed.ok) return { ok: false, problem: "acl-unreadable" };
-  if (parsed.aceCount > 0) return { ok: false, problem: "extended-acl" };
+  const offending = strictness === "any" ? parsed.aceCount : parsed.allowCount;
+  if (offending > 0) return { ok: false, problem: "extended-acl" };
   return { ok: true };
 }
 
 /** Every target, stopping at the first refusal. */
-export function checkMacAcl(targets: MacAclTarget[]): MacAclVerdict {
+export function checkMacAcl(targets: MacAclTarget[], strictness: AceStrictness = "any"): MacAclVerdict {
   for (const target of targets) {
-    const verdict = inspectMacAcl(target);
+    const verdict = inspectMacAcl(target, strictness);
     if (!verdict.ok) return verdict;
   }
   return { ok: true };

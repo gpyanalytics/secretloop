@@ -200,10 +200,67 @@ that is too open is set to `0700` and re-checked; one owned by another account
 is never changed and is refused; a link is never followed. When the check
 fails, `secretloop_verify` answers with an error in fixed words (no path,
 record, hash or OS message) and transmits nothing, and `secretloop approve`
-refuses with the same words and approves nothing. The check covers the store's
-two directories, by mode bits and ownership, and not the path above them, so an
-account that can write your home directory can still replace the store; nor does
-it close a window against a process already running as you.
+refuses with the same words and approves nothing. The check covers the store's two directories by mode bits and ownership, **and
+the whole path above them**. Every directory from `~/.secretloop` up to the
+filesystem root must be a real directory, owned by you or by root, and not
+writable by anyone else; on macOS it must also carry no extended access-control
+entry. The walk does not stop at a mount boundary. It does not close a window
+against a process already running as you, and a directory re-permissioned after
+it was inspected is not seen.
+
+**Setups this refuses that used to work.** A group-writable home directory, even
+if the group contains only you — there is no portable way to ask who else
+belongs to a group, so every group-write bit counts as a grant. A home under a
+directory owned by another ordinary account. A world-writable directory anywhere
+on the path, unless it is also sticky and owned by you or root, which is why
+`/tmp` still works. A path that needs too many directories inspected: 64 in the walk
+itself, and on macOS 40, because each directory there also costs one `ls`. These count
+*inspected directories*, not levels — when any part of the path is a symbolic link both
+the literal and the resolved path are inspected, so the same budget covers about half as
+many levels. Measured on two macOS paths: a home directory `/Users/<you>` had no symbolic
+link on it and needed 3 inspections, while a temporary path under `/var/folders` had one
+and needed 12. Not every macOS path contains a link.
+
+**macOS also refuses an ancestor carrying an `allow` access-control entry**, including one
+that names only you. That is a support restriction rather than a judgement about your
+entry: refusing it is not evidence it grants anyone else access. SecretLoop does not
+resolve entry principals, so it cannot tell "allows only you" from "allows someone else"
+without interpreting far more of the system's output than it does anywhere. A `deny`-only
+entry is **not** refused merely for existing — a deny can only take access away — and
+anything malformed or unsupported is still refused.
+
+If SecretLoop refuses for this reason, look at the path yourself with `ls -ld`
+starting at your home directory and find the one directory that is too open. Fix
+that directory; ask an administrator if it is not yours. **Do not** make a whole
+tree private, and do not remove access-control entries wholesale to clear the
+message — you would be changing far more than the thing at fault.
+
+**One request, one allowance.** A single consent operation has a budget covering everything
+it does: at most 512 `ls` invocations, 4 MiB of their combined output, 256 entries read from
+`pending`, and 20 seconds in total. Nested work shares one allowance rather than each part
+starting again. If an operation runs out, SecretLoop **refuses and says so** — it never
+returns a shortened list as though it were complete, and never approves a record it did not
+finish checking. The usual cause is a large number of old requests in `pending`; remove the
+ones you no longer want to approve. **Every** entry in `pending` counts toward that limit, not
+only the ones that are valid requests, and when the limit is reached SecretLoop has read one
+entry beyond it — the entry that exceeded it — and nothing further. Nothing is remembered between requests: a cached "this
+was safe" answer would keep asserting something about a directory that may since have
+changed.
+
+The time limit is checked between pieces of work, and a child process is given only the time
+left rather than a fresh allowance. It is **not** a hard wall-clock guarantee: a single
+filesystem call on an unresponsive network mount cannot be interrupted from inside the
+process, and no limit here changes that.
+
+**What it costs.** Each directory on the path is inspected on every consent
+operation, and nothing is cached: a remembered "safe" answer would keep asserting
+something about a directory that may since have changed. On Linux that is a
+`lstat` per directory and is not measurable. On macOS each directory also costs
+one `/bin/ls`, so the cost scales with how deep your home is: a typical
+`/Users/you/.secretloop` inspects **4 directories**, and a consent operation
+measured at **60 ms** with 16 directories and about **170 ms** with 40 on an
+arm64 laptop. The work is bounded twice, by a cap on directories walked and a cap
+on inspections per operation.
 
 On **Linux** the mode is enough on its own to exclude a named-user or
 named-group ACL entry, because the ACL mask and the mode's group bits move

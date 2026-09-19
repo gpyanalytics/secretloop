@@ -80,6 +80,61 @@
   with inheritance entries is checked while it still holds nothing but empty directories, and a
   refusal removes only what that call created. A check that ran after the record was written could
   refuse the record but could not unwrite it.
+- **The path above the store is now checked too, on macOS and Linux.** Every earlier check looked
+  at the store, its `pending` directory and the records inside; none looked at the directories
+  ABOVE them. Measured: an account that can write the store's parent renamed the whole store away
+  and created its own in its place. Against that substituted store SecretLoop refused on ownership
+  and transmitted nothing, so in the cases measured the effect was denial of service rather than
+  disclosure — but on macOS the same position is worse, because an inheritance entry on the
+  parent is inherited by a store and a record your own process creates. SecretLoop now requires
+  every directory from the store up to the filesystem root to be a real directory owned by you or
+  by root and not writable by anyone else, and on macOS to carry no extended entry. The check runs
+  before the store is created, not after.
+- **Configurations this now refuses, which used to work.** A **group-writable home directory** is
+  refused, even when the group contains only you: there is no portable way to ask who else is in a
+  group, so every group-write bit is treated as a grant. A home under a directory owned by another
+  ordinary account is refused. A world-writable directory on the path is refused unless it also has
+  the sticky bit and is owned by you or root — `/tmp` keeps working, a world-writable directory
+  without sticky does not. A path whose inspection would exceed 64
+  directories is refused rather than walked — 64 INSPECTED directories, which is 64 levels when
+  nothing on the path is a symbolic link and about 32 when something is, because both the
+  literal and the resolved path are then inspected.
+- **Why sticky is allowed at all, and how far it goes.** Measured as a second ordinary account in a
+  sticky, root-owned, world-writable directory: deleting and renaming your store are **denied**,
+  which is what earns the exception. But **creating a name that does not exist yet is allowed**, so
+  your store can be pre-planted before you ever run SecretLoop. What answers that is a different
+  check: a pre-planted store belongs to whoever made it, and SecretLoop refuses a store it does not
+  own. The residual is a denial of service the path rule does not close, and if the sticky
+  directory is owned by the attacker rather than root it gives no protection at all — which is
+  why it is accepted only under a trusted owner.
+- **One consent request now has one work allowance.** Each individual check was bounded and the
+  total was not. Measured on macOS, one `ls` per inspected object: writing a record made 43 calls
+  about 10 distinct objects, because the path is re-walked by each stage; approving made 60; and
+  listing grew with the number of pending requests with no ceiling at all. A per-process timeout
+  does not bound that — 512 of them, each taking its own timeout, is not a bounded request. A
+  request now gets at most 512 inspections, 4 MiB of their combined output, 256 entries read from
+  `pending`, and 20 seconds overall, with nested work sharing the one allowance. Reading the
+  `pending` directory stops at the limit rather than loading it and trimming afterwards, so the
+  enumeration really is bounded. On exhaustion SecretLoop refuses: it never returns a shortened
+  list as though it were complete, and never approves a record it did not finish checking.
+  Nothing is cached to make this fit.
+- **The time limit is not a wall-clock guarantee, and is not described as one.** It is checked
+  between pieces of work, and a child process is given only the time remaining rather than a fresh
+  allowance. A single filesystem call on an unresponsive mount cannot be interrupted from inside
+  the process.
+- **macOS refuses an ancestor carrying an `allow` access-control entry, including an owner-only
+  one.** That is a support restriction, not a finding: refusing it is not evidence that the entry
+  grants anyone else access. A `deny`-only entry is not refused merely for existing. The store and
+  its records keep the stricter rule of refusing any entry at all.
+- **Correction to the inspection limit as previously described.** It counts inspected directories,
+  deduplicated across the literal and resolved paths, not levels of nesting; and macOS has a
+  second, lower limit of 40 because each directory there costs a subprocess. The two are ordered,
+  so on macOS the effective ceiling is 40.
+- **What the path check does not establish.** A sequence of inspections at different instants is
+  not a snapshot of the filesystem: a directory re-permissioned after it was looked at is not seen,
+  the check is not atomic with the store checks that follow it or with any later open, and it
+  revokes nothing that another process already has open. It describes the path now, and says
+  nothing about who could reach the store in the past.
 - **What the macOS check does not establish.** It runs on a path, not on a descriptor: `/bin/ls`
   has no file-descriptor form, so the inspection and the later open are two lookups of the same
   name and the lifecycle is no more atomic than before. If the tool is missing, times out, or
