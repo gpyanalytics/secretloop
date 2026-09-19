@@ -544,9 +544,18 @@ jobs:
           "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
           $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
           $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
-          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          # NOT under RUNNER_TEMP on this image. Measured here: C:\a\_temp\acl-lab inherits
+          # "NT AUTHORITY\Authenticated Users:(M)" from C:\a, so EVERY authenticated account can
+          # modify the lab's own parents. The product is right to refuse a store under that, and
+          # it did -- the x64 job never hit it only because its RUNNER_TEMP is on D:\ and that
+          # chain is clean. The lab's location is harness plumbing, not the property under test,
+          # so it moves to a directory whose whole chain to the root is trusted. C:\ itself is
+          # trusted by the rule: its Authenticated Users entry is inherit-only (OICIIO) plus
+          # list-children, and /inheritance:r stops the child from receiving it.
+          $LAB = "C:\sl-acl-lab"
           New-Item -ItemType Directory -Force $LAB | Out-Null
-          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          icacls $LAB /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          "--- the lab root, after resetting inheritance"; icacls $LAB
           # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
           New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
           icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
