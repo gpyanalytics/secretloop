@@ -181,8 +181,22 @@ export function checkParentChain<P = never>(
       return { ok: false, problem: "parent-unreadable" };
     }
     if (st.isSymbolicLink()) {
-      // A link is not refused outright — `/var` is one on macOS. What matters is that the
-      // directory holding it, and the place it leads, are both in `targets` and both checked.
+      // A link is not refused outright — `/var` is one on macOS, and refusing it would refuse
+      // every macOS temp path. The directory holding it and the place it leads are both in
+      // `targets` and both checked.
+      //
+      // But the LINK'S OWN OWNER still has to be trusted, and an earlier version of this skipped
+      // straight past that. Whoever owns a symbolic link can delete it and point it somewhere
+      // else at any moment, so an untrusted owner here is continuous control of the path rather
+      // than a snapshot risk. Measured: in a sticky, root-owned, world-writable directory a
+      // second ordinary account planted a link, this walk returned ok, and the same account then
+      // removed it and repointed it. Sticky restricts rename and delete, not create, so the
+      // sticky exception is the only thing that lets an untrusted link onto an accepted path —
+      // which is exactly why the two rules have to be read together.
+      //
+      // A link's mode is meaningless on both platforms (always 0777), so only ownership is
+      // tested here; what the link leads to is judged on its own terms as a separate component.
+      if (!trustedOwner(st.uid, euid)) return { ok: false, problem: "unsafe-parent-posix" };
       continue;
     }
     if (!st.isDirectory()) return { ok: false, problem: "unsafe-parent-posix" };

@@ -213,7 +213,10 @@ if the group contains only you — there is no portable way to ask who else
 belongs to a group, so every group-write bit counts as a grant. A home under a
 directory owned by another ordinary account. A world-writable directory anywhere
 on the path, unless it is also sticky and owned by you or root, which is why
-`/tmp` still works. A path more than 64 directories deep.
+`/tmp` still works. A path whose inspection would exceed 64 directories. That is 64
+*inspected* directories, not 64 levels: when any part of the path is a symbolic link both
+the literal and the resolved path are inspected, so the effective limit is about half —
+measured at 64 levels with no link on the path and 32 with one.
 
 If SecretLoop refuses for this reason, look at the path yourself with `ls -ld`
 starting at your home directory and find the one directory that is too open. Fix

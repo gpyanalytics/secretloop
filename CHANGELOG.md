@@ -95,7 +95,10 @@
   group, so every group-write bit is treated as a grant. A home under a directory owned by another
   ordinary account is refused. A world-writable directory on the path is refused unless it also has
   the sticky bit and is owned by you or root — `/tmp` keeps working, a world-writable directory
-  without sticky does not. A path more than 64 directories deep is refused rather than walked.
+  without sticky does not. A path whose inspection would exceed 64
+  directories is refused rather than walked — 64 INSPECTED directories, which is 64 levels when
+  nothing on the path is a symbolic link and about 32 when something is, because both the
+  literal and the resolved path are then inspected.
 - **Why sticky is allowed at all, and how far it goes.** Measured as a second ordinary account in a
   sticky, root-owned, world-writable directory: deleting and renaming your store are **denied**,
   which is what earns the exception. But **creating a name that does not exist yet is allowed**, so

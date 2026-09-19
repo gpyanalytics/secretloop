@@ -1,5 +1,5 @@
 import { test, suite, finish, assert, skip } from "./harness";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, chmodSync, symlinkSync, readdirSync } from "fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, chmodSync, symlinkSync, readdirSync, lstatSync } from "fs";
 import { execFileSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
@@ -176,6 +176,53 @@ test("both the literal and the resolved chain are inspected", () => {
   }
 });
 
+test("a symbolic link on the path must itself be owned by a trusted principal", () => {
+  if (!POSIX) return skip("NOT RUN on win32");
+  // Whoever owns a symbolic link can delete it and repoint it whenever they like, so an
+  // untrusted owner here is continuous control of the path and not a snapshot risk. The only
+  // way an untrusted link reaches an otherwise-accepted path is through the sticky exception,
+  // because sticky restricts rename and delete but NOT create. Measured in a container: a second
+  // ordinary account planted a link in a sticky root-owned directory, the walk returned ok, and
+  // the same account then removed and repointed it.
+  //
+  // A second uid cannot be created here, so the predicate is driven the way the other ownership
+  // case is: the same chain seen by a different euid makes this account's link "somebody else's".
+  // To isolate the LINK, every other component must stay trusted under the fabricated euid, or
+  // the refusal could come from any of them and the case would prove nothing. So the link lives
+  // in the sticky, root-owned /private/tmp (or /tmp) and points at a root-owned directory: under
+  // a different euid the link is then the ONLY untrusted component on the whole chain.
+  const sticky = existsSync("/private/tmp") ? "/private/tmp" : "/tmp";
+  const target = existsSync("/usr/share") ? "/usr/share" : "/usr";
+  const link = path.join(sticky, `sl-linkown-${process.pid}-${Date.now()}`);
+  try {
+    symlinkSync(target, link);
+    const store = path.join(link, ".secretloop");
+    const targets = chainTargets(store);
+    assert.ok(targets.includes(link), "the link must be one of the components");
+
+    const other = EUID + 1000;
+    const untrusted = targets.filter((c) => {
+      if (c === path.resolve(store)) return false;
+      try {
+        const st = lstatSync(c);
+        return st.uid !== other && st.uid !== 0;
+      } catch {
+        return false;
+      }
+    });
+    assert.deepStrictEqual(untrusted, [link],
+      `only the link may be untrusted under the fabricated euid; got ${untrusted.join(", ")}`);
+
+    assert.deepStrictEqual(checkParentChain(store, EUID), { ok: true },
+      "control: a link this account owns, on an otherwise root-owned chain, is fine");
+    assert.deepStrictEqual(checkParentChain(store, other),
+      { ok: false, problem: "unsafe-parent-posix" },
+      "a link owned by somebody else must refuse, not be skipped past");
+  } finally {
+    rmSync(link, { force: true });
+  }
+});
+
 test("the store itself is judged by its own rules, not as an ancestor", () => {
   if (!POSIX) return skip("NOT RUN on win32");
   // Both spellings of the store must be out of the walk. Before that was fixed, the resolved
@@ -207,7 +254,17 @@ test("the walk is bounded and does not follow an unbounded path", () => {
     const store = path.join(deep, ".secretloop");
     mkdirSync(path.join(store, "pending"), { recursive: true, mode: 0o700 });
     const targets = chainTargets(store);
-    assert.ok(targets.length > 40, `the fixture should be deep; got ${targets.length}`);
+    // The cap counts COMPONENTS INSPECTED, not levels of nesting. With a symbolic link anywhere
+    // on the path both the literal and the resolved chain are inspected, so the effective depth
+    // is about half — measured at 64 levels with no link and 32 with one. The documentation used
+    // to say "64 directories deep", which was only true of the no-link case; on macOS every temp
+    // path goes through /var and so always has one.
+    const resolvedDiffers = require("fs").realpathSync(deep) !== deep;
+    assert.ok(targets.length >= 40, `the fixture should be deep; got ${targets.length}`);
+    if (resolvedDiffers) {
+      assert.ok(targets.length > 40,
+        "with a link on the path both chains are counted, so components exceed the nesting depth");
+    }
     const verdict = checkParentChain(store, EUID);
     if (targets.length > MAX_CHAIN_COMPONENTS) {
       assert.deepStrictEqual(verdict, { ok: false, problem: "parent-unreadable" },
