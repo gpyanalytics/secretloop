@@ -147,6 +147,10 @@ test("PERMISSIVE CONTROL: a writable parent lets the second account replace the 
     assert.ok(asAttacker(["/bin/mkdir", "-p", path.join(store, "pending")]).ok,
       "and must let a replacement be created");
   } finally {
+    // The replacement belongs to the ATTACKER, so the owner cannot remove it and the fixture
+    // teardown fails with EACCES. Have the account that made it take it away again; nothing
+    // outside this disposable fixture is touched, and no elevation is used.
+    asAttacker(["/bin/rm", "-rf", path.join(base, "home", ".secretloop")]);
     rmSync(base, { recursive: true, force: true });
   }
 });
