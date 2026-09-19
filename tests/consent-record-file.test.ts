@@ -193,27 +193,147 @@ test("a record that grows past the limit after it was written is refused on the 
     const p = place(f, ID_OK);
     assert.ok(consent.readRecord(ID_OK), "it starts readable");
     appendFileSync(p, "x".repeat(64 * 1024));
+    // What this executes: a real append to the real file BETWEEN two separate `readRecord` calls.
     // The size is taken from the descriptor at read time, so growth since the write is seen.
+    //
+    // What it does NOT execute: growth interleaved with a read already in progress, after that
+    // call's own `fstat`. No such experiment was run. That case is answered structurally instead
+    // — the buffer is allocated from the size just checked and the loop never asks for more, so
+    // bytes appended mid-read are not read into memory — which is a property read from the
+    // source, not a measurement. Do not report the two as one result.
     assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "oversized-record");
   } finally {
     done(f);
   }
 });
 
-test("the largest record the writer can produce is well inside the bound", () => {
-  // A single typical record is evidence of typical size, not of the maximum. Bound every variable
-  // field by what the platform allows instead: a path, a repo-relative file and a fingerprint that
-  // embeds the file, each at PATH_MAX.
-  const PATH_MAX = 4096;
-  const worst = {
-    version: consent.CONSENT_VERSION, id: "a".repeat(32), state: "approved" as const,
-    fingerprint: "s".repeat(PATH_MAX) + ":generic-api-key-assignment:" + "0".repeat(16),
-    path: "/" + "d".repeat(PATH_MAX - 1), file: "s".repeat(PATH_MAX), line: Number.MAX_SAFE_INTEGER,
-    ruleId: "generic-api-key-assignment", provider: "DigitalOcean", commitment: "a".repeat(64),
-    createdAt: new Date().toISOString(), approvedAt: new Date().toISOString(), expiresAt: new Date().toISOString(),
+const LIMIT = 64 * 1024;
+const serialized = (r: unknown): number => Buffer.byteLength(JSON.stringify(r, null, 2) + "\n", "utf8");
+
+/**
+ * A record whose serialization is EXACTLY `bytes`, padded in a field of one-byte characters.
+ * The state is applied BEFORE padding: "approved" is one byte longer than "pending".
+ */
+function sized(id: string, bytes: number, state: consent.ConsentState = "pending"): consent.ConsentRecord {
+  // An approved record must carry expiresAt to parse at all, so it is built the way the product
+  // builds it before the padding is measured.
+  const approval = state === "approved"
+    ? { approvedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 60_000).toISOString() }
+    : {};
+  const r = { ...record(id), state, ...approval, file: "" };
+  const pad = bytes - serialized(r);
+  assert.ok(pad >= 0, "the base record already exceeds the requested size");
+  r.file = "p".repeat(pad);
+  assert.strictEqual(serialized(r), bytes, "the padding must land on the byte");
+  return r;
+}
+
+/** The three fields that carry text of any length, each filled to PATH_MAX with one character. */
+function atPathMax(fill: string, bytesPerChar: number): consent.ConsentRecord {
+  const f = fill.repeat(Math.floor((4096 - 1) / bytesPerChar));
+  return {
+    ...record(ID_OK),
+    fingerprint: f + ":generic-api-key-assignment:" + "0".repeat(16),
+    path: "/" + f, file: f, line: Number.MAX_SAFE_INTEGER,
   };
-  const bytes = Buffer.byteLength(JSON.stringify(worst, null, 2) + "\n");
-  assert.ok(bytes < 64 * 1024, `a worst-case record is ${bytes} bytes, which the reader would refuse`);
+}
+
+test("field lengths alone do not bound a record: JSON escaping carries it past the limit", () => {
+  // The claim this replaces was that bounding path, file and fingerprint at PATH_MAX bounds the
+  // record. It does not. Escaping is not one byte per byte, and POSIX permits any byte but "/"
+  // and NUL in a file name, so a path of control characters is a legal path.
+  assert.ok(serialized(atPathMax("s", 1)) < LIMIT, "ASCII at PATH_MAX is comfortably inside");
+  assert.ok(serialized(atPathMax("\u4e2d", 3)) < LIMIT, "3-byte UTF-8 at PATH_MAX is inside too");
+  const escaped = serialized(atPathMax("\u0001", 1));
+  assert.ok(
+    escaped > LIMIT,
+    `a path of control characters should serialize past the limit; got ${escaped}`
+  );
+});
+
+test("the writer refuses a record the reader could never read back", () => {
+  // Discriminating: before the guard, this wrote a 74,101-byte record, every later read refused
+  // it as oversized, and one such record refused the WHOLE listing rather than just itself.
+  // The fixture is set even though the guard should fire first — if it does not, the write must
+  // land in a disposable store and never in the real one.
+  const f = fixture();
+  try {
+    const big = atPathMax("\u0001", 1);
+    assert.strictEqual(refusal(() => consent.writeRecord(big)), "record-too-large");
+    assert.ok(!existsSync(path.join(f.pending, `${big.id}.json`)), "nothing may be left behind");
+    assert.deepStrictEqual(readdirSync(f.pending), [], "not even a temp file");
+  } finally {
+    done(f);
+  }
+});
+
+test("the write-side refusal names the situation it is, and interpolates nothing", () => {
+  const sentence = consent.describeStoreProblem("record-too-large");
+  // Not the read-side sentence: nothing untrustworthy was found on disk.
+  assert.notStrictEqual(sentence, consent.describeStoreProblem("oversized-record"));
+  assert.ok(/no record was written/.test(sentence), sentence);
+  assert.ok(!/0700|\//.test(sentence), `no mode and no path may appear: ${sentence}`);
+
+  // And the guidance beside it must not send the user to inspect a store that is perfectly fine.
+  const guidance = consent.consentStoreGuidance("record-too-large");
+  assert.ok(/store itself is fine/.test(guidance), guidance);
+  assert.doesNotMatch(guidance, /0700/, "no store repair is being asked for");
+  assert.notStrictEqual(guidance, consent.consentStoreGuidance("foreign-owner"));
+  // Every other problem keeps the store guidance, including when none is named.
+  assert.strictEqual(consent.consentStoreGuidance(), consent.consentStoreGuidance("foreign-owner"));
+});
+
+test("writer and reader agree on the boundary byte for byte", () => {
+  if (!POSIX) return skip("NOT RUN on win32: the store interaction is PR #91's and is tested there");
+  const f = fixture();
+  try {
+    // Exactly at the limit, in the state that is written last: the writer accepts it and the
+    // reader reads it back. One constant, one predicate, so there is no width of record that the
+    // writer allows and the reader refuses.
+    const exact = sized(ID_OK, LIMIT, "approved");
+    consent.writeRecord(exact);
+    assert.strictEqual(statSync(path.join(f.pending, `${ID_OK}.json`)).size, LIMIT);
+    assert.strictEqual(consent.readRecord(ID_OK)?.id, ID_OK, "the limit itself is readable");
+
+    // One byte past: refused before anything is created, so what was there is untouched.
+    const over = sized(ID_OK, LIMIT + 1, "approved");
+    assert.strictEqual(refusal(() => consent.writeRecord(over)), "record-too-large");
+    assert.strictEqual(statSync(path.join(f.pending, `${ID_OK}.json`)).size, LIMIT,
+      "a refused write must not replace the record that was already there");
+  } finally {
+    done(f);
+  }
+});
+
+test("a request the writer accepts can still be approved", () => {
+  if (!POSIX) return skip("NOT RUN on win32: the store interaction is PR #91's and is tested there");
+  // Discriminating, and the reason the callers had to be checked and not just the writer.
+  // approveRecord is the second writer: it adds `approvedAt`, `expiresAt` and two characters of
+  // `state` to a record already on disk. Measured at 88 bytes. Before the reserve, a pending
+  // record of exactly 65,536 bytes was written happily and approving it produced 65,624 — a
+  // consent request that could be made and never granted.
+  const f = fixture();
+  try {
+    const biggest = sized(ID_OK, LIMIT);
+    assert.strictEqual(
+      refusal(() => consent.writeRecord(biggest)),
+      "record-too-large",
+      "a pending record at the full limit leaves no room for approval"
+    );
+
+    // The largest request that IS accepted must survive approval and stay readable.
+    const fits = sized(ID_OK, LIMIT - 96);
+    consent.writeRecord(fits);
+    const approved = consent.approveRecord(consent.readRecord(ID_OK)!, "b".repeat(64));
+    assert.strictEqual(approved.state, "approved");
+    const after = statSync(path.join(f.pending, `${ID_OK}.json`)).size;
+    assert.ok(after <= LIMIT, `the approved record is ${after} bytes, which the reader would refuse`);
+    assert.strictEqual(consent.readRecord(ID_OK)?.state, "approved", "and it reads back");
+    // The reserve must cover what approval really costs, not merely today's example.
+    assert.ok(after - (LIMIT - 96) <= 96, "approval grew by more than the reserve holds back");
+  } finally {
+    done(f);
+  }
 });
 
 test("a record that is not there is still simply absent", () => {
@@ -387,6 +507,9 @@ test("a store whose pending directory is gone is still 'no record', and the next
 });
 
 test("every refusal sentence stays fixed, with no path, mode, record or OS text", () => {
+  // "record-too-large" is deliberately absent: it reports a record SecretLoop declined to write,
+  // not an untrustworthy one it found, so it does not end in "cannot be trusted". Its own case
+  // above checks its wording. Do not add it here to make the loop tidy.
   const codes: consent.ConsentStoreProblem[] = ["not-a-regular-file", "oversized-record", "record-permissive", "symlink", "foreign-owner", "permissive"];
   for (const code of codes) {
     const sentence = new consent.ConsentStoreError(code).message;

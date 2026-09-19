@@ -108,6 +108,7 @@ export type ConsentStoreProblem =
   | "not-a-directory"
   | "not-a-regular-file"
   | "oversized-record"
+  | "record-too-large"
   | "record-permissive"
   | "symlink"
   | "foreign-owner"
@@ -167,6 +168,10 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       return `a consent record in ${where} is not a regular file, so consent records cannot be trusted.`;
     case "oversized-record":
       return `a consent record in ${where} is far larger than any record SecretLoop writes, so consent records cannot be trusted.`;
+    case "record-too-large":
+      // The write side of the same bound, and a different situation: nothing untrustworthy was
+      // found — SecretLoop declined to create a record it could never read back.
+      return `this finding's workspace path or file name is so long that its consent record would be larger than SecretLoop reads back, so no record was written and this verification cannot be requested.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -211,9 +216,19 @@ export const CONSENT_STORE_GUIDANCE_WINDOWS =
   "create aside rather than deleting or loosening it, then ask the client to request the verification again.";
 
 /** The guidance for the platform this process is running on. */
-export function consentStoreGuidance(): string {
+export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
+  // "record-too-large" is the one refusal that is not about the store, so it must not send the
+  // user to inspect a store that is perfectly healthy. The default stays the store guidance,
+  // including when no problem is given.
+  if (problem === "record-too-large") return CONSENT_RECORD_TOO_LARGE_GUIDANCE;
   return process.platform === "win32" ? CONSENT_STORE_GUIDANCE_WINDOWS : CONSENT_STORE_GUIDANCE;
 }
+
+/** Fixed guidance for the one refusal that is about the finding's path, not about the store. */
+export const CONSENT_RECORD_TOO_LARGE_GUIDANCE =
+  "The consent store itself is fine. The workspace path, or the file's own name, is long enough " +
+  "that the record describing it would not fit. Open the workspace from a shorter path, or shorten " +
+  "the name, and ask the client to request the verification again.";
 
 /** Fixed guidance, safe to print beside the sentence above. */
 export const CONSENT_STORE_GUIDANCE =
@@ -496,7 +511,42 @@ function ensureDirWindows(): void {
   }
 }
 
+/**
+ * The one size bound, shared by the writer and the reader so the two cannot disagree.
+ *
+ * A record has a fixed set of fields, and only three carry text of any length: `path`, `file`,
+ * and `fingerprint`, which embeds `file`. Those are bounded by the filesystem — PATH_MAX is
+ * 4096 bytes on Linux, 1024 on macOS — but their SERIALIZED length is not bounded by that.
+ * JSON escaping is not one byte per byte: a control character costs six (`\u0001`), and POSIX
+ * filenames may hold any byte except "/" and NUL. Measured: the same three fields at PATH_MAX
+ * serialize to 12,779 bytes in ASCII, 25,064 in quotes or backslashes, and 74,204 in control
+ * characters — past this bound. So the bound is NOT implied by the field lengths, and
+ * `writeRecord` measures the serialized bytes rather than trusting them.
+ */
+const MAX_RECORD_BYTES = 64 * 1024;
+
+/**
+ * What approval adds to a record: `state` grows from "pending" to "approved", and the two ISO
+ * timestamps `approvedAt` and `expiresAt` appear. Measured at 88 bytes; 96 is held back.
+ *
+ * A PENDING record is measured against the limit LESS this, because otherwise the writer can mint
+ * a request that can never be granted — a pending record at exactly the limit was accepted, and
+ * approving it produced 65,624 bytes, past the bound. That is the same defect one level up, so it
+ * gets the same treatment rather than a second kind of answer.
+ */
+const APPROVAL_GROWTH_BYTES = 96;
+
 export function writeRecord(record: ConsentRecord): void {
+  // Measured against the reader's bound, with the reader's predicate, before anything is created:
+  // a record the reader would refuse must never reach the disk. It is not a hypothetical —
+  // `writeRecord` really did mint a 74,101-byte record for a workspace path of control characters,
+  // which every later read refused, and one such record refused the whole listing rather than just
+  // itself. Refusing here costs this one verification instead of the store.
+  const body = JSON.stringify(record, null, 2) + "\n";
+  const limit = MAX_RECORD_BYTES - (record.state === "pending" ? APPROVAL_GROWTH_BYTES : 0);
+  if (Buffer.byteLength(body, "utf8") > limit) {
+    throw new ConsentStoreError("record-too-large");
+  }
   ensureDir();
   const target = recordPath(record.id);
   // Replacing a record that fails the checks would quietly repair unsafe state. Refuse instead,
@@ -507,7 +557,7 @@ export function writeRecord(record: ConsentRecord): void {
   // record — and created with the mode rather than chmod'ed afterwards, which
   // would leave a window where it is world-readable.
   const tmp = `${target}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(tmp, body, { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, target);
   try {
     chmodSync(target, 0o600);
@@ -515,14 +565,6 @@ export function writeRecord(record: ConsentRecord): void {
     /* best effort; the create mode already applied */
   }
 }
-
-/**
- * A consent record is a small object with a fixed set of fields. A deliberately long one — a
- * nested file inside a long workspace path, with every optional field present — serializes to
- * about 600 bytes. 64 KiB is a hundredfold margin, and it bounds what a file sitting at a record
- * path can cost this process. Before this bound the reader would have read a file of any size.
- */
-const MAX_RECORD_BYTES = 64 * 1024;
 
 /**
  * Reads a record through ONE descriptor, deciding what the object is before any byte of it is

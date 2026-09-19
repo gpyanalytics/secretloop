@@ -44,6 +44,19 @@
   it is read. An unsafe record is refused, never repaired: its owner and mode are left exactly as
   found. A record that simply is not there is still "no record", and a store whose `pending`
   directory is gone still behaves as it did.
+- **And the writer now measures what it is about to write, so it cannot mint a record the reader
+  refuses.** "No larger than any record SecretLoop writes" was an assumption about field lengths,
+  and it was wrong. Only three fields carry text of any length — the workspace path, the
+  repo-relative file and the fingerprint that embeds it — and although the filesystem bounds
+  those, JSON escaping is not one byte per byte. A control character costs six, and a POSIX file
+  name may hold any byte but "/" and NUL. Measured: those three fields at PATH_MAX serialize to
+  12,779 bytes in ASCII and 74,204 in control characters. The writer really did create a
+  74,101-byte record that every later read refused, and one such record refused the whole listing
+  rather than just itself. `writeRecord` now measures the serialized bytes against the reader's
+  own bound and refuses beforehand, so nothing is created; a pending record is held a further 96
+  bytes back, because approval adds 88 and a request that can be made must be one that can be
+  granted. The refusal says the path is too long and says the store is fine, rather than sending
+  you to inspect a healthy store.
 - **What the record check does not establish.** Judging and reading through one descriptor is not
   the same as making the lifecycle atomic: a record can still be replaced between one operation
   and the next, and the claim that guards a verification is still the atomic rename, not this

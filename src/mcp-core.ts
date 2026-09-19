@@ -1473,7 +1473,7 @@ export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
     // written, claimed or deleted, and before the provider boundary. The
     // sentence is fixed text: no path, no record content, no OS message.
     if (err instanceof ConsentStoreError) {
-      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${consentStoreGuidance()}`);
+      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${consentStoreGuidance(err.problem)}`);
     }
     throw err;
   }
