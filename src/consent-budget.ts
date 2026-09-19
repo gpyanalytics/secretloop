@@ -142,6 +142,17 @@ export function spendHelperCall(): void {
   active.helperCalls += 1;
 }
 
+/**
+ * Bytes of helper output still allowed, for sizing a child's buffer so it cannot accept more than
+ * the operation as a whole has left. Returns `cap` when no allowance is active.
+ */
+export function remainingBytes(cap: number): number {
+  if (!active) return cap;
+  const left = LIMITS.helperBytes - active.helperBytes;
+  if (left <= 0) throw new BudgetExceededError("output");
+  return Math.max(1, Math.min(cap, left));
+}
+
 /** Charge a helper's output once it is in hand. */
 export function spendHelperBytes(bytes: number): void {
   if (!active) return;

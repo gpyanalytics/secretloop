@@ -241,7 +241,9 @@ it does: at most 512 `ls` invocations, 4 MiB of their combined output, 256 entri
 starting again. If an operation runs out, SecretLoop **refuses and says so** — it never
 returns a shortened list as though it were complete, and never approves a record it did not
 finish checking. The usual cause is a large number of old requests in `pending`; remove the
-ones you no longer want to approve. Nothing is remembered between requests: a cached "this
+ones you no longer want to approve. **Every** entry in `pending` counts toward that limit, not
+only the ones that are valid requests, and when the limit is reached SecretLoop has read one
+entry beyond it — the entry that exceeded it — and nothing further. Nothing is remembered between requests: a cached "this
 was safe" answer would keep asserting something about a directory that may since have
 changed.
 

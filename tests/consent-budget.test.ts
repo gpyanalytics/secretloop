@@ -363,6 +363,120 @@ test("a claim is never half-made, and never restored to make a timeout retryable
   }
 });
 
+test("a budget error raised inside the helper is never relabelled as an ACL problem", () => {
+  if (!MAC) return skip("NOT RUN: the helper is only consulted on macOS");
+  // The allowance is read twice around one helper call: when charging the invocation, and again
+  // by remainingMs INSIDE the try, as an argument. Expiring at that second read used to be caught
+  // by the catch-all and returned as `acl-unreadable`, which handed the user ACL guidance for a
+  // TIME problem. A stepped clock lands the expiry on each read in turn.
+  const macacl2 = require("../src/consent-acl-macos") as typeof import("../src/consent-acl-macos");
+  const f = fixture();
+  try {
+    const target = { parent: f.store, basename: "pending" };
+    for (const expireAt of [2, 3]) {
+      let n = 0;
+      const t = 1_000_000;
+      budget.setClockForTests(() => { n++; return n >= expireAt ? t + L.deadlineMs + 1 : t; });
+      let threw: string | null = null;
+      let verdict: unknown;
+      try {
+        budget.withBudget(() => { verdict = macacl2.inspectMacAcl(target); });
+      } catch (err) {
+        threw = (err as Error).name;
+      }
+      budget.setClockForTests(undefined);
+      assert.strictEqual(threw, "BudgetExceededError",
+        `expiring at clock read ${expireAt} must refuse on the budget, not return ${JSON.stringify(verdict)}`);
+    }
+  } finally {
+    done(f);
+  }
+});
+
+test("a child's output buffer is the smaller of its own cap and the remaining allowance", () => {
+  if (!MAC) return skip("NOT RUN: the helper is only consulted on macOS");
+  // A fixed per-call cap would let a child accept far more than the operation as a whole still
+  // permits, and only refuse once the data had already been read.
+  assert.strictEqual(budget.remainingBytes(64 * 1024), 64 * 1024,
+    "outside an operation the call's own cap applies");
+  budget.withBudget(() => {
+    assert.strictEqual(budget.remainingBytes(L.helperBytes * 2), L.helperBytes,
+      "a cap larger than the whole allowance is clamped to the allowance");
+    budget.spendHelperBytes(L.helperBytes - 100);
+    assert.strictEqual(budget.remainingBytes(64 * 1024), 100,
+      "late in the operation a child may buffer only what is left");
+    budget.spendHelperBytes(100);
+    assert.throws(() => budget.remainingBytes(64 * 1024), /budget exhausted/,
+      "and with none left no child is given a buffer at all");
+  });
+
+  // The behaviour above is the helper's; this asserts the CALL SITE actually uses it. It is a
+  // source-level check and is labelled as one, because `setLsRunnerForTests` replaces the spawn
+  // entirely and there is no seam through which a real child's maxBuffer can be observed.
+  const macSrc = require("fs").readFileSync(
+    path.join(__dirname, "..", "src", "consent-acl-macos.ts"), "utf8") as string;
+  const maxBuffer = /maxBuffer:\s*(.+)$/m.exec(macSrc);
+  assert.ok(maxBuffer, "the helper must set a maxBuffer at all");
+  assert.match((maxBuffer as RegExpExecArray)[1], /remainingBytes/,
+    `the child's buffer must be sized from the remaining allowance; it was ${(maxBuffer as RegExpExecArray)[1].trim()}`);
+});
+
+test("the enumeration boundary, stated exactly: 256 charged, 257 read", () => {
+  if (!POSIX) return skip("NOT RUN on win32");
+  // The overflow entry must be RETURNED before its charge can be refused, so the product reads
+  // one more than it charges. Saying "only 256 entries were observed" would be wrong.
+  const f = fixture();
+  try {
+    fill(f, 1024);
+    const fsmod = require("fs") as typeof import("fs");
+    const realOpendir = fsmod.opendirSync;
+    let reads = 0, opened = 0, closed = 0;
+    (fsmod as { opendirSync: unknown }).opendirSync = function (this: unknown, ...args: unknown[]) {
+      const dir = (realOpendir as (...a: unknown[]) => import("fs").Dir).apply(this, args);
+      opened++;
+      const rs = dir.readSync.bind(dir), cs = dir.closeSync.bind(dir);
+      dir.readSync = () => { reads++; return rs(); };
+      dir.closeSync = () => { closed++; return cs(); };
+      return dir;
+    };
+    let charged: number | undefined;
+    try {
+      budget.withBudget(() => {
+        try { consent.listRecords(); } finally { charged = budget.currentSpend()?.dirEntries; }
+      });
+    } catch {
+      /* the refusal is the point */
+    }
+    (fsmod as { opendirSync: unknown }).opendirSync = realOpendir;
+    assert.strictEqual(charged, L.dirEntries, "exactly the limit is charged");
+    assert.strictEqual(reads, L.dirEntries + 1,
+      "and exactly one more entry is READ, because the overflow must be seen to be refused");
+    assert.strictEqual(closed, opened, "the directory handle closes on the refusal path");
+  } finally {
+    done(f);
+  }
+});
+
+test("every directory entry counts, not only names that look like records", () => {
+  if (!POSIX) return skip("NOT RUN on win32");
+  const f = fixture();
+  try {
+    fill(f, 10);
+    writeFileSync(path.join(f.pending, "README.txt"), "x", { mode: 0o600 });
+    writeFileSync(path.join(f.pending, "a".repeat(32) + ".json.tmp.999.abc"), "x", { mode: 0o600 });
+    mkdirSync(path.join(f.pending, "a-subdirectory"), { mode: 0o700 });
+    let charged: number | undefined;
+    budget.withBudget(() => {
+      consent.listRecords();
+      charged = budget.currentSpend()?.dirEntries;
+    });
+    assert.strictEqual(charged, 13,
+      "all 13 entries are charged: the cost being bounded is the enumeration, not the parsing");
+  } finally {
+    done(f);
+  }
+});
+
 test("the refusal names size and time, and asks for no permission change", () => {
   const sentence = new consent.ConsentStoreError("operation-too-large").message;
   assert.match(sentence, /more work than SecretLoop allows/, sentence);

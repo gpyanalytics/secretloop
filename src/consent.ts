@@ -616,6 +616,16 @@ function ensureDir(): void {
   // Before `mkdir`, not after: a store created under a parent another account can write is a
   // store that could already have been replaced by the time it is inspected, and on macOS it
   // would have inherited that parent's ACEs while being created.
+  //
+  // THE TRANSACTION BOUNDARY, stated accurately. It is NOT true that all budgeted work precedes
+  // every mutation: the ancestor check runs first, then `mkdir` CREATES the directories, and only
+  // then can the store itself be inspected — you cannot inspect a store you have not made, and
+  // that check is not moved before creation just to make a tidier sentence. So an allowance can
+  // run out AFTER this mutation. What covers it is the undo below, which removes only the
+  // directories this call created and is non-recursive, so it fails rather than removing anything
+  // that was put inside them. Verified under budget exhaustion at that exact point: no record
+  // written, no store left behind. Record CONTENT and the CLAIM are different: all budgeted work
+  // does precede the temp-file write and the rename.
   assertSafeAncestors();
   const madeStore = !existsSync(consentDir());
   const madePending = !existsSync(pendingDir());
@@ -965,9 +975,19 @@ function readRecordInner(id: string): ConsentRecord | null {
  * Read `pending` through an iterator, charging the allowance for each entry as it arrives.
  *
  * `readdirSync` would load the whole directory before anything could object, so a cap applied to
- * the result would not bound the enumeration at all -- it would bound what was done with an
- * already-loaded list. `opendirSync` hands entries back one at a time, so a directory larger than
- * the allowance stops the read instead of completing it.
+ * the result would not bound the enumeration at all — it would bound what was done with an
+ * already-loaded list. `opendirSync` hands entries back one at a time, so the product stops
+ * reading instead of completing.
+ *
+ * Stated exactly, because the loose version overclaims. The product CHARGES at most the limit and
+ * READS one more than it charges: the overflow entry has to be returned before the charge for it
+ * can be refused. Measured on a directory of 1024 with a limit of 256 — 256 charged, 257
+ * `readSync` calls, one handle opened and closed. And `Dir` fetches entries from the runtime in
+ * internal chunks, so libuv and the kernel may have enumerated further than the product asked
+ * for; what is bounded here is the PRODUCT's work, not kernel-level enumeration.
+ *
+ * Every entry counts, not only names that look like records, because the cost being bounded is
+ * the enumeration itself.
  */
 function readPendingEntries(): string[] {
   const out: string[] = [];

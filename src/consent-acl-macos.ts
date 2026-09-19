@@ -23,7 +23,7 @@
  */
 
 import { execFileSync } from "child_process";
-import { remainingMs, spendHelperBytes, spendHelperCall } from "./consent-budget";
+import { BudgetExceededError, remainingBytes, remainingMs, spendHelperBytes, spendHelperCall } from "./consent-budget";
 
 /**
  *   extended-acl         the object carries at least one extended ACL entry
@@ -135,13 +135,23 @@ function runLs(target: MacAclTarget): ReturnType<LsRunner> {
       // The child is killed outright rather than asked politely, so a wedged inspection cannot
       // outlive the call.
       killSignal: "SIGKILL",
-      maxBuffer: MAX_OUTPUT_BYTES,
+      // The smaller of this call's cap and what is left of the whole operation's output
+      // allowance. A fixed 64 KiB would let a child buffer far more than the aggregate still
+      // permits before anything could refuse it -- the cap has to bind BEFORE the data is
+      // accepted, not after it has been read.
+      maxBuffer: Math.min(MAX_OUTPUT_BYTES, remainingBytes(MAX_OUTPUT_BYTES)),
       // A fixed, minimal environment: the C locale so the text is the text that was measured,
       // and a PATH that is never consulted anyway because the executable is absolute.
       env: { LC_ALL: "C", PATH: "/usr/bin:/bin" },
       stdio: ["ignore", "pipe", "pipe"],
     });
   } catch (err) {
+    // The allowance is read twice around this call -- once when charging the invocation, and once
+    // by `remainingMs` INSIDE this try, as an argument. If it runs out at the second read, the
+    // error is raised in here, and a catch-all would relabel a TIME problem as an unreadable ACL
+    // and hand the user ACL guidance for it. Measured with a stepped clock: expiring at that exact
+    // read returned `acl-unreadable` instead of refusing on the budget. It must pass through.
+    if (err instanceof BudgetExceededError) throw err;
     const e = err as NodeJS.ErrnoException & { status?: number | null };
     // The tool itself being absent or unusable is a different answer from the tool running and
     // failing, because the first is an environment SecretLoop does not support and the second
