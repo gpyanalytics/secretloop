@@ -546,6 +546,22 @@ function readRecordText(file: string): string | null {
     if (code === "ENOENT" || code === "ENOTDIR") return null;
     // O_NOFOLLOW reports a symbolic link as ELOOP on Linux and macOS.
     if (code === "ELOOP" || code === "EMLINK") throw new ConsentStoreError("symlink");
+    // The open is the authority for a record this account can read. When it is DENIED, the
+    // descriptor can say nothing, so one `lstat` names the reason. It cannot change the outcome —
+    // the record is refused either way — so a component swapped between the two alters the wording
+    // of a refusal and nothing else. A record owned by another account is the common case here:
+    // it is unreadable precisely because it belongs to someone else.
+    if (code === "EACCES" || code === "EPERM") {
+      try {
+        const owner = lstatSync(file);
+        if (typeof process.geteuid === "function" && owner.uid !== process.geteuid()) {
+          throw new ConsentStoreError("foreign-owner");
+        }
+      } catch (inner) {
+        if (inner instanceof ConsentStoreError) throw inner;
+        /* the reason cannot be named; fall through */
+      }
+    }
     throw new ConsentStoreError("inaccessible");
   }
   try {

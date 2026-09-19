@@ -202,6 +202,22 @@ test("a record owned by another account is refused", () => {
   }
 });
 
+test("a record this account owns but cannot open is refused as unreadable, not as another account's", () => {
+  if (!POSIX) return skip("NOT RUN on win32: POSIX permission bits carry no meaning there");
+  if (process.geteuid?.() === 0) return skip("NOT RUN as root: root can open a mode-000 file, so the case cannot arise");
+  const f = fixture();
+  try {
+    const p = place(f, ID_OK);
+    chmodSync(p, 0o000);
+    // The open is denied, so the descriptor can say nothing about the object. The reason must
+    // still be the true one: this account owns it, so it is unreadable rather than foreign.
+    assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "inaccessible");
+    chmodSync(p, 0o600);
+  } finally {
+    done(f);
+  }
+});
+
 test("refusals do not leak descriptors", () => {
   if (!POSIX) return skip("NOT RUN on win32: the descriptor table is inspected through POSIX paths");
   const fdDir = process.platform === "linux" ? "/proc/self/fd" : "/dev/fd";
