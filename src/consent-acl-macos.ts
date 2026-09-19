@@ -23,6 +23,7 @@
  */
 
 import { execFileSync } from "child_process";
+import { remainingMs, spendHelperBytes, spendHelperCall } from "./consent-budget";
 
 /**
  *   extended-acl         the object carries at least one extended ACL entry
@@ -119,13 +120,18 @@ export function setLsRunnerForTests(fn: LsRunner | undefined): void {
 }
 
 function runLs(target: MacAclTarget): ReturnType<LsRunner> {
+  // Charged BEFORE the child starts, so an exhausted allowance stops the work rather than
+  // reporting it afterwards. Throws out of here; the public entry point translates it.
+  spendHelperCall();
   if (runner) return runner(target);
   let stdout: string;
   try {
     stdout = execFileSync(LS, ["-lden", "--", target.basename], {
       cwd: target.parent,
       encoding: "utf8",
-      timeout: TIMEOUT_MS,
+      // The child gets what is LEFT of the operation, not a fresh full timeout each time.
+      // Otherwise 512 children at five seconds each is not a bounded operation.
+      timeout: remainingMs(TIMEOUT_MS),
       // The child is killed outright rather than asked politely, so a wedged inspection cannot
       // outlive the call.
       killSignal: "SIGKILL",
@@ -145,6 +151,7 @@ function runLs(target: MacAclTarget): ReturnType<LsRunner> {
     }
     return { ok: false, problem: "acl-unreadable" };
   }
+  spendHelperBytes(Buffer.byteLength(stdout, "utf8"));
   return { ok: true, stdout };
 }
 
@@ -163,11 +170,17 @@ function runLs(target: MacAclTarget): ReturnType<LsRunner> {
  * GitHub-hosted runner demonstrated by refusing its own `/Users/runner` during the packaging
  * smoke. Telling users to delete an entry Apple ships would be worse advice than the message.
  *
- * THIS IS A POLICY CHOICE THAT NEEDS APPROVAL, not a derivation. It reads one already-validated
- * token per line and does not evaluate rights or principals, so an `allow` naming only the owner
- * is refused too -- deliberately conservative. D-ACL-2 approved "refuse any extended ACE" for the
- * store; nobody has yet approved anything for ancestors, because until this measurement the case
- * did not exist.
+ * RATIFIED. D-ACL-2 approved "refuse any extended ACE" for the STORE and its records, and that is
+ * unchanged. This conservative ancestor rule is now approved separately and on its own terms:
+ * refuse any `allow` entry on an ancestor, including one that names only the owner; do not refuse
+ * a valid deny-only entry merely because it exists; and still refuse anything malformed,
+ * unsupported or ambiguous.
+ *
+ * Refusing an owner-only `allow` is a COMPATIBILITY RESTRICTION, not a finding. It is not evidence
+ * that the entry grants an attacker anything — it grants only the owner. It is refused because
+ * deciding otherwise would mean resolving a principal UUID to a uid and evaluating rights, which
+ * is far more interpretation of this output than anything else here does, and getting that wrong
+ * fails open. The cost is documented in docs/mcp.md rather than hidden.
  */
 export type AceStrictness = "any" | "allow-only";
 

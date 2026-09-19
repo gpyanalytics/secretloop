@@ -135,10 +135,22 @@ export function chainTargets(dir: string): string[] {
 }
 
 /**
- * A hard ceiling on how many directories one call will inspect, so a pathological path cannot
- * turn one consent operation into unbounded work — especially on macOS, where each component
- * costs a subprocess. Two full chains of a deep path fit comfortably; beyond that the answer is
- * a refusal rather than an open-ended walk.
+ * A ceiling on how many directories ONE WALK will inspect.
+ *
+ * Measured boundary: the predicate is `> 64`, so 64 components are accepted and 65 refuse. It
+ * counts COMPONENTS, deduplicated across the literal and resolved chains — a component common to
+ * both is visited once — which is not the same as path depth. Measured: a chain with no symbolic
+ * link on it has one component per level, so 64 components is 64 levels; a chain with a link has
+ * both spellings, so the same 64 components is about 32 levels. Two macOS paths were measured and
+ * they differ: the real home `/Users/<user>` had no link and 3 components, while a temp path under
+ * `/var/folders` had one (`/var` into `/private/var`) and 12. Not every macOS path contains a
+ * symbolic link; these two did and did not respectively.
+ *
+ * This is NOT the only limit that applies on macOS. `MAX_ANCESTOR_INSPECTIONS` in consent.ts caps
+ * inspections per call at 40, and the two are ORDERED: this length check runs before the loop, so
+ * a path of 65+ components refuses here and the per-component cap is never reached, while a path
+ * of 41..64 components passes here and trips the inspection cap instead. On macOS the effective
+ * ceiling is therefore 40 components, not 64.
  */
 export const MAX_CHAIN_COMPONENTS = 64;
 

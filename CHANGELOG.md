@@ -107,6 +107,29 @@
   own. The residual is a denial of service the path rule does not close, and if the sticky
   directory is owned by the attacker rather than root it gives no protection at all — which is
   why it is accepted only under a trusted owner.
+- **One consent request now has one work allowance.** Each individual check was bounded and the
+  total was not. Measured on macOS, one `ls` per inspected object: writing a record made 43 calls
+  about 10 distinct objects, because the path is re-walked by each stage; approving made 60; and
+  listing grew with the number of pending requests with no ceiling at all. A per-process timeout
+  does not bound that — 512 of them, each taking its own timeout, is not a bounded request. A
+  request now gets at most 512 inspections, 4 MiB of their combined output, 256 entries read from
+  `pending`, and 20 seconds overall, with nested work sharing the one allowance. Reading the
+  `pending` directory stops at the limit rather than loading it and trimming afterwards, so the
+  enumeration really is bounded. On exhaustion SecretLoop refuses: it never returns a shortened
+  list as though it were complete, and never approves a record it did not finish checking.
+  Nothing is cached to make this fit.
+- **The time limit is not a wall-clock guarantee, and is not described as one.** It is checked
+  between pieces of work, and a child process is given only the time remaining rather than a fresh
+  allowance. A single filesystem call on an unresponsive mount cannot be interrupted from inside
+  the process.
+- **macOS refuses an ancestor carrying an `allow` access-control entry, including an owner-only
+  one.** That is a support restriction, not a finding: refusing it is not evidence that the entry
+  grants anyone else access. A `deny`-only entry is not refused merely for existing. The store and
+  its records keep the stricter rule of refusing any entry at all.
+- **Correction to the inspection limit as previously described.** It counts inspected directories,
+  deduplicated across the literal and resolved paths, not levels of nesting; and macOS has a
+  second, lower limit of 40 because each directory there costs a subprocess. The two are ordered,
+  so on macOS the effective ceiling is 40.
 - **What the path check does not establish.** A sequence of inspections at different instants is
   not a snapshot of the filesystem: a directory re-permissioned after it was looked at is not seen,
   the check is not atomic with the store checks that follow it or with any later open, and it

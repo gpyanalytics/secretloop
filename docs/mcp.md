@@ -213,16 +213,42 @@ if the group contains only you — there is no portable way to ask who else
 belongs to a group, so every group-write bit counts as a grant. A home under a
 directory owned by another ordinary account. A world-writable directory anywhere
 on the path, unless it is also sticky and owned by you or root, which is why
-`/tmp` still works. A path whose inspection would exceed 64 directories. That is 64
-*inspected* directories, not 64 levels: when any part of the path is a symbolic link both
-the literal and the resolved path are inspected, so the effective limit is about half —
-measured at 64 levels with no link on the path and 32 with one.
+`/tmp` still works. A path that needs too many directories inspected: 64 in the walk
+itself, and on macOS 40, because each directory there also costs one `ls`. These count
+*inspected directories*, not levels — when any part of the path is a symbolic link both
+the literal and the resolved path are inspected, so the same budget covers about half as
+many levels. Measured on two macOS paths: a home directory `/Users/<you>` had no symbolic
+link on it and needed 3 inspections, while a temporary path under `/var/folders` had one
+and needed 12. Not every macOS path contains a link.
+
+**macOS also refuses an ancestor carrying an `allow` access-control entry**, including one
+that names only you. That is a support restriction rather than a judgement about your
+entry: refusing it is not evidence it grants anyone else access. SecretLoop does not
+resolve entry principals, so it cannot tell "allows only you" from "allows someone else"
+without interpreting far more of the system's output than it does anywhere. A `deny`-only
+entry is **not** refused merely for existing — a deny can only take access away — and
+anything malformed or unsupported is still refused.
 
 If SecretLoop refuses for this reason, look at the path yourself with `ls -ld`
 starting at your home directory and find the one directory that is too open. Fix
 that directory; ask an administrator if it is not yours. **Do not** make a whole
 tree private, and do not remove access-control entries wholesale to clear the
 message — you would be changing far more than the thing at fault.
+
+**One request, one allowance.** A single consent operation has a budget covering everything
+it does: at most 512 `ls` invocations, 4 MiB of their combined output, 256 entries read from
+`pending`, and 20 seconds in total. Nested work shares one allowance rather than each part
+starting again. If an operation runs out, SecretLoop **refuses and says so** — it never
+returns a shortened list as though it were complete, and never approves a record it did not
+finish checking. The usual cause is a large number of old requests in `pending`; remove the
+ones you no longer want to approve. Nothing is remembered between requests: a cached "this
+was safe" answer would keep asserting something about a directory that may since have
+changed.
+
+The time limit is checked between pieces of work, and a child process is given only the time
+left rather than a fresh allowance. It is **not** a hard wall-clock guarantee: a single
+filesystem call on an unresponsive network mount cannot be interrupted from inside the
+process, and no limit here changes that.
 
 **What it costs.** Each directory on the path is inspected on every consent
 operation, and nothing is cached: a remembered "safe" answer would keep asserting

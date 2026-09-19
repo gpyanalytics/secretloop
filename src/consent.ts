@@ -8,6 +8,7 @@ import {
   mkdirSync,
   openSync,
   readSync,
+  opendirSync,
   readdirSync,
   renameSync,
   rmdirSync,
@@ -20,6 +21,7 @@ import { homedir } from "os";
 import * as path from "path";
 import { checkMacAcl, type MacAclTarget } from "./consent-acl-macos";
 import { checkParentChain } from "./consent-parent-chain";
+import { BudgetExceededError, checkBudgetDeadline, spendDirEntry, withBudget } from "./consent-budget";
 import {
   CheckTarget,
   checkWindowsStore,
@@ -119,6 +121,8 @@ export type ConsentStoreProblem =
   // POSIX only. The path ABOVE the store, which no earlier check looked at.
   | "unsafe-parent-posix"
   | "parent-unreadable"
+  // The whole operation, not any single check: too much work or too much time.
+  | "operation-too-large"
   | "record-permissive"
   | "symlink"
   | "foreign-owner"
@@ -196,6 +200,11 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       return `a directory on the path to ${where} can be modified by another account, so the store could be replaced and consent records cannot be trusted; SecretLoop refuses rather than changing anyone's permissions.`;
     case "parent-unreadable":
       return `SecretLoop could not inspect every directory on the path to ${where}, so consent records cannot be trusted.`;
+    case "operation-too-large":
+      // Deliberately says nothing about permissions or access-control lists: the store may be
+      // perfectly safe and simply too large to check within one operation. Suggesting an ACL
+      // repair here would send someone to fix something that is not wrong.
+      return `checking ${where} needed more work than SecretLoop allows for one request, so it stopped rather than answer from a partial check; nothing was changed.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -245,6 +254,7 @@ export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
     return CONSENT_MACOS_ACL_GUIDANCE;
   if (problem === "unsafe-parent-posix" || problem === "parent-unreadable")
     return CONSENT_PARENT_CHAIN_GUIDANCE;
+  if (problem === "operation-too-large") return CONSENT_TOO_LARGE_GUIDANCE;
   // "record-too-large" is the one refusal that is not about the store, so it must not send the
   // user to inspect a store that is perfectly healthy. The default stays the store guidance,
   // including when no problem is given.
@@ -262,6 +272,16 @@ export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
  * and stops there. It does NOT say to loosen anything, and it does NOT suggest a recursive chmod:
  * making a whole home tree private to silence a message is worse than the message.
  */
+/**
+ * Guidance for the size/time refusal. It asks for nothing to be loosened and suggests no ACL
+ * change, because the store's permissions are not what went wrong.
+ */
+export const CONSENT_TOO_LARGE_GUIDANCE =
+  "This is about size, not permissions: nothing needs loosening. The usual cause is a large " +
+  "number of old requests in .secretloop/pending, or a home directory an unusually long way down " +
+  "the filesystem. Look at what is in pending and remove requests you no longer want to approve, " +
+  "then ask the client to request the verification again.";
+
 export const CONSENT_PARENT_CHAIN_GUIDANCE =
   "Check the directories above .secretloop with `ls -ld`, starting at your home directory. " +
   "SecretLoop works only when every directory on that path is owned by you or by root and is not " +
@@ -329,6 +349,10 @@ export const CONSENT_STORE_GUIDANCE =
  *     verified here; that remains an open release decision.
  */
 export function assertPrivateStore(): void {
+  operation(() => assertPrivateStoreInner());
+}
+
+function assertPrivateStoreInner(): void {
   assertStoreScope({ includePending: true, records: [] });
 }
 
@@ -355,6 +379,22 @@ interface StoreScope {
  * its inherited access list rewritten to look private while its owner stays the attacker, so
  * ownership is checked per record. That attack was measured before this was written.
  */
+/**
+ * Every public consent entry point runs inside this. It installs one allowance for the whole
+ * operation — nested calls join it rather than starting fresh — and turns an exhausted
+ * allowance into the ordinary fixed refusal, so no caller ever sees the budget's own error.
+ */
+function operation<T>(fn: () => T): T {
+  return withBudget(() => {
+    try {
+      return fn();
+    } catch (err) {
+      if (err instanceof BudgetExceededError) throw new ConsentStoreError("operation-too-large");
+      throw err;
+    }
+  });
+}
+
 function assertStoreScope(scope: StoreScope): void {
   if (process.platform !== "win32") {
     assertPrivateDir(consentDir());
@@ -586,7 +626,7 @@ function ensureDir(): void {
   // rather than after a record has been written into it: a check that runs after the write does
   // not undo the write. Undo only what this call created, so a refusal leaves no half-made store.
   try {
-    assertPrivateStore();
+    assertPrivateStoreInner();
   } catch (err) {
     if (madePending) {
       try {
@@ -715,6 +755,10 @@ const MAX_RECORD_BYTES = 64 * 1024;
 const APPROVAL_GROWTH_BYTES = 96;
 
 export function writeRecord(record: ConsentRecord): void {
+  operation(() => writeRecordInner(record));
+}
+
+function writeRecordInner(record: ConsentRecord): void {
   // Measured against the reader's bound, with the reader's predicate, before anything is created:
   // a record the reader would refuse must never reach the disk. It is not a hypothetical —
   // `writeRecord` really did mint a 74,101-byte record for a workspace path of control characters,
@@ -874,6 +918,10 @@ function parseRecord(file: string): ConsentRecord | null {
  * would write a fresh pending record into a store it should not use.
  */
 export function readRecord(id: string): ConsentRecord | null {
+  return operation(() => readRecordInner(id));
+}
+
+function readRecordInner(id: string): ConsentRecord | null {
   // A store that has never been created holds no record, and so does a
   // store whose pending directory is gone (it is recreated on the next
   // write); whatever IS there, or is a link pretending to be, must pass the
@@ -910,15 +958,48 @@ export function readRecord(id: string): ConsentRecord | null {
  * store throws ConsentStoreError (see readRecord). A store that does not exist
  * yet is simply empty.
  */
+/**
+ * Read `pending` through an iterator, charging the allowance for each entry as it arrives.
+ *
+ * `readdirSync` would load the whole directory before anything could object, so a cap applied to
+ * the result would not bound the enumeration at all -- it would bound what was done with an
+ * already-loaded list. `opendirSync` hands entries back one at a time, so a directory larger than
+ * the allowance stops the read instead of completing it.
+ */
+function readPendingEntries(): string[] {
+  const out: string[] = [];
+  const dir = opendirSync(pendingDir());
+  try {
+    for (;;) {
+      const entry = dir.readSync();
+      if (entry === null) break;
+      spendDirEntry();
+      out.push(entry.name);
+    }
+  } finally {
+    try {
+      dir.closeSync();
+    } catch {
+      /* already closed */
+    }
+  }
+  return out;
+}
+
 export function listRecords(): ConsentRecord[] {
+  return operation(() => listRecordsInner());
+}
+
+function listRecordsInner(): ConsentRecord[] {
   if (absent(consentDir())) return [];
   const pendingAbsent = absent(pendingDir());
   assertStoreScope({ includePending: !pendingAbsent, records: [] });
   if (pendingAbsent) return [];
   let entries: string[];
   try {
-    entries = readdirSync(pendingDir());
-  } catch {
+    entries = readPendingEntries();
+  } catch (err) {
+    if (err instanceof BudgetExceededError) throw err;
     return [];
   }
   // The names come from a directory that has just passed its checks; every record they name is
@@ -954,6 +1035,10 @@ function isSymlink(p: string): boolean {
 }
 
 export function deleteRecord(id: string): void {
+  operation(() => deleteRecordInner(id));
+}
+
+function deleteRecordInner(id: string): void {
   const target = recordPath(id);
   assertStoreScope({ includePending: true, records: [target] });
   rmSync(target, { force: true });
@@ -978,6 +1063,10 @@ export function isExpired(record: ConsentRecord, now = Date.now()): boolean {
  * already claimed, already gone, or never existed.
  */
 export function consumeRecord(id: string): boolean {
+  return operation(() => consumeRecordInner(id));
+}
+
+function consumeRecordInner(id: string): boolean {
   const from = recordPath(id);
   // The claim happens before the credential is transmitted, so the record it claims is checked
   // here too, not only the directories around it.
@@ -1006,6 +1095,14 @@ export function approveRecord(
   commitment: string,
   now = Date.now()
 ): ConsentRecord {
+  return operation(() => approveRecordInner(record, commitment, now));
+}
+
+function approveRecordInner(
+  record: ConsentRecord,
+  commitment: string,
+  now = Date.now()
+): ConsentRecord {
   const approved: ConsentRecord = {
     ...record,
     state: "approved",
@@ -1016,6 +1113,6 @@ export function approveRecord(
     approvedAt: new Date(now).toISOString(),
     expiresAt: new Date(now + APPROVAL_TTL_MS).toISOString(),
   };
-  writeRecord(approved);
+  writeRecordInner(approved);
   return approved;
 }
