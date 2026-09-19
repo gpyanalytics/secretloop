@@ -52,7 +52,16 @@ account with mode `0700`; a directory you own that is too open is set to `0700`
 and re-checked, and a directory owned by another account is refused rather than
 changed. The refusal names the problem in fixed words and says what to do; it
 never prints a path, a record or an OS error. This is the trust boundary the
-tool has always documented, now enforced instead of assumed. It inspects the
+tool has always documented, now enforced instead of assumed. Each record file is inspected too, not only the
+directories around it: it is opened once without following a link at its own
+name and without blocking, and must be a regular file you own, with no group or
+other permission bits and no larger than a record ever is, before any of it is
+read — so a link planted at a record path, a record owned by another account,
+one left readable by others, and a named pipe standing in for one are all
+refused, and an unsafe record is refused rather than repaired. What that does
+not give you: judging and reading through one open file is not the same as
+making the whole lifecycle atomic, and not following the record's own name says
+nothing about the directories above it. It inspects the
 store's own two directories by mode bits and ownership, not the path above
 them; it does not see POSIX ACL entries, so an ACL grant to another account is
 not detected; and it closes no window against a process already running as

@@ -1,9 +1,13 @@
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
+  openSync,
+  readSync,
   readdirSync,
   renameSync,
   rmdirSync,
@@ -102,6 +106,8 @@ export function pendingDir(): string {
  */
 export type ConsentStoreProblem =
   | "not-a-directory"
+  | "not-a-regular-file"
+  | "oversized-record"
   | "symlink"
   | "foreign-owner"
   | "permissive"
@@ -148,6 +154,10 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       return `${where}, or its pending directory, is owned by another account, so consent records cannot be trusted; SecretLoop does not change its permissions.`;
     case "permissive":
       return `${where}, or its pending directory, is readable or writable by other accounts and SecretLoop could not make it private (0700), so consent records cannot be trusted.`;
+    case "not-a-regular-file":
+      return `a consent record in ${where} is not a regular file, so consent records cannot be trusted.`;
+    case "oversized-record":
+      return `a consent record in ${where} is far larger than any record SecretLoop writes, so consent records cannot be trusted.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -497,11 +507,93 @@ export function writeRecord(record: ConsentRecord): void {
   }
 }
 
-/** Parses a record, returning null for anything malformed. Never throws. */
+/**
+ * A consent record is a small object with a fixed set of fields. A deliberately long one — a
+ * nested file inside a long workspace path, with every optional field present — serializes to
+ * about 600 bytes. 64 KiB is a hundredfold margin, and it bounds what a file sitting at a record
+ * path can cost this process. Before this bound the reader would have read a file of any size.
+ */
+const MAX_RECORD_BYTES = 64 * 1024;
+
+/**
+ * Reads a record through ONE descriptor, deciding what the object is before any byte of it is
+ * read, and refusing anything that is not a record this account wrote privately.
+ *
+ * Why a descriptor rather than `lstat` then `readFileSync`: the two would name the path twice and
+ * decide on the first while reading the second. Here the classification and the read are the same
+ * open file, so what is judged is what is read.
+ *
+ * `O_NONBLOCK` is the difference between refusing a named pipe and hanging on one: measured before
+ * this change, `readRecord` on a FIFO at a record path never returned and had to be killed.
+ * `O_NOFOLLOW` refuses a symbolic link at the FINAL component — the record name itself. It says
+ * nothing about the directories above it, which are the store's own checks, and it is not a
+ * defence against a parent being replaced.
+ *
+ * Returns null when there is no record. Throws `ConsentStoreError` when something IS there and
+ * fails the checks: "nothing here" and "this cannot be trusted" are different answers, and a
+ * caller that treated the second as the first would report no pending request and hide a refusal.
+ */
+function readRecordText(file: string): string | null {
+  // Both flags are POSIX; on Windows they are undefined, and the descriptor rules in
+  // ./consent-acl-win have already judged the record before this is reached.
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const nonBlock = fsConstants.O_NONBLOCK ?? 0;
+  let fd: number;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | noFollow | nonBlock);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    // O_NOFOLLOW reports a symbolic link as ELOOP on Linux and macOS.
+    if (code === "ELOOP" || code === "EMLINK") throw new ConsentStoreError("symlink");
+    throw new ConsentStoreError("inaccessible");
+  }
+  try {
+    let st;
+    try {
+      st = fstatSync(fd);
+    } catch {
+      throw new ConsentStoreError("inaccessible");
+    }
+    if (!st.isFile()) throw new ConsentStoreError("not-a-regular-file");
+    if (process.platform !== "win32" && typeof process.geteuid === "function") {
+      if (st.uid !== process.geteuid()) throw new ConsentStoreError("foreign-owner");
+      if ((st.mode & 0o077) !== 0) throw new ConsentStoreError("permissive");
+    }
+    if (st.size > MAX_RECORD_BYTES) throw new ConsentStoreError("oversized-record");
+    const buffer = Buffer.alloc(Number(st.size));
+    let read = 0;
+    while (read < buffer.length) {
+      let n: number;
+      try {
+        n = readSync(fd, buffer, read, buffer.length - read, read);
+      } catch {
+        throw new ConsentStoreError("inaccessible");
+      }
+      if (n === 0) break;
+      read += n;
+    }
+    return buffer.subarray(0, read).toString("utf8");
+  } finally {
+    // Every path through this function closes the descriptor, including the refusals above.
+    try {
+      closeSync(fd);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Parses a record. Returns null when there is no record or its contents are malformed; throws
+ * ConsentStoreError when the object at that path fails the checks in `readRecordText`.
+ */
 function parseRecord(file: string): ConsentRecord | null {
+  const text = readRecordText(file);
+  if (text === null) return null;
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    raw = JSON.parse(text);
   } catch {
     return null;
   }
@@ -553,7 +645,8 @@ export function readRecord(id: string): ConsentRecord | null {
   const present = !pendingAbsent && existsSync(file);
   assertStoreScope({ includePending: !pendingAbsent, records: present ? [file] : [] });
   if (pendingAbsent || !present) return null;
-  if (!existsSync(file)) return null;
+  // No second existence test: the open inside parseRecord is the one that decides, so the object
+  // judged is the object read rather than one named a moment earlier.
   const parsed = parseRecord(file);
   // The same rule listRecords applies, so the two readers agree: a record whose
   // contents disagree with the name it is filed under is not one this code
