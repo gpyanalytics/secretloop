@@ -108,6 +108,7 @@ export type ConsentStoreProblem =
   | "not-a-directory"
   | "not-a-regular-file"
   | "oversized-record"
+  | "record-permissive"
   | "symlink"
   | "foreign-owner"
   | "permissive"
@@ -151,9 +152,17 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
     case "symlink":
       return `${where}, or its pending directory, is a symbolic link, so consent records cannot be trusted; SecretLoop does not follow it.`;
     case "foreign-owner":
-      return `${where}, or its pending directory, is owned by another account, so consent records cannot be trusted; SecretLoop does not change its permissions.`;
+      // Widened because a RECORD can now fail this too: the directories may be perfectly private
+      // while one file inside them is not, and sending the reader to inspect the wrong object is
+      // its own kind of wrong answer. The closing clause stays true of both.
+      return `${where}, its pending directory, or a record in it, is owned by another account, so consent records cannot be trusted; SecretLoop does not change its permissions.`;
     case "permissive":
       return `${where}, or its pending directory, is readable or writable by other accounts and SecretLoop could not make it private (0700), so consent records cannot be trusted.`;
+    case "record-permissive":
+      // Deliberately NOT the directory sentence: no repair is attempted on a record, and 0700 is a
+      // directory's mode. Saying SecretLoop "could not make it private" would describe an attempt
+      // that never happened.
+      return `a consent record in ${where} is readable or writable by other accounts, so consent records cannot be trusted; SecretLoop refuses it rather than changing its permissions.`;
     case "not-a-regular-file":
       return `a consent record in ${where} is not a regular file, so consent records cannot be trusted.`;
     case "oversized-record":
@@ -574,7 +583,7 @@ function readRecordText(file: string): string | null {
     if (!st.isFile()) throw new ConsentStoreError("not-a-regular-file");
     if (process.platform !== "win32" && typeof process.geteuid === "function") {
       if (st.uid !== process.geteuid()) throw new ConsentStoreError("foreign-owner");
-      if ((st.mode & 0o077) !== 0) throw new ConsentStoreError("permissive");
+      if ((st.mode & 0o077) !== 0) throw new ConsentStoreError("record-permissive");
     }
     if (st.size > MAX_RECORD_BYTES) throw new ConsentStoreError("oversized-record");
     const buffer = Buffer.alloc(Number(st.size));
@@ -658,7 +667,10 @@ export function readRecord(id: string): ConsentRecord | null {
   // call before anything is parsed, so nothing unchecked can be read. What remains is the
   // ordinary check-then-use window -- a record present now and replaced before the read -- which
   // naming it does NOT close, and which no path-based inspection can.
-  const present = !pendingAbsent && existsSync(file);
+  // `existsSync` follows a link, so a DANGLING one at a record path read as "no record" here while
+  // `listRecords`, which finds the name by enumeration, refused it as a link. The two readers must
+  // agree. `absent()` is the existing test for "not there, and not a link pretending to be".
+  const present = !pendingAbsent && !absent(file);
   assertStoreScope({ includePending: !pendingAbsent, records: present ? [file] : [] });
   if (pendingAbsent || !present) return null;
   // No second existence test: the open inside parseRecord is the one that decides, so the object

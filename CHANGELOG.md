@@ -49,7 +49,9 @@
   and the next, and the claim that guards a verification is still the atomic rename, not this
   check. Not following the final component says nothing about the directories above it. And mode
   bits are not a statement about extended access-control lists, which remain unread on both
-  platforms — on macOS an extended entry is invisible to them entirely.
+  platforms. On macOS an extended entry is invisible to them entirely, and whether they say
+  anything on Linux — where the group bits correspond to an access-control mask — is a separate
+  question still to be measured, not something this change settles either way.
 - **Windows now has its own check, and it is not the POSIX one.** Ownership
   and mode fields are meaningless there, so what protects a record is its
   security descriptor. Before every consent operation SecretLoop reads the

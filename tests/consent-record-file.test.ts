@@ -1,7 +1,7 @@
 import { test, suite, finish, assert, skip } from "./harness";
 import {
   mkdtempSync, mkdirSync, writeFileSync, symlinkSync, chmodSync, rmSync,
-  readFileSync, lstatSync, statSync, existsSync, readdirSync,
+  readFileSync, lstatSync, statSync, existsSync, readdirSync, appendFileSync,
 } from "fs";
 import { execFileSync, spawnSync } from "child_process";
 import { tmpdir } from "os";
@@ -109,8 +109,13 @@ test("a record left readable by others is refused, and its mode is not quietly r
   try {
     const p = place(f, ID_OK);
     chmodSync(p, 0o666);
-    assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "permissive");
+    assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "record-permissive");
     assert.strictEqual(statSync(p).mode & 0o777, 0o666, "an unsafe record is refused, never repaired");
+    // The reason must describe a RECORD. The directory sentence claims a repair to 0700 was
+    // attempted, which is true of a directory and false of a file nothing repairs.
+    const said = new consent.ConsentStoreError("record-permissive").message;
+    assert.match(said, /a consent record in/);
+    assert.doesNotMatch(said, /0700|could not make it private/, "a record is not repaired, and 0700 is a directory's mode");
   } finally {
     done(f);
   }
@@ -136,6 +141,79 @@ test("a file far larger than any record is refused before it is read", () => {
   } finally {
     done(f);
   }
+});
+
+test("a dangling link at a record path is refused, and both readers say the same thing", () => {
+  if (!POSIX) return skip("NOT RUN on win32: exercised there by the reparse-point rules of PR #91");
+  const f = fixture();
+  try {
+    // A link whose target does not exist. `existsSync` follows it and reports absent, so before
+    // this the single-record reader answered "no record" while the enumerating reader refused the
+    // very same object as a link. A reader that disagrees with its sibling about what is there is
+    // the bug, whichever answer is nicer.
+    const missingTarget = path.join(f.base, "no-such-target.json");
+    const link = path.join(f.pending, `${ID_OK}.json`);
+    symlinkSync(missingTarget, link);
+    assert.strictEqual(existsSync(link), false, "the fixture must really be dangling");
+    assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "symlink");
+    assert.strictEqual(refusal(() => consent.listRecords()), "symlink", "and the two readers agree");
+    assert.ok(lstatSync(link).isSymbolicLink(), "the link is not removed by being refused");
+    assert.strictEqual(existsSync(missingTarget), false, "and nothing is created through it");
+  } finally {
+    done(f);
+  }
+});
+
+test("a record exactly at the size limit is read, and one byte past it is refused", () => {
+  if (!POSIX) return skip("NOT RUN on win32: the same bound applies and is covered by the Windows rules");
+  const f = fixture();
+  const LIMIT = 64 * 1024;
+  try {
+    const p = path.join(f.pending, `${ID_OK}.json`);
+    // Grown to the limit through a real field, so this is a record the writer could produce.
+    const padded = record(ID_OK) as consent.ConsentRecord & { fingerprint: string };
+    const bare = Buffer.byteLength(JSON.stringify(padded, null, 2) + "\n");
+    padded.fingerprint = padded.fingerprint + "x".repeat(LIMIT - bare);
+    writeFileSync(p, JSON.stringify(padded, null, 2) + "\n", { mode: 0o600 });
+    assert.strictEqual(statSync(p).size, LIMIT, "the fixture must sit exactly on the limit");
+    assert.ok(consent.readRecord(ID_OK), "a record exactly at the limit is read, not refused");
+
+    writeFileSync(p, Buffer.concat([readFileSync(p), Buffer.from("x")]), { mode: 0o600 });
+    assert.strictEqual(statSync(p).size, LIMIT + 1);
+    assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "oversized-record", "one byte past it is refused");
+  } finally {
+    done(f);
+  }
+});
+
+test("a record that grows past the limit after it was written is refused on the next read", () => {
+  if (!POSIX) return skip("NOT RUN on win32: the same bound applies and is covered by the Windows rules");
+  const f = fixture();
+  try {
+    const p = place(f, ID_OK);
+    assert.ok(consent.readRecord(ID_OK), "it starts readable");
+    appendFileSync(p, "x".repeat(64 * 1024));
+    // The size is taken from the descriptor at read time, so growth since the write is seen.
+    assert.strictEqual(refusal(() => consent.readRecord(ID_OK)), "oversized-record");
+  } finally {
+    done(f);
+  }
+});
+
+test("the largest record the writer can produce is well inside the bound", () => {
+  // A single typical record is evidence of typical size, not of the maximum. Bound every variable
+  // field by what the platform allows instead: a path, a repo-relative file and a fingerprint that
+  // embeds the file, each at PATH_MAX.
+  const PATH_MAX = 4096;
+  const worst = {
+    version: consent.CONSENT_VERSION, id: "a".repeat(32), state: "approved" as const,
+    fingerprint: "s".repeat(PATH_MAX) + ":generic-api-key-assignment:" + "0".repeat(16),
+    path: "/" + "d".repeat(PATH_MAX - 1), file: "s".repeat(PATH_MAX), line: Number.MAX_SAFE_INTEGER,
+    ruleId: "generic-api-key-assignment", provider: "DigitalOcean", commitment: "a".repeat(64),
+    createdAt: new Date().toISOString(), approvedAt: new Date().toISOString(), expiresAt: new Date().toISOString(),
+  };
+  const bytes = Buffer.byteLength(JSON.stringify(worst, null, 2) + "\n");
+  assert.ok(bytes < 64 * 1024, `a worst-case record is ${bytes} bytes, which the reader would refuse`);
 });
 
 test("a record that is not there is still simply absent", () => {
@@ -309,7 +387,7 @@ test("a store whose pending directory is gone is still 'no record', and the next
 });
 
 test("every refusal sentence stays fixed, with no path, mode, record or OS text", () => {
-  const codes: consent.ConsentStoreProblem[] = ["not-a-regular-file", "oversized-record", "symlink", "foreign-owner", "permissive"];
+  const codes: consent.ConsentStoreProblem[] = ["not-a-regular-file", "oversized-record", "record-permissive", "symlink", "foreign-owner", "permissive"];
   for (const code of codes) {
     const sentence = new consent.ConsentStoreError(code).message;
     assert.match(sentence, /cannot be trusted/, `${code} does not say what follows`);
