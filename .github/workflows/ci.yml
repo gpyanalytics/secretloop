@@ -484,6 +484,28 @@ jobs:
           # job is evidence about ordinary-user behaviour. The two-account job is.
           "NOTE: elevated=$admin - results here are ELEVATED results; ordinary-account evidence"
           "      comes only from test-windows-arm-two-user."
+      - name: How long a consent store check takes on this image
+        # DIAGNOSTIC, asserting nothing. The x64 packaging smoke measured secretloop_verify at
+        # 17.9s against that smoke's 30s ceiling and the consent budget's 20s deadline, so the
+        # margin was already thin before this architecture was tried. This records the real
+        # number here instead of leaving "slower" as the finding.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node -e "
+            const t0 = Date.now();
+            const acl = require('./out/consent-acl-win.js');
+            const sid = acl.currentUserSid();
+            const t1 = Date.now();
+            const os = require('os'), path = require('path');
+            const dir = path.join(os.tmpdir(), 'sl-timing-' + process.pid);
+            const v = acl.checkWindowsStore(dir, [], sid);
+            const t2 = Date.now();
+            console.log('currentUserSid()      : ' + (t1 - t0) + ' ms');
+            console.log('checkWindowsStore()   : ' + (t2 - t1) + ' ms  -> ' + (v.ok ? 'accept' : v.problem));
+            console.log('store dir under test  : ' + dir);
+            console.log('budget deadline is 20000 ms for a WHOLE operation, and a verify runs several of these');
+          "
       - run: npm test
 
 
@@ -539,6 +561,22 @@ jobs:
           "ACL_LAB=$LAB" >> $env:GITHUB_ENV
           "ACL_SID1=$sid1" >> $env:GITHUB_ENV
           "ACL_SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Where the ancestor rule draws the line on THIS image, before anything is planted
+        # Moved ahead of the fixture on purpose. On x64 this diagnostic runs after the plant
+        # step, which is fine there because the plant succeeds. Here the plant is the thing that
+        # might refuse, and a refusal with no chain verdict beside it is a guess. The x64 job is
+        # left exactly as it was.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          "workspace : $PWD"
+          "RUNNER_TEMP: $env:RUNNER_TEMP"
+          "profile   : $env:USERPROFILE"
+          node (Join-Path $PWD "tests\\fixtures\\win-chain-diagnostic.js") (Join-Path $PWD "out\\consent-acl-win.js")
+          "--- the lab parents this job actually uses"
+          foreach ($d in @($env:ACL_LAB, (Join-Path $env:ACL_LAB "private"))) {
+            "=== $d"; icacls $d
+          }
       - name: Plant a record with the real product, then hand it to the second account
         shell: pwsh
         run: |
