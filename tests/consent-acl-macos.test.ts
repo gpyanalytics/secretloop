@@ -268,9 +268,9 @@ test("the suffix character is never consulted", () => {
     // the same either way, so that is what is asserted now, and the suffix is only reported.
     const suffixBefore = before.slice(10, 11);
     const suffixAfter = after.slice(10, 11);
-    assert.deepStrictEqual(macacl.parseLsAclOutput(before, path.basename(p)), { ok: true, aceCount: 0 },
+    assert.deepStrictEqual(macacl.parseLsAclOutput(before, path.basename(p)), { ok: true, aceCount: 0, allowCount: 0 },
       `no ACE must read as 0 whatever the suffix says (it said ${JSON.stringify(suffixBefore)})`);
-    assert.deepStrictEqual(macacl.parseLsAclOutput(after, path.basename(p)), { ok: true, aceCount: 1 },
+    assert.deepStrictEqual(macacl.parseLsAclOutput(after, path.basename(p)), { ok: true, aceCount: 1, allowCount: 1 },
       `one ACE must read as 1 whatever the suffix says (it said ${JSON.stringify(suffixAfter)})`);
     // And pin the reason the suffix is unusable: it is not a function of the ACL alone.
     assert.ok([" ", "+", "@", "."].includes(suffixAfter),
@@ -300,9 +300,9 @@ test("SIMULATED tool output: every ambiguity refuses and none reads as 'no ACL'"
     assert.deepStrictEqual(macacl.parseLsAclOutput(out, ".secretloop"), { ok: false },
       `${label} must refuse, never count as no ACL`);
   }
-  assert.deepStrictEqual(macacl.parseLsAclOutput(head + "\n", ".secretloop"), { ok: true, aceCount: 0 });
+  assert.deepStrictEqual(macacl.parseLsAclOutput(head + "\n", ".secretloop"), { ok: true, aceCount: 0, allowCount: 0 });
   assert.deepStrictEqual(macacl.parseLsAclOutput(head + "\n 0: 1234 allow read\n", ".secretloop"),
-    { ok: true, aceCount: 1 });
+    { ok: true, aceCount: 1, allowCount: 1 });
 });
 
 test("SIMULATED helper failures: unavailable, failed and timed out each refuse", () => {

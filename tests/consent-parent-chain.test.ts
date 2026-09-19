@@ -296,6 +296,48 @@ test("macOS: an ancestor carrying an extended ACE is refused as an unsafe parent
   }
 });
 
+test("macOS: a stock home's default deny entry does NOT refuse the chain", () => {
+  if (!MAC) return skip("NOT RUN: macOS extended ACLs only");
+  // Every stock macOS home carries `0: group:everyone deny delete`, which Apple puts there. A
+  // deny entry grants nobody anything. Requiring ancestors to carry NO entry refused every
+  // unmodified Mac — a GitHub-hosted runner proved it by refusing its own /Users/runner during
+  // the packaging smoke. Ancestors are therefore judged on `allow` entries only; the store keeps
+  // the stricter rule because the product creates it.
+  const macacl = require("../src/consent-acl-macos") as typeof import("../src/consent-acl-macos");
+  const base = lab();
+  try {
+    const mid = path.join(base, "mid");
+    mkdirSync(mid, { mode: 0o755 });
+    execFileSync("/bin/chmod", ["+a", "everyone deny delete", mid], { timeout: 10_000 });
+    const t = { parent: path.dirname(mid), basename: path.basename(mid) };
+    assert.deepStrictEqual(macacl.inspectMacAcl(t, "any"),
+      { ok: false, problem: "extended-acl" }, "the entry really is there");
+    assert.deepStrictEqual(macacl.inspectMacAcl(t, "allow-only"),
+      { ok: true }, "a deny-only entry must not refuse an ancestor");
+
+    const store = storeUnder(mid);
+    consent.setConsentRootForTests(store);
+    assert.deepStrictEqual(consent.listRecords(), [],
+      "a chain carrying only Apple's default entry must work");
+
+    // The negative twin: an ALLOW entry on the same ancestor still refuses.
+    execFileSync("/bin/chmod", ["+a", "everyone allow read", mid], { timeout: 10_000 });
+    assert.strictEqual(refusal(() => consent.listRecords()), "unsafe-parent-posix",
+      "an allow entry on an ancestor must still refuse");
+  } finally {
+    consent.setConsentRootForTests(undefined);
+    // `everyone deny delete` does exactly what it says, including to this suite: without
+    // stripping it first, removing the fixture fails with ENOTEMPTY. Only entries this case put
+    // on its own disposable directory are removed.
+    try {
+      execFileSync("/bin/chmod", ["-N", path.join(base, "mid")], { timeout: 10_000 });
+    } catch {
+      /* already gone */
+    }
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
 test("macOS: a broken inspector keeps its own reason instead of blaming the filesystem", () => {
   if (!MAC) return skip("NOT RUN: the inspector is only consulted on macOS");
   const macacl = require("../src/consent-acl-macos") as typeof import("../src/consent-acl-macos");

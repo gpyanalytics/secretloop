@@ -59,9 +59,17 @@ function record(id: string): consent.ConsentRecord {
     commitment: "a".repeat(64), createdAt: new Date().toISOString(),
   };
 }
-/** A world-readable base, so reaching the fixture is never what denies the attacker. */
+/**
+ * A base the SECOND ACCOUNT CAN REACH, so that reaching the fixture is never what denies it.
+ *
+ * Not `os.tmpdir()`: on macOS that is the per-user `/var/folders/<x>/<y>/T`, mode 0700 and owned
+ * by the runner, so the attacker cannot traverse into it at all. Measured on the runner — the
+ * control case failed with "Permission denied" on the fixture path itself, which is exactly the
+ * false denial this helper exists to avoid. `/private/tmp` is 1777 and root-owned, reachable by
+ * both accounts, and is also the sticky shape the last case needs.
+ */
 function lab(): string {
-  const d = mkdtempSync(path.join(tmpdir(), "sl-2u-"));
+  const d = mkdtempSync("/private/tmp/sl-2u-");
   chmodSync(d, 0o755);
   return d;
 }
@@ -108,10 +116,12 @@ test("a private parent denies the second account create, rename and delete", () 
     mkdirSync(path.join(store, "pending"), { recursive: true, mode: 0o700 });
     writeFileSync(path.join(store, "pending", `${ID}.json`),
       JSON.stringify(record(ID), null, 2) + "\n", { mode: 0o600 });
+    // `rm -rf` exits 0 whether or not it removed anything, so it can never demonstrate a denial.
+    // Each probe below reports its own failure.
     for (const [what, argv] of [
       ["create in the store", ["/usr/bin/touch", path.join(store, "pending", "planted.json")]],
       ["rename the store", ["/bin/mv", store, path.join(home, "stolen")]],
-      ["delete the store", ["/bin/rm", "-rf", store]],
+      ["delete the record", ["/bin/rm", path.join(store, "pending", `${ID}.json`)]],
       ["read the record", ["/bin/cat", path.join(store, "pending", `${ID}.json`)]],
     ] as Array<[string, string[]]>) {
       assert.ok(!asAttacker(argv).ok, `${what} must be denied by a 0700 parent`);
@@ -261,13 +271,15 @@ test("sticky: accepted with a trusted owner, and the attacker still cannot take 
     chmodSync(home, 0o1777); // sticky, world-writable, owned by the OWNER
     const store = path.join(home, ".secretloop");
     mkdirSync(path.join(store, "pending"), { recursive: true, mode: 0o700 });
+    writeFileSync(path.join(store, "pending", `${ID}.json`),
+      JSON.stringify(record(ID), null, 2) + "\n", { mode: 0o600 });
     consent.setConsentRootForTests(store);
-    assert.deepStrictEqual(consent.listRecords(), [], "sticky + trusted owner is accepted");
+    assert.strictEqual(consent.listRecords().length, 1, "sticky + trusted owner is accepted");
     // and sticky must actually stop the attacker taking it
     assert.ok(!asAttacker(["/bin/mv", store, path.join(home, "stolen")]).ok,
       "sticky must deny renaming an entry the attacker does not own");
-    assert.ok(!asAttacker(["/bin/rm", "-rf", store]).ok,
-      "and deny deleting it");
+    assert.ok(!asAttacker(["/bin/rm", path.join(store, "pending", `${ID}.json`)]).ok,
+      "and deny deleting what is inside it");
     // what sticky does NOT stop: creating a name that is not there yet
     assert.ok(asAttacker(["/bin/mkdir", path.join(home, ".secretloop-other")]).ok,
       "sticky does not restrict CREATE; the ownership rule is what answers a pre-planted store");

@@ -412,11 +412,18 @@ function assertSafeAncestors(): void {
           // "." from inside itself inspects the same object and prints a name the validator can
           // match exactly. Verified: `ls -lden -- .` with cwd "/" prints "." and nothing else.
           const isRoot = path.dirname(component) === component;
-          const verdict = checkMacAcl([
-            isRoot
-              ? { parent: component, basename: "." }
-              : { parent: path.dirname(component), basename: path.basename(component) },
-          ]);
+          const verdict = checkMacAcl(
+            [
+              isRoot
+                ? { parent: component, basename: "." }
+                : { parent: path.dirname(component), basename: path.basename(component) },
+            ],
+            // Ancestors are pre-existing system state, and every stock macOS home carries
+            // `group:everyone deny delete` by default. A deny entry cannot grant anything, so
+            // requiring ancestors to carry none at all would refuse every unmodified Mac. The
+            // store itself keeps the stricter rule, because SecretLoop creates it.
+            "allow-only"
+          );
           if (verdict.ok) return { ok: true };
           // An ACE on an ANCESTOR is an unsafe parent, not the store's own `extended-acl`: the
           // object at fault is not the store and the guidance differs. But a tool that could not
