@@ -33,6 +33,38 @@
   nothing. A store that is a link, is owned by another account, or cannot be
   made private is refused with guidance to inspect it and move it aside, not
   to delete it, loosen it, or run anything elevated.
+- **The record file itself is now checked on macOS and Linux, not just the directories around
+  it.** Until now a consent record was opened by name and read. So a symbolic link at a record
+  path was followed to wherever it pointed, a record owned by another account was read, one left
+  readable by others was read, and a named pipe at a record path made the reader wait for a writer
+  that never came — measured: it never returned and had to be killed. Each of those is now
+  refused. The record is opened once, with the final component not followed and without blocking,
+  and what it is — a regular file, owned by you, with no group or other permission bits, and no
+  larger than any record SecretLoop writes — is decided from that same open file before a byte of
+  it is read. An unsafe record is refused, never repaired: its owner and mode are left exactly as
+  found. A record that simply is not there is still "no record", and a store whose `pending`
+  directory is gone still behaves as it did.
+- **And the writer now measures what it is about to write, so it cannot mint a record the reader
+  refuses.** "No larger than any record SecretLoop writes" was an assumption about field lengths,
+  and it was wrong. Only three fields carry text of any length — the workspace path, the
+  repo-relative file and the fingerprint that embeds it — and although the filesystem bounds
+  those, JSON escaping is not one byte per byte. A control character costs six, and a POSIX file
+  name may hold any byte but "/" and NUL. Measured: those three fields at PATH_MAX serialize to
+  12,779 bytes in ASCII and 74,204 in control characters. The writer really did create a
+  74,101-byte record that every later read refused, and one such record refused the whole listing
+  rather than just itself. `writeRecord` now measures the serialized bytes against the reader's
+  own bound and refuses beforehand, so nothing is created; a pending record is held a further 96
+  bytes back, because approval adds 88 and a request that can be made must be one that can be
+  granted. The refusal says the path is too long and says the store is fine, rather than sending
+  you to inspect a healthy store.
+- **What the record check does not establish.** Judging and reading through one descriptor is not
+  the same as making the lifecycle atomic: a record can still be replaced between one operation
+  and the next, and the claim that guards a verification is still the atomic rename, not this
+  check. Not following the final component says nothing about the directories above it. And mode
+  bits are not a statement about extended access-control lists, which remain unread on both
+  platforms. On macOS an extended entry is invisible to them entirely, and whether they say
+  anything on Linux — where the group bits correspond to an access-control mask — is a separate
+  question still to be measured, not something this change settles either way.
 - **Windows now has its own check, and it is not the POSIX one.** Ownership
   and mode fields are meaningless there, so what protects a record is its
   security descriptor. Before every consent operation SecretLoop reads the

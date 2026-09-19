@@ -204,7 +204,12 @@ refuses with the same words and approves nothing. The check covers the store's
 two directories only, by mode bits and ownership: it does not see POSIX ACL
 entries (an ACL grant to another account passes), and it does not close a
 window against a process already running as you or against any account that
-can write your home directory. A missing `pending` directory under an
+can write your home directory. Each record is checked as well: it is opened once, without following a
+link at its own name and without waiting on a pipe, and must be a regular file
+you own with no group or other permission bits and a plausible size, decided
+before any of it is read. A record that fails is refused, not repaired, and the
+refusal is reported rather than being turned into "no pending request". A
+missing `pending` directory under an
 existing, private `.secretloop` is not an error; it is recreated on the next
 request. If you meet the refusal on a
 store you did not create, move it aside rather than deleting or loosening it,

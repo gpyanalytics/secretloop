@@ -1,9 +1,13 @@
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
-  readFileSync,
+  openSync,
+  readSync,
   readdirSync,
   renameSync,
   rmdirSync,
@@ -102,6 +106,10 @@ export function pendingDir(): string {
  */
 export type ConsentStoreProblem =
   | "not-a-directory"
+  | "not-a-regular-file"
+  | "oversized-record"
+  | "record-too-large"
+  | "record-permissive"
   | "symlink"
   | "foreign-owner"
   | "permissive"
@@ -145,9 +153,25 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
     case "symlink":
       return `${where}, or its pending directory, is a symbolic link, so consent records cannot be trusted; SecretLoop does not follow it.`;
     case "foreign-owner":
-      return `${where}, or its pending directory, is owned by another account, so consent records cannot be trusted; SecretLoop does not change its permissions.`;
+      // Widened because a RECORD can now fail this too: the directories may be perfectly private
+      // while one file inside them is not, and sending the reader to inspect the wrong object is
+      // its own kind of wrong answer. The closing clause stays true of both.
+      return `${where}, its pending directory, or a record in it, is owned by another account, so consent records cannot be trusted; SecretLoop does not change its permissions.`;
     case "permissive":
       return `${where}, or its pending directory, is readable or writable by other accounts and SecretLoop could not make it private (0700), so consent records cannot be trusted.`;
+    case "record-permissive":
+      // Deliberately NOT the directory sentence: no repair is attempted on a record, and 0700 is a
+      // directory's mode. Saying SecretLoop "could not make it private" would describe an attempt
+      // that never happened.
+      return `a consent record in ${where} is readable or writable by other accounts, so consent records cannot be trusted; SecretLoop refuses it rather than changing its permissions.`;
+    case "not-a-regular-file":
+      return `a consent record in ${where} is not a regular file, so consent records cannot be trusted.`;
+    case "oversized-record":
+      return `a consent record in ${where} is far larger than any record SecretLoop writes, so consent records cannot be trusted.`;
+    case "record-too-large":
+      // The write side of the same bound, and a different situation: nothing untrustworthy was
+      // found — SecretLoop declined to create a record it could never read back.
+      return `this finding's workspace path or file name is so long that its consent record would be larger than SecretLoop reads back, so no record was written and this verification cannot be requested.`;
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -192,9 +216,19 @@ export const CONSENT_STORE_GUIDANCE_WINDOWS =
   "create aside rather than deleting or loosening it, then ask the client to request the verification again.";
 
 /** The guidance for the platform this process is running on. */
-export function consentStoreGuidance(): string {
+export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
+  // "record-too-large" is the one refusal that is not about the store, so it must not send the
+  // user to inspect a store that is perfectly healthy. The default stays the store guidance,
+  // including when no problem is given.
+  if (problem === "record-too-large") return CONSENT_RECORD_TOO_LARGE_GUIDANCE;
   return process.platform === "win32" ? CONSENT_STORE_GUIDANCE_WINDOWS : CONSENT_STORE_GUIDANCE;
 }
+
+/** Fixed guidance for the one refusal that is about the finding's path, not about the store. */
+export const CONSENT_RECORD_TOO_LARGE_GUIDANCE =
+  "The consent store itself is fine. The workspace path, or the file's own name, is long enough " +
+  "that the record describing it would not fit. Open the workspace from a shorter path, or shorten " +
+  "the name, and ask the client to request the verification again.";
 
 /** Fixed guidance, safe to print beside the sentence above. */
 export const CONSENT_STORE_GUIDANCE =
@@ -477,7 +511,42 @@ function ensureDirWindows(): void {
   }
 }
 
+/**
+ * The one size bound, shared by the writer and the reader so the two cannot disagree.
+ *
+ * A record has a fixed set of fields, and only three carry text of any length: `path`, `file`,
+ * and `fingerprint`, which embeds `file`. Those are bounded by the filesystem — PATH_MAX is
+ * 4096 bytes on Linux, 1024 on macOS — but their SERIALIZED length is not bounded by that.
+ * JSON escaping is not one byte per byte: a control character costs six (`\u0001`), and POSIX
+ * filenames may hold any byte except "/" and NUL. Measured: the same three fields at PATH_MAX
+ * serialize to 12,779 bytes in ASCII, 25,064 in quotes or backslashes, and 74,204 in control
+ * characters — past this bound. So the bound is NOT implied by the field lengths, and
+ * `writeRecord` measures the serialized bytes rather than trusting them.
+ */
+const MAX_RECORD_BYTES = 64 * 1024;
+
+/**
+ * What approval adds to a record: `state` grows from "pending" to "approved", and the two ISO
+ * timestamps `approvedAt` and `expiresAt` appear. Measured at 88 bytes; 96 is held back.
+ *
+ * A PENDING record is measured against the limit LESS this, because otherwise the writer can mint
+ * a request that can never be granted — a pending record at exactly the limit was accepted, and
+ * approving it produced 65,624 bytes, past the bound. That is the same defect one level up, so it
+ * gets the same treatment rather than a second kind of answer.
+ */
+const APPROVAL_GROWTH_BYTES = 96;
+
 export function writeRecord(record: ConsentRecord): void {
+  // Measured against the reader's bound, with the reader's predicate, before anything is created:
+  // a record the reader would refuse must never reach the disk. It is not a hypothetical —
+  // `writeRecord` really did mint a 74,101-byte record for a workspace path of control characters,
+  // which every later read refused, and one such record refused the whole listing rather than just
+  // itself. Refusing here costs this one verification instead of the store.
+  const body = JSON.stringify(record, null, 2) + "\n";
+  const limit = MAX_RECORD_BYTES - (record.state === "pending" ? APPROVAL_GROWTH_BYTES : 0);
+  if (Buffer.byteLength(body, "utf8") > limit) {
+    throw new ConsentStoreError("record-too-large");
+  }
   ensureDir();
   const target = recordPath(record.id);
   // Replacing a record that fails the checks would quietly repair unsafe state. Refuse instead,
@@ -488,7 +557,7 @@ export function writeRecord(record: ConsentRecord): void {
   // record — and created with the mode rather than chmod'ed afterwards, which
   // would leave a window where it is world-readable.
   const tmp = `${target}.tmp.${process.pid}.${randomBytes(6).toString("hex")}`;
-  writeFileSync(tmp, JSON.stringify(record, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
+  writeFileSync(tmp, body, { encoding: "utf8", mode: 0o600 });
   renameSync(tmp, target);
   try {
     chmodSync(target, 0o600);
@@ -497,11 +566,101 @@ export function writeRecord(record: ConsentRecord): void {
   }
 }
 
-/** Parses a record, returning null for anything malformed. Never throws. */
+/**
+ * Reads a record through ONE descriptor, deciding what the object is before any byte of it is
+ * read, and refusing anything that is not a record this account wrote privately.
+ *
+ * Why a descriptor rather than `lstat` then `readFileSync`: the two would name the path twice and
+ * decide on the first while reading the second. Here the classification and the read are the same
+ * open file, so what is judged is what is read.
+ *
+ * `O_NONBLOCK` is the difference between refusing a named pipe and hanging on one: measured before
+ * this change, `readRecord` on a FIFO at a record path never returned and had to be killed.
+ * `O_NOFOLLOW` refuses a symbolic link at the FINAL component — the record name itself. It says
+ * nothing about the directories above it, which are the store's own checks, and it is not a
+ * defence against a parent being replaced.
+ *
+ * Returns null when there is no record. Throws `ConsentStoreError` when something IS there and
+ * fails the checks: "nothing here" and "this cannot be trusted" are different answers, and a
+ * caller that treated the second as the first would report no pending request and hide a refusal.
+ */
+function readRecordText(file: string): string | null {
+  // Both flags are POSIX; on Windows they are undefined, and the descriptor rules in
+  // ./consent-acl-win have already judged the record before this is reached.
+  const noFollow = fsConstants.O_NOFOLLOW ?? 0;
+  const nonBlock = fsConstants.O_NONBLOCK ?? 0;
+  let fd: number;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | noFollow | nonBlock);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return null;
+    // O_NOFOLLOW reports a symbolic link as ELOOP on Linux and macOS.
+    if (code === "ELOOP" || code === "EMLINK") throw new ConsentStoreError("symlink");
+    // The open is the authority for a record this account can read. When it is DENIED, the
+    // descriptor can say nothing, so one `lstat` names the reason. It cannot change the outcome —
+    // the record is refused either way — so a component swapped between the two alters the wording
+    // of a refusal and nothing else. A record owned by another account is the common case here:
+    // it is unreadable precisely because it belongs to someone else.
+    if (code === "EACCES" || code === "EPERM") {
+      try {
+        const owner = lstatSync(file);
+        if (typeof process.geteuid === "function" && owner.uid !== process.geteuid()) {
+          throw new ConsentStoreError("foreign-owner");
+        }
+      } catch (inner) {
+        if (inner instanceof ConsentStoreError) throw inner;
+        /* the reason cannot be named; fall through */
+      }
+    }
+    throw new ConsentStoreError("inaccessible");
+  }
+  try {
+    let st;
+    try {
+      st = fstatSync(fd);
+    } catch {
+      throw new ConsentStoreError("inaccessible");
+    }
+    if (!st.isFile()) throw new ConsentStoreError("not-a-regular-file");
+    if (process.platform !== "win32" && typeof process.geteuid === "function") {
+      if (st.uid !== process.geteuid()) throw new ConsentStoreError("foreign-owner");
+      if ((st.mode & 0o077) !== 0) throw new ConsentStoreError("record-permissive");
+    }
+    if (st.size > MAX_RECORD_BYTES) throw new ConsentStoreError("oversized-record");
+    const buffer = Buffer.alloc(Number(st.size));
+    let read = 0;
+    while (read < buffer.length) {
+      let n: number;
+      try {
+        n = readSync(fd, buffer, read, buffer.length - read, read);
+      } catch {
+        throw new ConsentStoreError("inaccessible");
+      }
+      if (n === 0) break;
+      read += n;
+    }
+    return buffer.subarray(0, read).toString("utf8");
+  } finally {
+    // Every path through this function closes the descriptor, including the refusals above.
+    try {
+      closeSync(fd);
+    } catch {
+      /* already gone */
+    }
+  }
+}
+
+/**
+ * Parses a record. Returns null when there is no record or its contents are malformed; throws
+ * ConsentStoreError when the object at that path fails the checks in `readRecordText`.
+ */
 function parseRecord(file: string): ConsentRecord | null {
+  const text = readRecordText(file);
+  if (text === null) return null;
   let raw: unknown;
   try {
-    raw = JSON.parse(readFileSync(file, "utf8"));
+    raw = JSON.parse(text);
   } catch {
     return null;
   }
@@ -550,10 +709,14 @@ export function readRecord(id: string): ConsentRecord | null {
   // call before anything is parsed, so nothing unchecked can be read. What remains is the
   // ordinary check-then-use window -- a record present now and replaced before the read -- which
   // naming it does NOT close, and which no path-based inspection can.
-  const present = !pendingAbsent && existsSync(file);
+  // `existsSync` follows a link, so a DANGLING one at a record path read as "no record" here while
+  // `listRecords`, which finds the name by enumeration, refused it as a link. The two readers must
+  // agree. `absent()` is the existing test for "not there, and not a link pretending to be".
+  const present = !pendingAbsent && !absent(file);
   assertStoreScope({ includePending: !pendingAbsent, records: present ? [file] : [] });
   if (pendingAbsent || !present) return null;
-  if (!existsSync(file)) return null;
+  // No second existence test: the open inside parseRecord is the one that decides, so the object
+  // judged is the object read rather than one named a moment earlier.
   const parsed = parseRecord(file);
   // The same rule listRecords applies, so the two readers agree: a record whose
   // contents disagree with the name it is filed under is not one this code
