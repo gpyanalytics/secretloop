@@ -201,10 +201,41 @@ is never changed and is refused; a link is never followed. When the check
 fails, `secretloop_verify` answers with an error in fixed words (no path,
 record, hash or OS message) and transmits nothing, and `secretloop approve`
 refuses with the same words and approves nothing. The check covers the store's
-two directories only, by mode bits and ownership: it does not see POSIX ACL
-entries (an ACL grant to another account passes), and it does not close a
-window against a process already running as you or against any account that
-can write your home directory. Each record is checked as well: it is opened once, without following a
+two directories, by mode bits and ownership, and not the path above them, so an
+account that can write your home directory can still replace the store; nor does
+it close a window against a process already running as you.
+
+On **Linux** the mode is enough on its own to exclude a named-user or
+named-group ACL entry, because the ACL mask and the mode's group bits move
+together — measured as a second account on ext-family and overlay filesystems
+with POSIX draft ACLs, and not claimed for NFSv4 ACLs, network mounts or
+filesystems that were not measured.
+
+On **macOS** the mode says nothing about extended entries, so SecretLoop
+inspects the store, `pending` and each record with the built-in `/bin/ls` and
+**refuses any object carrying an extended access-control entry**, including one
+inherited from a parent directory. The check runs before anything is written, so
+a store created under a parent with inheritance entries is refused while it is
+still empty rather than after a record has been put in it.
+
+This is a support restriction, not a judgement that your ACL is unsafe.
+SecretLoop does not evaluate entries, so it also refuses ones that grant nobody
+anything:
+
+- a `deny`-only entry;
+- an entry naming only your own account;
+- an `only_inherit` entry, which never applies to the object it sits on;
+- entries added by backup software, or by an employer's device management, or
+  inherited from a home directory your organisation configured.
+
+If your store is refused for this reason, inspect it yourself with
+`ls -lde ~/.secretloop`. SecretLoop will not strip entries for you, and you
+should not remove them to make the message go away: if you did not configure
+them, move the store aside instead and let SecretLoop create a fresh one, then
+ask the client to request the verification again. If `/bin/ls` cannot be run, or
+its answer does not fully validate, SecretLoop refuses rather than assuming
+there is no entry. A filesystem that cannot report access-control lists at all
+has not been tested. Each record is checked as well: it is opened once, without following a
 link at its own name and without waiting on a pipe, and must be a regular file
 you own with no group or other permission bits and a plausible size, decided
 before any of it is read. A record that fails is refused, not repaired, and the

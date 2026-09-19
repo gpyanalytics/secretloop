@@ -63,9 +63,28 @@ not give you: judging and reading through one open file is not the same as
 making the whole lifecycle atomic, and not following the record's own name says
 nothing about the directories above it. It inspects the
 store's own two directories by mode bits and ownership, not the path above
-them; it does not see POSIX ACL entries, so an ACL grant to another account is
-not detected; and it closes no window against a process already running as
-you or against any account that can write your home directory. **On Windows the check is a different one**, because mode bits mean nothing
+them, so any account that can write your home directory can still rename the
+store away and put its own there; and it closes no window against a process
+already running as you.
+
+**Access-control lists differ by platform, and the difference is measured.** On
+**Linux** the POSIX ACL mask and the group bits of the mode move together, so
+mode `0700` does mean that no named user or named group has effective access:
+six ways of writing such an entry were tried as a second ordinary account on two
+filesystems, and none granted access while the group and other bits were zero.
+That result covers ext-family and overlay filesystems with POSIX draft ACLs; it
+is **not** a statement about NFSv4 ACLs, network mounts, or filesystems that
+were not measured. On **macOS** it is the other way round: ACLs are NFSv4-style,
+have no mask, and never reach the mode. SecretLoop therefore inspects the store,
+its `pending` directory and each record with the built-in `/bin/ls` and refuses
+any that carries an extended entry — including entries inherited from a parent
+directory, which is how a record created at mode `0600` was measured granting
+`everyone` read and write. It refuses rather than repairing, because removing an
+entry now would say nothing about who read the store before it, could not
+establish who owns it, and could not revoke a descriptor another process already
+holds. That inspection runs on a path rather than on a descriptor, so it does
+not make the lifecycle atomic; if the tool is missing or its answer does not
+fully validate, SecretLoop refuses instead of assuming there is no entry. **On Windows the check is a different one**, because mode bits mean nothing
 there. Before every consent operation SecretLoop reads the owner and the access
 list of `.secretloop`, of its `pending` directory and of each record it is about
 to use, and requires every entry to allow only your account, SYSTEM or
