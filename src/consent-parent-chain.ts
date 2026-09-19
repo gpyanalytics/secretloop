@@ -28,6 +28,7 @@
  */
 
 import { lstatSync, realpathSync } from "fs";
+import { checkBudgetDeadline } from "./consent-budget";
 import * as path from "path";
 
 /**
@@ -186,6 +187,10 @@ export function checkParentChain<P = never>(
   const targets = chainTargets(dir).filter((c) => c !== literal && c !== resolvedStore);
   if (targets.length > MAX_CHAIN_COMPONENTS) return { ok: false, problem: "parent-unreadable" };
   for (const component of targets) {
+    // The deadline has to be observed HERE, not only where a subprocess is spawned. On Linux
+    // there is no helper at all, so a walk that checked the clock only at helper calls checked it
+    // never -- CI caught exactly that. One cheap check per component covers both platforms.
+    checkBudgetDeadline();
     let st;
     try {
       st = lstatSync(component);

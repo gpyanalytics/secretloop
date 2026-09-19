@@ -396,6 +396,9 @@ function operation<T>(fn: () => T): T {
 }
 
 function assertStoreScope(scope: StoreScope): void {
+  // Observed on every platform and on every scope assertion, including Windows, so the allowance
+  // is not silently unenforced wherever no subprocess happens to run.
+  checkBudgetDeadline();
   if (process.platform !== "win32") {
     assertPrivateDir(consentDir());
     if (scope.includePending) assertPrivateDir(pendingDir());
