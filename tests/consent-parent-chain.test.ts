@@ -34,6 +34,20 @@ function storeUnder(base: string): string {
   mkdirSync(path.join(store, "pending"), { recursive: true, mode: 0o700 });
   return store;
 }
+/** Does this ONE directory pass the owner-and-mode test, judged on its own? */
+function singleOk(dir: string, euid: number): boolean {
+  try {
+    const st = lstatSync(dir);
+    if (st.isSymbolicLink()) return st.uid === euid || st.uid === 0;
+    if (!(st.uid === euid || st.uid === 0)) return false;
+    const writable = (st.mode & 0o022) !== 0;
+    const sticky = (st.mode & 0o1000) !== 0;
+    return !writable || (sticky && (st.uid === euid || st.uid === 0));
+  } catch {
+    return false;
+  }
+}
+
 function refusal(fn: () => unknown): string {
   try {
     fn();
@@ -200,9 +214,28 @@ test("a symbolic link on the path must itself be owned by a trusted principal", 
     const targets = chainTargets(store);
     assert.ok(targets.includes(link), "the link must be one of the components");
 
+    // The fixture only isolates the link if EVERY OTHER component already passes under the real
+    // euid. That depends on how the host lays out /tmp and /usr, which varies: a GitHub Linux
+    // runner refused this chain where a container accepted it, so the precondition is checked
+    // rather than assumed, and an environment that cannot host the fixture says so instead of
+    // failing for an unrelated reason.
+    const describe = (c: string): string => {
+      try {
+        const st = lstatSync(c);
+        return `${c} mode=${(st.mode & 0o7777).toString(8).padStart(4, "0")} uid=${st.uid}`;
+      } catch {
+        return `${c} <unreadable>`;
+      }
+    };
+    const others = targets.filter((c) => c !== link && c !== path.resolve(store));
+    const blockers = others.filter((c) => !checkParentChain(c, EUID).ok || !singleOk(c, EUID));
+    if (blockers.length > 0) {
+      return skip("NOT RUN: this host's /tmp or /usr cannot host the fixture, so the link cannot "
+        + "be isolated: " + blockers.map(describe).join("; "));
+    }
+
     const other = EUID + 1000;
-    const untrusted = targets.filter((c) => {
-      if (c === path.resolve(store)) return false;
+    const untrusted = others.filter((c) => {
       try {
         const st = lstatSync(c);
         return st.uid !== other && st.uid !== 0;
@@ -210,11 +243,12 @@ test("a symbolic link on the path must itself be owned by a trusted principal", 
         return false;
       }
     });
-    assert.deepStrictEqual(untrusted, [link],
-      `only the link may be untrusted under the fabricated euid; got ${untrusted.join(", ")}`);
+    assert.deepStrictEqual(untrusted, [],
+      `only the link may be untrusted under the fabricated euid; also got ${untrusted.map(describe).join("; ")}`);
 
     assert.deepStrictEqual(checkParentChain(store, EUID), { ok: true },
-      "control: a link this account owns, on an otherwise root-owned chain, is fine");
+      "control: a link this account owns, on an otherwise root-owned chain, is fine; components: "
+        + targets.map(describe).join("; "));
     assert.deepStrictEqual(checkParentChain(store, other),
       { ok: false, problem: "unsafe-parent-posix" },
       "a link owned by somebody else must refuse, not be skipped past");
