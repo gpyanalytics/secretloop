@@ -797,6 +797,24 @@ jobs:
           node "$GITHUB_WORKSPACE/tests/fixtures/win-helper-cost.js" --out "$GITHUB_WORKSPACE/out" --mode compare || true
           echo "--- and which PATH costs the time: one invocation per path"
           node "$GITHUB_WORKSPACE/tests/fixtures/win-helper-cost.js" --out "$GITHUB_WORKSPACE/out" --mode perpath || true
+          # WHICH PART OF THE INVOCATION costs the time. The empty path list already cost 22.2 s
+          # with no descriptor work at all, while bare -Command "exit 0" costs 0.7 s warm. These
+          # five probes differ from each other in exactly one element.
+          echo "--- isolating the fixed per-invocation cost"
+          PS="$SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe"
+          enc () { node -e 'process.stdout.write(Buffer.from(process.argv[1],"utf16le").toString("base64"))' "$1"; }
+          probe () {
+            local label="$1"; shift
+            local s e
+            s=$(date +%s%N); "$@" >/dev/null 2>&1 || true; e=$(date +%s%N)
+            echo "PROBE $label: $(( (e - s) / 1000000 )) ms"
+          }
+          probe "A -Command exit-0                    " "$PS" -NoProfile -NonInteractive -Command "exit 0"
+          probe "B -EncodedCommand exit-0             " "$PS" -NoProfile -NonInteractive -EncodedCommand "$(enc 'exit 0')"
+          probe "C -Command ConvertTo-Json            " "$PS" -NoProfile -NonInteractive -Command "[void](ConvertTo-Json -InputObject 1)"
+          probe "D -Command DirectorySecurity type    " "$PS" -NoProfile -NonInteractive -Command "[void][System.Security.AccessControl.DirectorySecurity]"
+          probe "E -Command SecurityIdentifier type   " "$PS" -NoProfile -NonInteractive -Command "[void][System.Security.Principal.SecurityIdentifier]"
+          probe "F -Command Get-Item C:\\              " "$PS" -NoProfile -NonInteractive -Command "[void](Get-Item -LiteralPath 'C:\' -Force)"
           echo "--- and pwsh 7, for contrast (the product does NOT use this)"
           for i in 1 2; do
             s=$(date +%s%N)
