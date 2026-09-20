@@ -436,12 +436,25 @@ jobs:
           set -uo pipefail
           echo "--- environment"
           node -p "'node ' + process.version + ' ' + process.arch + ' on ' + process.platform"
+          # TWO DEFECTS IN THE FIRST ATTEMPT, both mine, both corrected here.
+          #   1. $PWD under Git-bash is a POSIX path (/d/a/...). node on Windows cannot resolve
+          #      that through NODE_OPTIONS --require, so it exited immediately. cygpath -w now
+          #      converts it, and the resolved path is printed and checked before use.
+          #   2. The output was piped straight into grep, so the startup error that explained the
+          #      emptiness was filtered away. Output is now captured whole and a bounded slice is
+          #      printed, including the tail, so a failure cannot hide again.
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/budget-trace-shim.js")"
+          echo "shim path: $SHIM"
+          node --require "$SHIM" -e "console.log('shim loads: yes')" || echo "shim DID NOT LOAD"
           echo "--- three runs of the real file, stderr trace on, so variance is visible"
           for i in 1 2 3; do
             echo "===== attempt $i ====="
-            NODE_OPTIONS="--require $PWD/tests/fixtures/budget-trace-shim.js" \
-              npx ts-node --transpile-only tests/verify-consent.test.ts 2>&1 \
-              | grep -E "BTRACE|CONSENT_REQUIRED and makes zero|passed," | head -60 || true
+            NODE_OPTIONS="--require $SHIM" \
+              npx ts-node --transpile-only tests/verify-consent.test.ts > "run$i.txt" 2>&1 || true
+            echo "  exit captured; $(wc -l < "run$i.txt") lines"
+            grep -E "BTRACE (operation|REFUSED)|BTRACE.*powershell|CONSENT_REQUIRED and makes zero|passed," "run$i.txt" | head -40 || true
+            echo "  --- last 8 lines, so a startup failure cannot hide ---"
+            tail -8 "run$i.txt" | sed 's/^/    /'
           done
 
   self-scan:
