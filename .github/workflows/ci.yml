@@ -775,7 +775,7 @@ jobs:
           echo "node         : $(node -p 'process.version') $(node -p 'process.arch') at $(node -p 'process.execPath')"
           echo "account      : $(whoami)"
           echo "source identities, by content:"
-          for f in tests/fixtures/main-consent-acl-win.ts tests/fixtures/main-consent.ts \
+          for f in tests/fixtures/main-consent-acl-win.ts.txt tests/fixtures/main-consent.ts.txt \
                    src/consent-acl-win.ts src/consent.ts \
                    tests/fixtures/win-twouser-plant.js tests/fixtures/twouser-trace-shim.js; do
             echo "  $(git hash-object "$f")  $f"
@@ -787,8 +787,8 @@ jobs:
           echo "--- build MAIN (only the two product files swapped, nothing else)"
           cp src/consent-acl-win.ts /tmp/cand-acl.ts
           cp src/consent.ts /tmp/cand-consent.ts
-          cp tests/fixtures/main-consent-acl-win.ts src/consent-acl-win.ts
-          cp tests/fixtures/main-consent.ts src/consent.ts
+          cp tests/fixtures/main-consent-acl-win.ts.txt src/consent-acl-win.ts
+          cp tests/fixtures/main-consent.ts.txt src/consent.ts
           npm run compile
           cp -r out out-main
           cp /tmp/cand-acl.ts src/consent-acl-win.ts
@@ -848,11 +848,15 @@ jobs:
             $n++
             $pair = [math]::Ceiling($n / 2)
             $outDir = Join-Path $PWD ($(if ($side -eq "MAIN") { "out-main" } else { "out-cand" }))
-            $store = Join-Path $LAB "paired\s$n"
-            $repo  = Join-Path $LAB "paired\r$n"
-            New-Item -ItemType Directory -Force (Split-Path $store) | Out-Null
-            icacls (Split-Path $store) /grant "*$($env:ACL_SID1):(OI)(CI)F" /q | Out-Null
-            $o = Join-Path $LAB "paired\o$n.txt"; $e = Join-Path $LAB "paired\e$n.txt"
+            # Under $LAB\private, which the provisioning step already made safe with
+            # /inheritance:r /grant:r. The first attempt put these under $LAB\paired, whose
+            # parent inherits Authenticated Users:(M) from the lab root, so the ancestor rule
+            # refused every execution with unsafe-parent before the property under test was
+            # ever reached -- on BOTH sides, which is how the defect was caught.
+            $store = Join-Path $LAB "private\s$n\.secretloop"
+            $repo  = Join-Path $LAB "private\s$n\repo"
+            New-Item -ItemType Directory -Force (Join-Path $LAB "private\s$n") | Out-Null
+            $o = Join-Path $LAB "private\o$n.txt"; $e = Join-Path $LAB "private\e$n.txt"
             Write-Output "===== execution $n  pair $pair  side=$side  build=$outDir ====="
             Write-Output "  store fresh: $(-not (Test-Path $store))   repo fresh: $(-not (Test-Path $repo))"
             $t0 = Get-Date
