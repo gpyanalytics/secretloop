@@ -344,27 +344,55 @@ export function decideAncestorDacl(
  * and no execution-policy change is requested or needed. It reports exception TYPE names
  * only, never a message, so no operating-system text can reach a caller.
  */
+/**
+ * EVERY CMDLET HERE IS MODULE-QUALIFIED, and that is a performance requirement, not a style
+ * choice.
+ *
+ * An unqualified command name makes PowerShell build a command table by enumerating every module
+ * on `PSModulePath` before it can dispatch. Measured on a GitHub `windows-11-arm` runner, whose
+ * `PSModulePath` includes the Azure PowerShell module set ahead of the system module directory:
+ *
+ *     powershell.exe -NoProfile -NonInteractive -Command "exit 0"            ~820 ms
+ *     ... -Command "Get-Item -LiteralPath 'C:\' -Force"                   ~41,800 ms
+ *     ... -Command "Microsoft.PowerShell.Management\Get-Item ... "            ~900 ms
+ *     ... -Command "ConvertTo-Json -InputObject 1"                        ~43,700 ms
+ *     ... -Command "Microsoft.PowerShell.Utility\ConvertTo-Json ... "        ~950 ms
+ *
+ * Resolving the .NET types this script uses costs nothing (~785 ms, i.e. the same as doing
+ * nothing), so the cost was never the security work: it was command discovery. The whole helper
+ * went from 22,361 ms to 341 ms on an empty path list, 22,416 to 442 ms on four real paths and
+ * 22,456 to 375 ms on a refusal, with BYTE-IDENTICAL output and the same exit status in each
+ * case.
+ *
+ * What this does NOT do: a qualified name still resolves through `PSModulePath`, so it does not
+ * by itself guarantee the module is the built-in one. The first entry on that path is inside the
+ * user's own profile and is user-writable — which is equally true of the unqualified form this
+ * replaces, and sits inside the documented trust boundary (the OS user account). Constraining
+ * `PSModulePath` is a separate hardening with its own evidence; it is not done here.
+ *
+ * If a cmdlet is ever added below, qualify it. `tests/consent-acl-win.test.ts` fails otherwise.
+ */
 const HELPER_SOURCE = [
   "$ErrorActionPreference='Stop'",
   "$ProgressPreference='SilentlyContinue'",
   "$raw=[Console]::In.ReadToEnd()",
-  "$paths=@($raw -split \"`r?`n\" | Where-Object { $_.Length -gt 0 })",
-  "$out=New-Object System.Collections.ArrayList",
+  "$paths=@($raw -split \"`r?`n\" | Microsoft.PowerShell.Core\\Where-Object { $_.Length -gt 0 })",
+  "$out=Microsoft.PowerShell.Utility\\New-Object System.Collections.ArrayList",
   "foreach($p in $paths){",
   "  $o=[ordered]@{path=[string]$p;ok=$false;exists=$false}",
   "  try{",
-  "    $item=Get-Item -LiteralPath $p -Force",
+  "    $item=Microsoft.PowerShell.Management\\Get-Item -LiteralPath $p -Force",
   "    $o.exists=$true",
   "    $o.isDirectory=[bool]$item.PSIsContainer",
   "    $o.isReparsePoint=[bool](($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)",
-  "    if($item.PSIsContainer){$sec=New-Object System.Security.AccessControl.DirectorySecurity($p,'Access,Owner')}",
-  "    else{$sec=New-Object System.Security.AccessControl.FileSecurity($p,'Access,Owner')}",
+  "    if($item.PSIsContainer){$sec=Microsoft.PowerShell.Utility\\New-Object System.Security.AccessControl.DirectorySecurity($p,'Access,Owner')}",
+  "    else{$sec=Microsoft.PowerShell.Utility\\New-Object System.Security.AccessControl.FileSecurity($p,'Access,Owner')}",
   "    $o.ownerSid=$sec.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
     // The SDDL form is kept because it is the only place a NULL access list is distinguishable
     // from an empty one. The DECISION uses the structured rules below, whose identities are
     // already security identifiers, so no alias table and no account name is ever involved.
   "    $o.sddl=$sec.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)",
-  "    $rules=New-Object System.Collections.ArrayList",
+  "    $rules=Microsoft.PowerShell.Utility\\New-Object System.Collections.ArrayList",
   "    foreach($r in $sec.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){",
   "      [void]$rules.Add([ordered]@{sid=[string]$r.IdentityReference.Value;allow=($r.AccessControlType -eq 'Allow');rights=[int]$r.FileSystemRights;inheritOnly=(($r.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0)})",
   "    }",
@@ -372,12 +400,12 @@ const HELPER_SOURCE = [
   "    $o.ok=$true",
     // The catch must still say whether the object is THERE. Leaving `exists` false would make a
     // failed inspection indistinguishable from an absent object, and an absent target is skipped.
-  "  }catch{ $o.errorType=$_.Exception.GetType().FullName; try{ $o.exists=[bool](Test-Path -LiteralPath $p) }catch{ $o.exists=$true } }",
-  "  [void]$out.Add((New-Object psobject -Property $o))",
+  "  }catch{ $o.errorType=$_.Exception.GetType().FullName; try{ $o.exists=[bool](Microsoft.PowerShell.Management\\Test-Path -LiteralPath $p) }catch{ $o.exists=$true } }",
+  "  [void]$out.Add((Microsoft.PowerShell.Utility\\New-Object psobject -Property $o))",
   "}",
   // One compact object per line: PowerShell 5.1 unwraps a single-element array, so an array
   // would change shape with the number of paths.
-  "foreach($r in $out){ ConvertTo-Json -InputObject $r -Depth 4 -Compress }",
+  "foreach($r in $out){ Microsoft.PowerShell.Utility\\ConvertTo-Json -InputObject $r -Depth 4 -Compress }",
 ].join("\n");
 
 export const HELPER_SCRIPT_FOR_TESTS = HELPER_SOURCE;

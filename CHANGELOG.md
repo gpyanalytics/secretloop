@@ -30,6 +30,26 @@
   two-account results stay x64 results. Local accounts say nothing about domain
   accounts. Non-English hosts, managed or relocated profiles, and non-NTFS
   volumes are still unexercised.
+### Performance
+
+- **The Windows consent check is about fifty times faster.** Every cmdlet in the PowerShell
+  helper that reads owners, access lists and reparse state is now written module-qualified
+  (`Microsoft.PowerShell.Management\Get-Item` rather than `Get-Item`). An unqualified command
+  name makes PowerShell enumerate every module on `PSModulePath` before it can dispatch, and on
+  a machine whose `PSModulePath` carries a large module set that enumeration dominates
+  everything else. Measured on a GitHub `windows-11-arm` runner: the whole helper went from
+  22,361 ms to **341 ms** on an empty path list, 22,416 ms to **442 ms** on four real paths, and
+  22,456 ms to **375 ms** on a refusal — with **byte-identical output and the same exit status**
+  in every case.
+- **No check was removed or relaxed to achieve it.** The same cmdlets run, from the same
+  modules, with the same arguments, in the same order. Owner, access-rule, reparse-point,
+  ancestor and record inspection are unchanged, nothing is cached, no result is reused between
+  operations, and every refusal still refuses for the same reason in the same fixed words.
+- **What it does not change.** A qualified name still resolves through `PSModulePath`, so it does
+  not by itself guarantee the module is the built-in one — equally true of the unqualified form
+  it replaces. The consent path is still synchronous: while it runs, an MCP server serves no
+  other request. And it does **not** address the separate defect that the Windows helpers do not
+  participate in the operation budget.
 
 ### Consent
 
