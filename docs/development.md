@@ -31,7 +31,43 @@ Windows** (`test-windows (18)`, `test-windows (20)`, `packaging-windows`;
 `windows-latest`, which resolved to Windows Server 2025 10.0.26100, image
 `windows-2025-vs2026`, Node 18.20.8, 20.20.2 and 22.23.2, x64, Git for
 Windows 2.55.0). These jobs are **not** required checks; they add beside the
-Linux jobs and take nothing away. Run 35275794564 at `54787ebb`:
+Linux jobs and take nothing away.
+
+The same suite and the same packaging smokes also run on **native Windows
+ARM64, on a client edition** (`test-windows-arm (20)`, `test-windows-arm (22)`,
+`test-windows-arm-two-user`, `packaging-windows-arm`; `windows-11-arm`).
+Measured on that runner rather than assumed: **Microsoft Windows 11
+Enterprise**, version 10.0.26200 build 26200, `ProductType 1` (workstation, not
+Server), OS architecture ARM 64-bit, runner image `win11-arm64`
+20260914.169.1, `PROCESSOR_ARCHITECTURE=ARM64` with `PROCESSOR_ARCHITEW6432`
+unset, Node **20.20.2** and **22.23.2** from the arm64 tool cache, each
+reporting `process.arch=arm64`. The job asserts all of that and **fails**
+rather than warns, because an emulated x64 process presented as native ARM64
+evidence would be worse than none.
+
+**Node 18 is absent from that matrix and cannot be added.** nodejs.org
+publishes no `win-arm64` build for any v18 release — v18.20.8 lists only
+`win-x64-*` and `win-x86-*` files, and `win-arm64-*` first appears at v20. The
+x64 jobs still cover 18. `engines.node` stays `">=18.0.0"`: it states the
+lowest version the code supports, not a promise that every platform and
+architecture has a binary for it.
+
+On that runner the suite passes on **both** Node versions, and the two-account
+job passes: the product runs as an ordinary local account through
+`Start-Process -Credential` while a second ordinary account plays the attacker,
+and the elevated builder is neither.
+
+**The packaged npm smoke does not pass there**, and is reported rather than
+worked around. Its MCP round trip gives each request 30 s;
+`secretloop_verify` returns nothing within that. Measured in the same job, the
+equivalent library-level verify completes in **5.8 s** with 7 subprocesses
+(three `powershell.exe` inspections at 4,704 / 397 / 529 ms — the first is a
+cold start and dominates — two `whoami.exe`, one `icacls.exe`), and the x64
+packaged smoke completed the same call in **2.1 s**. So the consent path's own
+cost does not account for the ceiling and **the cause is unresolved**. The VSIX
+smoke passes on ARM64.
+
+These jobs are **not** required checks either. Run 35275794564 at `54787ebb`:
 **1,560 passed, 0 failed, 18 skipped** per Node major, identical on both,
 from 57 files — the same 1,578 cases the suite runs on POSIX, where the 18
 skips run (1,578 passed, 0 failed on Linux in the same run and on darwin at
@@ -100,10 +136,29 @@ existed these checks describe the present, not its history; and inspection is by
 path while the work that follows is by path, so a replacement in between is not
 detected by any account that already has the rights to make it. Tested on one
 `windows-latest` image (Server 2025, NTFS, x64, Node 20, Windows PowerShell 5.1,
-`en-US`) as an ordinary account against a second ordinary account. Not exercised,
-and so not claimed: managed or relocated profiles, network and UNC locations
-(refused outright), non-NTFS volumes, non-English hosts, domain accounts, client
-Windows images and ARM64.
+`en-US`) as an ordinary account against a second ordinary account, and on one
+`windows-11-arm` image (Windows 11 Enterprise 10.0.26200, client, NTFS, arm64,
+Node 20 and 22, `en-US`).
+
+**One hosted image is not universal client support**, and the two results are
+different evidence: the ordinary `test-windows*` jobs run **elevated** — GitHub
+configures Windows runners as administrators with UAC disabled — so only the
+two-account jobs say anything about ordinary-account behaviour. **Local accounts
+do not establish domain-account coverage.** Not exercised, and so not claimed:
+managed or relocated profiles, network and UNC locations (refused outright),
+non-NTFS volumes, non-English hosts, and domain accounts.
+
+Two things the ARM64 run measured that are worth carrying. A consent store under
+that image's default workspace temporary directory is **refused**: `C:\a\_temp`
+carries `Authenticated Users:(M)`, so the directories above the store really are
+modifiable by any authenticated account, and the ancestor rule is right to
+refuse. That is a fact about this runner image, not about Windows generally nor
+about every x64 or ARM64 machine. And the Windows store check is **slow** there:
+one `checkWindowsStore()` measured 6.4 s and 12.3 s on separate runs, both cold,
+against a 20 s budget deadline for a whole operation, while a warm invocation in
+the same job took 0.55 s. `src/consent-acl-win.ts` does not consult the
+operation budget at all, so a Windows consent operation can run past that
+deadline without refusing; that gap is open and is tracked in *Open items*.
 
 ## Layout
 
@@ -271,6 +326,21 @@ and §7 records that the tag has drifted behind `main` more than once.
 
 ## Open items
 
+- **The Windows ACL helper is not covered by the operation budget.**
+  `src/consent-budget.ts` bounds helper calls, output bytes, directory entries
+  and a 20-second deadline across one consent operation, and
+  `src/consent-acl-macos.ts` consults it: it charges each invocation, passes
+  `remainingMs(...)` to the child and rethrows a budget error rather than
+  relabelling it. **`src/consent-acl-win.ts` imports none of that.** Its spawns
+  use fixed `HELPER_TIMEOUT_MS` and `ENFORCE_TIMEOUT_MS`, and it never charges
+  an invocation, so on Windows a consent operation can run past the deadline
+  without refusing. Found while validating ARM64, where the cost is visible: a
+  single `checkWindowsStore()` took **12.3 s** on `windows-11-arm`, and the same
+  end-to-end verify took **17.9 s** on x64 — both against a 20 s allowance for
+  the whole operation. Not a new weakness in the checks themselves; the refusals
+  and their reasons are unchanged. Closing it changes subprocess behaviour on
+  the authorization path and needs its own §5 review, so it is scoped
+  separately rather than folded into a validation change.
 - **The Windows consent helper was slow because of command discovery, and is not any more.**
   Kept here because the shape of the problem is worth remembering, not because anything is
   outstanding. Resolving an unqualified cmdlet name was the cost: on a runner whose

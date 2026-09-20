@@ -2,6 +2,34 @@
 
 ## Unreleased
 
+### Validation
+
+- **The Windows suite now runs natively on ARM64, on a Windows 11 client
+  edition.** Three CI jobs on the standard `windows-11-arm` runner: the full
+  suite on Node 20 and 22, the two-account consent fixture, and the packaging
+  smokes. Measured rather than assumed — Windows 11 Enterprise 10.0.26200,
+  `ProductType 1` (workstation, not Server), ARM 64-bit, Node reporting
+  `process.arch=arm64` with no emulation indicator — and the job **fails** if
+  any of that is untrue, because an emulated x64 result presented as native
+  ARM64 evidence would be worse than none. **Node 18 is not in that matrix and
+  cannot be**: nodejs.org publishes no `win-arm64` build for any v18 release.
+  `engines.node` is unchanged at `">=18.0.0"`; it states the lowest version the
+  code supports, not a promise of a binary for every platform and architecture.
+  No product behaviour changed.
+  The suite passes on both Node versions and the **two-account job passes** —
+  the product running as an ordinary local account against a second ordinary
+  account, with the elevated builder being neither. The **packaged npm smoke
+  does not pass** on that runner: its MCP round trip allows 30 s per request and
+  `secretloop_verify` returns nothing in that time, while the same call takes
+  2.1 s on x64 and the equivalent library-level call takes 5.8 s in the same
+  ARM64 job. The cause is unresolved and is reported, not worked around; the
+  smoke's threshold was not raised. The VSIX smoke passes.
+- **What that does not establish.** One hosted image is not universal client
+  support. The ordinary suite jobs run **elevated**, so only the two-account
+  jobs are evidence about ordinary-account behaviour, and the existing x64
+  two-account results stay x64 results. Local accounts say nothing about domain
+  accounts. Non-English hosts, managed or relocated profiles, and non-NTFS
+  volumes are still unexercised.
 ### Performance
 
 - **The Windows consent check is about fifty times faster.** Every cmdlet in the PowerShell
