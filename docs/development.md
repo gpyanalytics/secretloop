@@ -52,6 +52,21 @@ x64 jobs still cover 18. `engines.node` stays `">=18.0.0"`: it states the
 lowest version the code supports, not a promise that every platform and
 architecture has a binary for it.
 
+On that runner the suite passes on **both** Node versions, and the two-account
+job passes: the product runs as an ordinary local account through
+`Start-Process -Credential` while a second ordinary account plays the attacker,
+and the elevated builder is neither.
+
+**The packaged npm smoke does not pass there**, and is reported rather than
+worked around. Its MCP round trip gives each request 30 s;
+`secretloop_verify` returns nothing within that. Measured in the same job, the
+equivalent library-level verify completes in **5.8 s** with 7 subprocesses
+(three `powershell.exe` inspections at 4,704 / 397 / 529 ms — the first is a
+cold start and dominates — two `whoami.exe`, one `icacls.exe`), and the x64
+packaged smoke completed the same call in **2.1 s**. So the consent path's own
+cost does not account for the ceiling and **the cause is unresolved**. The VSIX
+smoke passes on ARM64.
+
 These jobs are **not** required checks either. Run 35275794564 at `54787ebb`:
 **1,560 passed, 0 failed, 18 skipped** per Node major, identical on both,
 from 57 files — the same 1,578 cases the suite runs on POSIX, where the 18
@@ -135,14 +150,15 @@ non-NTFS volumes, non-English hosts, and domain accounts.
 
 Two things the ARM64 run measured that are worth carrying. A consent store under
 that image's default workspace temporary directory is **refused**: `C:\a\_temp`
-inherits `Authenticated Users:(M)`, so the directories above the store really
-are modifiable by any authenticated account, and the ancestor rule is right to
-refuse. And the Windows store check is **slow there** — a single
-`checkWindowsStore()` took **12.3 s**, against a 20 s budget deadline for a
-whole operation, where the same end-to-end call took 17.9 s on x64.
-`src/consent-acl-win.ts` does not consult the operation budget at all, so a
-Windows consent operation can run past that deadline without refusing; that gap
-is open and is tracked in *Open items*.
+carries `Authenticated Users:(M)`, so the directories above the store really are
+modifiable by any authenticated account, and the ancestor rule is right to
+refuse. That is a fact about this runner image, not about Windows generally nor
+about every x64 or ARM64 machine. And the Windows store check is **slow** there:
+one `checkWindowsStore()` measured 6.4 s and 12.3 s on separate runs, both cold,
+against a 20 s budget deadline for a whole operation, while a warm invocation in
+the same job took 0.55 s. `src/consent-acl-win.ts` does not consult the
+operation budget at all, so a Windows consent operation can run past that
+deadline without refusing; that gap is open and is tracked in *Open items*.
 
 ## Layout
 

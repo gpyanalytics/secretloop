@@ -16,6 +16,14 @@
   `engines.node` is unchanged at `">=18.0.0"`; it states the lowest version the
   code supports, not a promise of a binary for every platform and architecture.
   No product behaviour changed.
+  The suite passes on both Node versions and the **two-account job passes** —
+  the product running as an ordinary local account against a second ordinary
+  account, with the elevated builder being neither. The **packaged npm smoke
+  does not pass** on that runner: its MCP round trip allows 30 s per request and
+  `secretloop_verify` returns nothing in that time, while the same call takes
+  2.1 s on x64 and the equivalent library-level call takes 5.8 s in the same
+  ARM64 job. The cause is unresolved and is reported, not worked around; the
+  smoke's threshold was not raised. The VSIX smoke passes.
 - **What that does not establish.** One hosted image is not universal client
   support. The ordinary suite jobs run **elevated**, so only the two-account
   jobs are evidence about ordinary-account behaviour, and the existing x64
