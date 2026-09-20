@@ -60,14 +60,15 @@ function wrapBudget(exp, resolved) {
     // has to be read from inside the callback or END can only ever report "none".
     let last = "none";
     let reached = "";
+    let at = "";
     if (d === 1) resetHits();
-    const watched = function () { try { return fn.apply(this, arguments); } finally { last = spend(); reached = hitLine(); } };
+    const watched = function () { try { return fn.apply(this, arguments); } finally { last = spend(); reached = hitLine(); at = whenLine(); } };
     try {
       const r = realWith.call(this, watched);
-      log(`operation ${mine} END ok ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} spend[${last}] reached[${reached}]`);
+      log(`operation ${mine} END ok ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} spend[${last}] reached[${reached}] at[${at}]`);
       return r;
     } catch (e) {
-      log(`operation ${mine} END REFUSED ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} name=${e && e.name} what=${(e && e.what) || "-"} problem=${(e && e.problem) || "-"} spend[${last}] reached[${reached}]`);
+      log(`operation ${mine} END REFUSED ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} name=${e && e.name} what=${(e && e.what) || "-"} problem=${(e && e.problem) || "-"} spend[${last}] reached[${reached}] at[${at}]`);
       throw e;
     } finally { depth--; }
   };
@@ -76,8 +77,17 @@ function wrapBudget(exp, resolved) {
   // The counts matter as much as the refusals: a checkpoint never reached cannot be the one that
   // refused, and that is an observation rather than an argument from reading the source.
   const hits = {};
-  const resetHits = () => { for (const k of Object.keys(hits)) hits[k] = 0; };
+  // WHERE in the operation each checkpoint lands, not just how often. A checkpoint that always
+  // runs before the expensive work cannot refuse because that work was slow, and that is a
+  // measurement rather than a reading of the source. Bounded to the first 12 per operation.
+  let opStart = process.hrtime.bigint();
+  let when = [];
+  const resetHits = () => { for (const k of Object.keys(hits)) hits[k] = 0; opStart = process.hrtime.bigint(); when = []; };
+  const noteAt = (name) => {
+    if (when.length < 12) when.push(`${name}@${(Number(process.hrtime.bigint() - opStart) / 1e6).toFixed(0)}ms`);
+  };
   const hitLine = () => Object.keys(hits).map((k) => `${k}=${hits[k]}`).join(" ");
+  const whenLine = () => (when.length ? when.join(" ") : "no checkpoint reached");
   for (const [name, category] of [["checkBudgetDeadline", "DEADLINE"], ["spendDirEntry", "ENTRY-COUNT"],
                                   ["spendHelperCall", "INSPECTION-COUNT"], ["spendHelperBytes", "OUTPUT-BYTES"],
                                   ["remainingMs", "DEADLINE(via remainingMs)"], ["remainingBytes", "OUTPUT-BYTES(via remainingBytes)"]]) {
@@ -86,6 +96,7 @@ function wrapBudget(exp, resolved) {
     hits[name] = 0;
     exp[name] = function () {
       hits[name] += 1;
+      noteAt(name);
       try { return real.apply(this, arguments); }
       catch (e) { log(`EXHAUSTED category=${category} checkpoint=${name} error=${e && e.name} spend[${spend()}]`); throw e; }
     };
