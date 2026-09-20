@@ -582,15 +582,24 @@ export function classifyHelperResult(result: HelperResult, paths: string[]): Ins
  * observed at checkpoints rather than enforced by a timer. Bounding the child closes the largest
  * unbounded gap on this path; it does not make the path hard-real-time.
  *
- * WHAT `maxBuffer` ACTUALLY DOES, measured rather than assumed (node v26.8.1 locally, and the
- * same shape on the CI versions):
+ * WHAT `maxBuffer` ACTUALLY DOES. Measured, and re-measured by
+ * `tests/consent-win-budget.test.ts` on every platform and Node version CI runs, so these are
+ * not claims about one machine:
  *   - it bounds stdout and stderr TOGETHER, not each separately. 150 + 150 bytes passes a
- *     300-byte cap; 200 + 200 does not, and 301 on stdout alone does not.
- *   - it does NOT truncate what you receive. A child that writes 1,000 bytes against a 300-byte
- *     cap is killed with SIGTERM and ENOBUFS, and `stdout` still comes back holding all 1,000.
- *     So the cap bounds what the child is ALLOWED to produce, approximately; the exact bound is
- *     enforced afterwards, by charging what actually arrived and refusing if that exceeds the
- *     allowance. Both are needed: the cap keeps memory bounded, the charge keeps the books.
+ *     300-byte cap; 200 + 200 does not, and 301 on stdout alone does not. That is why the
+ *     charge below counts both streams.
+ *   - it does NOT truncate what you receive, and the excess is not small. A child that keeps
+ *     writing is killed with ENOBUFS, but the parent still returns everything already read:
+ *     measured, up to ONE 64 KiB pipe chunk past the cap. A 100-byte cap returned 65,536 bytes;
+ *     a 1 MiB cap returned 1,114,112.
+ *
+ *     SO BE PRECISE ABOUT WHAT IS BOUNDED BY WHAT. The ACCOUNTING is exact: what arrived is
+ *     charged, and the operation refuses once the total no longer fits. The MEMORY is not
+ *     bounded by the allowance at all -- it is bounded per call, by `maxBuffer` plus one pipe
+ *     chunk. With ten bytes of allowance left a child may still hand back 64 KiB before
+ *     anything can refuse it. Charging afterwards keeps the books; it cannot un-allocate what
+ *     has already been read. The worst case per call is the per-call ceiling above plus
+ *     ~64 KiB, and the aggregate allowance is a BUDGET, not a memory limit.
  *   - `maxBuffer: 0` means UNLIMITED, and `timeout: 0` means NO TIMEOUT. Neither is ever passed:
  *     `remainingMs` and `remainingBytes` throw rather than return zero, so an exhausted
  *     allowance refuses before the spawn instead of silently removing the bound.

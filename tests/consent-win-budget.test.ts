@@ -1,7 +1,7 @@
 import { test, suite, finish, assert } from "./harness";
 import * as budget from "../src/consent-budget";
 import * as acl from "../src/consent-acl-win";
-import type { SpawnSyncReturns } from "child_process";
+import { spawnSync, type SpawnSyncReturns } from "child_process";
 
 /**
  * THE WINDOWS HELPERS AGAINST THE OPERATION ALLOWANCE.
@@ -312,6 +312,63 @@ test("the allowance is released after success, and after an exception", () => {
     try { budget.withBudget(() => acl.inspectPaths([SOME_PATH])); } catch { /* expected */ }
     assert.strictEqual(budget.currentSpend(), undefined, "state survived an exception");
   } finally { reset(); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// the node semantics this correction RELIES on, re-measured wherever CI runs
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * runHelper's bounds are only as good as spawnSync's actual behaviour, and that behaviour was
+ * originally measured on one machine and one Node version. Asserting it here turns "measured
+ * once locally" into "checked on every platform and Node version CI runs" -- 18, 20 and 22 on
+ * x64, 20 and 22 on arm64, plus macOS and Linux. If a future runtime changes any of it, this
+ * fails instead of the bound quietly becoming wrong.
+ */
+test("spawnSync bounds stdout and stderr TOGETHER, which is why both are charged", () => {
+  const w = (o: number, e: number, cap: number) =>
+    spawnSync(process.execPath,
+      ["-e", `process.stdout.write("a".repeat(${o}));process.stderr.write("b".repeat(${e}))`],
+      { encoding: "utf8", maxBuffer: cap });
+  assert.strictEqual(w(200, 0, 300).error, undefined, "200 alone should fit a 300-byte cap");
+  assert.strictEqual(w(150, 150, 300).error, undefined, "150+150 should exactly fit");
+  assert.strictEqual((w(200, 200, 300).error as NodeJS.ErrnoException | undefined)?.code, "ENOBUFS",
+    "200+200 exceeded a 300-byte cap and was not refused: the cap may now be per-stream, and " +
+    "charging both streams against one allowance would then be wrong");
+});
+
+test("spawnSync does NOT truncate: the parent can hold a pipe chunk past the cap", () => {
+  // The claim this guards is the one worth getting right: the allowance is a BUDGET, not a
+  // memory limit. If a future runtime starts truncating, the comment in consent-acl-win.ts
+  // becomes pessimistic rather than wrong -- but if the overshoot GROWS, the worst case per
+  // call grows with it, and that should not pass silently.
+  const r = spawnSync(process.execPath, ["-e", 'process.stdout.write("a".repeat(1048576))'],
+    { encoding: "utf8", maxBuffer: 100 });
+  const got = (r.stdout ?? "").length;
+  assert.strictEqual((r.error as NodeJS.ErrnoException | undefined)?.code, "ENOBUFS");
+  assert.ok(got > 100, `the parent returned ${got} bytes against a 100-byte cap; if this is now ` +
+    "<= the cap, spawnSync truncates and the source comment is out of date");
+  assert.ok(got <= 100 + 128 * 1024, `the parent returned ${got} bytes against a 100-byte cap, ` +
+    "more than one 64 KiB chunk of overshoot; the documented worst case per call is too small");
+});
+
+test("a zero timeout or maxBuffer means UNLIMITED, which is why neither is ever passed", () => {
+  const r = spawnSync(process.execPath, ["-e", 'process.stdout.write("a".repeat(1000))'],
+    { encoding: "utf8", maxBuffer: 0 });
+  assert.strictEqual(r.error, undefined, "maxBuffer 0 refused something; it used to mean unlimited");
+  assert.strictEqual((r.stdout ?? "").length, 1000, "maxBuffer 0 no longer means unlimited");
+  // And the product never passes it: remainingBytes throws instead of returning zero.
+  budget.withBudget(() => {
+    budget.spendHelperBytes(budget.LIMITS.helperBytes);
+    assert.throws(() => budget.remainingBytes(1024), (e: Error) => e.name === "BudgetExceededError");
+  });
+  budget.withBudget(() => {
+    const t = Date.now() + budget.LIMITS.deadlineMs + 1;
+    budget.setClockForTests(() => t);
+    try {
+      assert.throws(() => budget.remainingMs(1000), (e: Error) => e.name === "BudgetExceededError");
+    } finally { budget.setClockForTests(undefined); }
+  });
 });
 
 finish();
