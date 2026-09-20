@@ -706,39 +706,48 @@ function ensureDirWindows(): void {
     }
   };
 
-  if (!existsSync(consentDir())) {
-    try {
-      mkdirSync(consentDir());
-      madeStore = true;
-    } catch {
-      throw new ConsentStoreError("inaccessible");
+  // Everything from the first mkdir onwards runs under one undo. It used to be called on each
+  // refusing branch, which covered every way this could fail WHEN THE HELPERS COULD NOT REFUSE.
+  // Now that they charge against the operation allowance, protectDirectory and checkWindowsStore
+  // can raise BudgetExceededError, and an exception is not a branch: it would walk straight past
+  // an inline undo() and leave the directories this call had just created behind. One catch
+  // covers the branches and the exceptions alike.
+  try {
+    if (!existsSync(consentDir())) {
+      try {
+        mkdirSync(consentDir());
+        madeStore = true;
+      } catch {
+        throw new ConsentStoreError("inaccessible");
+      }
+      const protection = protectDirectory(consentDir(), userSid);
+      if (!protection.ok) throw new ConsentStoreError(translateAclProblem(protection.problem));
     }
-    const protection = protectDirectory(consentDir(), userSid);
-    if (!protection.ok) {
-      undo();
-      throw new ConsentStoreError(translateAclProblem(protection.problem));
+    if (!existsSync(pendingDir())) {
+      try {
+        mkdirSync(pendingDir());
+        madePending = true;
+      } catch {
+        throw new ConsentStoreError("inaccessible");
+      }
     }
-  }
-  if (!existsSync(pendingDir())) {
-    try {
-      mkdirSync(pendingDir());
-      madePending = true;
-    } catch {
-      undo();
-      throw new ConsentStoreError("inaccessible");
-    }
-  }
-  const verdict = checkWindowsStore(
-    consentDir(),
-    [
-      { path: consentDir(), kind: "directory" },
-      { path: pendingDir(), kind: "directory" },
-    ],
-    userSid
-  );
-  if (!verdict.ok) {
+    const verdict = checkWindowsStore(
+      consentDir(),
+      [
+        { path: consentDir(), kind: "directory" },
+        { path: pendingDir(), kind: "directory" },
+      ],
+      userSid
+    );
+    if (!verdict.ok) throw new ConsentStoreError(translateAclProblem(verdict.problem));
+  } catch (err) {
+    // Bounded: `undo` removes ONLY the two directories this call created, with a non-recursive
+    // rmdir that fails rather than emptying anything, and only when this call created them. It
+    // never touches a pre-existing store and never recurses. Then the original error is rethrown
+    // UNCHANGED, so a budget refusal stays a budget refusal and is not relabelled as an ACL or
+    // ownership problem on its way out.
     undo();
-    throw new ConsentStoreError(translateAclProblem(verdict.problem));
+    throw err;
   }
 }
 
