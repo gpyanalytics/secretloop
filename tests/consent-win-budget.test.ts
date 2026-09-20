@@ -167,6 +167,42 @@ test("expiry DURING the helper is caught at the post-helper boundary", () => {
   assert.strictEqual(refused?.what, "time", "the helper ran the clock out and nothing noticed");
 });
 
+test("a child killed by a 1 ms remainder is reclassified as exhaustion, not an ACL failure", () => {
+  // Found by attacking the change rather than confirming it. `remainingMs` floors at 1 rather
+  // than throwing, so with 1 ms left a child IS spawned, is killed almost at once, and comes back
+  // as ETIMEDOUT -- which classifies as `acl-inspection-failed`. Without the post-helper deadline
+  // check a user would be sent to look at their access control lists because an allowance ran out.
+  reset(); fakeTools();
+  const D = budget.LIMITS.deadlineMs;
+  const t0 = 1_000_000;
+  let reads = 0;
+  let handed = -1;
+  let refused: (Error & { what?: string }) | undefined;
+  let verdict: unknown;
+  try {
+    // read 1 is startedAt; reads 2-3 leave exactly 1 ms; from read 4 the time is gone.
+    budget.setClockForTests(() => {
+      reads += 1;
+      return reads === 1 ? t0 : reads <= 3 ? t0 + D - 1 : t0 + D + 5;
+    });
+    acl.setHelperRunnerForTests((c) => {
+      handed = c.timeout;
+      return {
+        pid: 0, output: [], stdout: "", stderr: "", status: null, signal: "SIGTERM",
+        error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+      } as unknown as SpawnSyncReturns<string>;
+    });
+    budget.withBudget(() => {
+      try { verdict = acl.inspectPaths([SOME_PATH]); }
+      catch (e) { refused = e as Error & { what?: string }; }
+    });
+  } finally { reset(); }
+  assert.strictEqual(handed, 1, "the remainder was not passed through to the child");
+  assert.notStrictEqual(handed, 0, "a zero timeout means NO timeout at all");
+  assert.strictEqual(refused?.name, "BudgetExceededError", `got a verdict instead: ${JSON.stringify(verdict)}`);
+  assert.strictEqual(refused?.what, "time");
+});
+
 // ---------------------------------------------------------------------------------------------
 // output
 // ---------------------------------------------------------------------------------------------
