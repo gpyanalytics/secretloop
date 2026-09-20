@@ -59,28 +59,39 @@ function wrapBudget(exp, resolved) {
     // withBudget clears the allowance in its own finally, which runs BEFORE ours, so the spend
     // has to be read from inside the callback or END can only ever report "none".
     let last = "none";
-    const watched = function () { try { return fn.apply(this, arguments); } finally { last = spend(); } };
+    let reached = "";
+    if (d === 1) resetHits();
+    const watched = function () { try { return fn.apply(this, arguments); } finally { last = spend(); reached = hitLine(); } };
     try {
       const r = realWith.call(this, watched);
-      log(`operation ${mine} END ok ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} spend[${last}]`);
+      log(`operation ${mine} END ok ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} spend[${last}] reached[${reached}]`);
       return r;
     } catch (e) {
-      log(`operation ${mine} END REFUSED ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} name=${e && e.name} what=${(e && e.what) || "-"} problem=${(e && e.problem) || "-"} spend[${last}]`);
+      log(`operation ${mine} END REFUSED ${(Number(process.hrtime.bigint() - a) / 1e6).toFixed(0)}ms depth=${d} name=${e && e.name} what=${(e && e.what) || "-"} problem=${(e && e.problem) || "-"} spend[${last}] reached[${reached}]`);
       throw e;
     } finally { depth--; }
   };
 
-  // Each checkpoint names its own CATEGORY when it refuses.
+  // Each checkpoint names its own CATEGORY when it refuses, and counts how often it was REACHED.
+  // The counts matter as much as the refusals: a checkpoint never reached cannot be the one that
+  // refused, and that is an observation rather than an argument from reading the source.
+  const hits = {};
+  const resetHits = () => { for (const k of Object.keys(hits)) hits[k] = 0; };
+  const hitLine = () => Object.keys(hits).map((k) => `${k}=${hits[k]}`).join(" ");
   for (const [name, category] of [["checkBudgetDeadline", "DEADLINE"], ["spendDirEntry", "ENTRY-COUNT"],
                                   ["spendHelperCall", "INSPECTION-COUNT"], ["spendHelperBytes", "OUTPUT-BYTES"],
                                   ["remainingMs", "DEADLINE(via remainingMs)"], ["remainingBytes", "OUTPUT-BYTES(via remainingBytes)"]]) {
     const real = exp[name];
     if (typeof real !== "function") continue;
+    hits[name] = 0;
     exp[name] = function () {
+      hits[name] += 1;
       try { return real.apply(this, arguments); }
       catch (e) { log(`EXHAUSTED category=${category} checkpoint=${name} error=${e && e.name} spend[${spend()}]`); throw e; }
     };
   }
+  exp.__btraceHits = hitLine;
+  exp.__btraceResetHits = resetHits;
   exp.__btraceRemain = remain;
   return exp;
 }

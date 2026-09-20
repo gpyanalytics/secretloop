@@ -474,6 +474,9 @@ jobs:
           set -uo pipefail
           SHIM="$(cygpath -w "$PWD/tests/fixtures/budget-trace-shim.js")"
           # A predetermined set of three. It is NOT repeated until a failure appears.
+          # This second pass adds one quantity the first did not record: how often each checkpoint
+          # was REACHED. A checkpoint never reached cannot be the one that refused, which turns an
+          # argument from reading the source into an observation on the same code path.
           for i in 1 2 3; do
             echo "===== attempt $i ====="
             NODE_OPTIONS="--require $SHIM" \
