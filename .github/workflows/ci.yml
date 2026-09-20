@@ -795,6 +795,8 @@ jobs:
           echo "--- ONE VARIABLE: the same helper, invoked from a parent whose stdio differs"
           npm run compile >/dev/null 2>&1 || true
           node "$GITHUB_WORKSPACE/tests/fixtures/win-helper-cost.js" --out "$GITHUB_WORKSPACE/out" --mode compare || true
+          echo "--- and which PATH costs the time: one invocation per path"
+          node "$GITHUB_WORKSPACE/tests/fixtures/win-helper-cost.js" --out "$GITHUB_WORKSPACE/out" --mode perpath || true
           echo "--- and pwsh 7, for contrast (the product does NOT use this)"
           for i in 1 2; do
             s=$(date +%s%N)

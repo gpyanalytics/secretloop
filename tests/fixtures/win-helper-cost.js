@@ -40,10 +40,11 @@ const exe = path.join(systemRoot, "System32", "WindowsPowerShell", "v1.0", "powe
 const profile = process.env.USERPROFILE || os.homedir();
 const paths = ["C:\\", "C:\\Users", profile, path.join(profile, "AppData"), path.join(profile, "AppData", "Local")];
 
-function once() {
+function once(list) {
+  const use = list || paths;
   const a = process.hrtime.bigint();
   const r = spawnSync(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(SCRIPT, "utf16le").toString("base64")], {
-    input: paths.join("\r\n") + "\r\n",
+    input: use.join("\r\n") + "\r\n",
     encoding: "utf8",
     timeout: 120000,
     maxBuffer: 8 * 1024 * 1024,
@@ -52,6 +53,22 @@ function once() {
   const ms = Number(process.hrtime.bigint() - a) / 1e6;
   // Length only. The output is a security descriptor and must not be logged.
   return { ms, status: r.status, bytes: r.stdout ? r.stdout.length : 0, err: r.error ? r.error.code : "-" };
+}
+
+if (mode === "perpath") {
+  // THE DISCRIMINATOR. Five paths cost ~22.4 s together. If one of them is pathological, timing
+  // each ALONE finds it; if they are all ~4.5 s, the cost is per-path and uniform. Each run also
+  // pays one interpreter startup (~0.75 s warm), which is stated rather than subtracted.
+  console.log("HELPERCOST perpath: one helper invocation per path, each paying its own startup");
+  const empty = once([]);
+  console.log(`HELPERCOST perpath [<no paths>]           ${empty.ms.toFixed(0)} ms  outBytes=${empty.bytes}   <- startup + script, no descriptor work`);
+  for (const one of paths) {
+    const r = once([one]);
+    console.log(`HELPERCOST perpath [${one.padEnd(38)}] ${r.ms.toFixed(0)} ms  status=${r.status} outBytes=${r.bytes}`);
+  }
+  const all = once(paths);
+  console.log(`HELPERCOST perpath [all ${paths.length} together]${" ".repeat(22)} ${all.ms.toFixed(0)} ms  outBytes=${all.bytes}`);
+  process.exit(0);
 }
 
 if (mode === "measure") {
