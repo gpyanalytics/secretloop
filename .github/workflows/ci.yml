@@ -417,9 +417,8 @@ jobs:
 
   diag-windows-budget:
     # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged, asserts nothing beyond the
-    # suite's own assertions, and exists to split the 51.1 s that the post-merge failure showed
-    # between fixture setup and the consent operation itself, and to name the checkpoint that
-    # refuses. Node 20 and windows-latest, matching the job that failed.
+    # suite's own assertions, and exists to name the checkpoint that refuses. Node 20 and
+    # windows-latest, matching the job that failed.
     runs-on: windows-latest
     timeout-minutes: 30
     steps:
@@ -430,29 +429,61 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run compile
+
+      - name: Build identity and runner identity
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "runner image: ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
+          echo "commit: $(git rev-parse HEAD)"
+          echo "node executable: $(node -p 'process.execPath')"
+          node -p "'node ' + process.version + ' ' + process.arch + ' on ' + process.platform"
+          echo "account: $(whoami)   elevated: $(net session >/dev/null 2>&1 && echo yes || echo no)"
+          echo "instrumented source digests (what these results belong to):"
+          for f in src/consent-budget.ts src/consent.ts src/consent-acl-win.ts \
+                   tests/verify-consent.test.ts tests/fixtures/budget-trace-shim.js \
+                   tests/fixtures/budget-controls.ts; do
+            echo "  $(git hash-object "$f")  $f"
+          done
+
+      - name: Controls - prove the instrumentation attached, and classify each category
+        shell: bash
+        run: |
+          set -uo pipefail
+          # $PWD under Git-bash is a POSIX path (/d/a/...) that node on Windows cannot resolve
+          # through NODE_OPTIONS --require, so it must be converted first.
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/budget-trace-shim.js")"
+          echo "shim path: $SHIM"
+          NODE_OPTIONS="--require $SHIM" \
+            npx ts-node --transpile-only tests/fixtures/budget-controls.ts > controls.txt 2>&1 || true
+          cat controls.txt
+          echo "--- did the instrumentation actually attach to the executing module?"
+          if grep -q "INSTRUMENTATION ATTACHED to consent-budget.ts" controls.txt \
+             && grep -q "EXHAUSTED category=DEADLINE checkpoint=checkBudgetDeadline" controls.txt; then
+            echo "ATTACHMENT CONTROL PASSED: the shim is attached to the ts-node instance and a"
+            echo "known checkpoint produced its expected event. Budget observations below are"
+            echo "readable. Every exhaustion in controls.txt is INJECTED and reproduces nothing."
+          else
+            echo "ATTACHMENT CONTROL FAILED: treat every budget observation in this run as absent,"
+            echo "not as evidence that no checkpoint refused."
+          fi
+
       - name: The failing test, with its normal fixture and ordering, instrumented
         shell: bash
         run: |
           set -uo pipefail
-          echo "--- environment"
-          node -p "'node ' + process.version + ' ' + process.arch + ' on ' + process.platform"
-          # TWO DEFECTS IN THE FIRST ATTEMPT, both mine, both corrected here.
-          #   1. $PWD under Git-bash is a POSIX path (/d/a/...). node on Windows cannot resolve
-          #      that through NODE_OPTIONS --require, so it exited immediately. cygpath -w now
-          #      converts it, and the resolved path is printed and checked before use.
-          #   2. The output was piped straight into grep, so the startup error that explained the
-          #      emptiness was filtered away. Output is now captured whole and a bounded slice is
-          #      printed, including the tail, so a failure cannot hide again.
           SHIM="$(cygpath -w "$PWD/tests/fixtures/budget-trace-shim.js")"
-          echo "shim path: $SHIM"
-          node --require "$SHIM" -e "console.log('shim loads: yes')" || echo "shim DID NOT LOAD"
-          echo "--- three runs of the real file, stderr trace on, so variance is visible"
+          # A predetermined set of three. It is NOT repeated until a failure appears.
           for i in 1 2 3; do
             echo "===== attempt $i ====="
             NODE_OPTIONS="--require $SHIM" \
               npx ts-node --transpile-only tests/verify-consent.test.ts > "run$i.txt" 2>&1 || true
             echo "  exit captured; $(wc -l < "run$i.txt") lines"
-            grep -E "BTRACE (operation|REFUSED)|BTRACE.*powershell|CONSENT_REQUIRED and makes zero|passed," "run$i.txt" | head -40 || true
+            echo "  --- budget operations, refusals, and the verify outcome"
+            grep -E "operation [0-9]+ (START|END)|EXHAUSTED category=|toolVerify RETURNED|CONSENT_REQUIRED and makes zero|not ok|passed," "run$i.txt" | head -60 || true
+            echo "  --- slowest helper calls in this attempt"
+            grep -oE "helper [a-z.]+ [0-9]+ms status=[-0-9]+ outBytes=[0-9]+" "run$i.txt" \
+              | sort -t' ' -k3 -rn | head -5 | sed 's/^/    /'
             echo "  --- last 8 lines, so a startup failure cannot hide ---"
             tail -8 "run$i.txt" | sed 's/^/    /'
           done
