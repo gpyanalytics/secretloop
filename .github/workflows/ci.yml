@@ -514,7 +514,11 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          $lab = Join-Path $env:RUNNER_TEMP "cost-lab"
+          # UNDER THE PROFILE, not RUNNER_TEMP. The first attempt used RUNNER_TEMP and the
+          # operation refused in 642 ms on the ancestor rule, so it measured the SHORT path and
+          # answered nothing. C:\Users\runneradmin is chain-trusted on this image, which is also
+          # where a real store lives, so the expensive path actually runs.
+          $lab = Join-Path $env:USERPROFILE "sl-cost-lab"
           New-Item -ItemType Directory -Force $lab | Out-Null
           node (Join-Path $PWD "tests\fixtures\win-consent-cost.js") --out (Join-Path $PWD "out") --lab $lab
       - run: npm test
@@ -577,6 +581,14 @@ jobs:
           icacls $LAB /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q
           if ($LASTEXITCODE -ne 0) { throw "could not set the lab root's access list" }
           "--- after /grant:r"; icacls $LAB
+          # MEASURED, not assumed: a directory created at the C:\ root comes into existence ALREADY
+          # carrying "Authenticated Users:(M)" and "BUILTIN\Users:(RX)" as EXPLICIT entries -- icacls
+          # prints them with no (I) marker. /inheritance:r therefore removes nothing and still
+          # reports "Successfully processed 1 files; Failed processing 0 files", which is why the
+          # previous attempt looked like it had worked. They have to be removed by name.
+          icacls $LAB /remove "*S-1-5-11" "*S-1-5-32-545" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not remove the Authenticated Users and Users entries from the lab root" }
+          "--- after removing Authenticated Users and BUILTIN\Users"; icacls $LAB
           # THE FIXTURE ASSERTS ITS OWN PRECONDITION. The lab's parents must not be modifiable by
           # some other account, or the refusal the test is built to observe cannot be told apart
           # from the product objecting to the harness. C:\ grants Authenticated Users an
@@ -738,6 +750,17 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Where the time goes in one consent operation, in THIS job
+        # The smoke below times out inside secretloop_verify, and the breakdown so far comes from
+        # a different job on a different runner. This measures it here, before the smoke, so the
+        # ceiling can be attributed rather than guessed at. Diagnostic: asserts nothing, exits 0.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          npm run compile
+          $lab = Join-Path $env:USERPROFILE "sl-cost-lab"
+          New-Item -ItemType Directory -Force $lab | Out-Null
+          node (Join-Path $PWD "tests\fixtures\win-consent-cost.js") --out (Join-Path $PWD "out") --lab $lab
       - name: Smoke the npm tarball
         shell: bash
         run: npm run smoke:tarball
