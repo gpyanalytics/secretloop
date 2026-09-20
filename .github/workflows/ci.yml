@@ -815,6 +815,16 @@ jobs:
           probe "D -Command DirectorySecurity type    " "$PS" -NoProfile -NonInteractive -Command "[void][System.Security.AccessControl.DirectorySecurity]"
           probe "E -Command SecurityIdentifier type   " "$PS" -NoProfile -NonInteractive -Command "[void][System.Security.Principal.SecurityIdentifier]"
           probe "F -Command Get-Item C:\\              " "$PS" -NoProfile -NonInteractive -Command "[void](Get-Item -LiteralPath 'C:\' -Force)"
+          # CONFIRM THE MECHANISM. Types are free, cmdlets are not, so the suspect is command
+          # DISCOVERY. A module-qualified call skips discovery; pure .NET avoids commands
+          # entirely. PSModulePath is printed because that is what discovery searches.
+          echo "--- PSModulePath, which is what command discovery searches"
+          "$PS" -NoProfile -NonInteractive -Command '$env:PSModulePath -split ";" | ForEach-Object { "  PSMODULEPATH " + $_ }' 2>&1 | head -20 || true
+          probe "G qualified Get-Item              " "$PS" -NoProfile -NonInteractive -Command "[void](Microsoft.PowerShell.Management\Get-Item -LiteralPath 'C:\' -Force)"
+          probe "H qualified ConvertTo-Json        " "$PS" -NoProfile -NonInteractive -Command "[void](Microsoft.PowerShell.Utility\ConvertTo-Json -InputObject 1)"
+          probe "I pure .NET, no cmdlet at all     " "$PS" -NoProfile -NonInteractive -Command "[void][System.IO.Directory]::GetCreationTimeUtc('C:\')"
+          echo "--- ORIGINAL versus MODULE-QUALIFIED helper, same cmdlets, outputs compared"
+          node "$GITHUB_WORKSPACE/tests/fixtures/win-helper-variant.js" --out "$GITHUB_WORKSPACE/out" || true
           echo "--- and pwsh 7, for contrast (the product does NOT use this)"
           for i in 1 2; do
             s=$(date +%s%N)
