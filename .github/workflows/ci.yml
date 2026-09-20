@@ -733,6 +733,145 @@ jobs:
 
 
 
+  diag-twouser-paired:
+    # DISPOSABLE DIAGNOSTIC JOB on the integration branch. Never merged.
+    #
+    # THE BOUNDED MAIN-VERSUS-CANDIDATE COMPARISON. test-windows-two-user failed once on an early
+    # #99 tree with an operation-too-large refusal, in a job that has never produced that refusal
+    # on main, and nothing measured it. This runs the same fixture six times -- three MAIN, three
+    # CANDIDATE, alternating which side leads -- on ONE runner per pair, with the same wrapper and
+    # the same instrumentation on both sides, and reads the trace rather than the exit code.
+    #
+    # x64 and Node 20, matching where the failure occurred. THE SET IS THREE PAIRS AND IS NOT
+    # EXTENDED, whatever the results are.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Identity, and the two builds under test
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "runner image : ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
+          echo "checked out  : $(git rev-parse HEAD)   (a GENERATED MERGE REF on pull_request)"
+          echo "node         : $(node -p 'process.version') $(node -p 'process.arch') at $(node -p 'process.execPath')"
+          echo "account      : $(whoami)"
+          echo "source identities, by content:"
+          for f in tests/fixtures/main-consent-acl-win.ts tests/fixtures/main-consent.ts \
+                   src/consent-acl-win.ts src/consent.ts \
+                   tests/fixtures/win-twouser-plant.js tests/fixtures/twouser-trace-shim.js; do
+            echo "  $(git hash-object "$f")  $f"
+          done
+          echo "  MAIN must be     1ff05e80bd6792503537ec550a69ebadedfd2017 / 677ac0d26e4eac672e725ea344d565275af73057"
+          echo "--- build CANDIDATE (the branch source as-is)"
+          npm run compile
+          cp -r out out-cand
+          echo "--- build MAIN (only the two product files swapped, nothing else)"
+          cp src/consent-acl-win.ts /tmp/cand-acl.ts
+          cp src/consent.ts /tmp/cand-consent.ts
+          cp tests/fixtures/main-consent-acl-win.ts src/consent-acl-win.ts
+          cp tests/fixtures/main-consent.ts src/consent.ts
+          npm run compile
+          cp -r out out-main
+          cp /tmp/cand-acl.ts src/consent-acl-win.ts
+          cp /tmp/cand-consent.ts src/consent.ts
+          echo "--- the two builds differ, and only where they should:"
+          for f in consent-acl-win.js consent.js consent-budget.js mcp-core.js; do
+            a=$(sha256sum "out-main/$f" | cut -d" " -f1); b=$(sha256sum "out-cand/$f" | cut -d" " -f1)
+            echo "  $f  $([ "$a" = "$b" ] && echo IDENTICAL || echo DIFFERENT)"
+          done
+          echo "  (consent-budget.js IDENTICAL is what makes the instrumentation matched)"
+
+      - name: Provision two ordinary accounts and the fixture parents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          # A parent the second account can write: the shape the policy must refuse.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "permissive") | Out-Null
+          icacls (Join-Path $LAB "permissive") /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("out", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          }
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          $pw2 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p2.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+          "ACL_SID1=$sid1" >> $env:GITHUB_ENV
+          "ACL_SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Six executions - three pairs, order fixed before running
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $pw = ConvertTo-SecureString $env:ACL_PW1 -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential(".\slprobe", $pw)
+          $node = (Get-Command node).Source
+          $shim = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          # THE ORDER, decided in the plan and not changed here.
+          $order = @("MAIN","CAND", "CAND","MAIN", "MAIN","CAND")
+          $n = 0
+          $results = @()
+          foreach ($side in $order) {
+            $n++
+            $pair = [math]::Ceiling($n / 2)
+            $outDir = Join-Path $PWD ($(if ($side -eq "MAIN") { "out-main" } else { "out-cand" }))
+            $store = Join-Path $LAB "paired\s$n"
+            $repo  = Join-Path $LAB "paired\r$n"
+            New-Item -ItemType Directory -Force (Split-Path $store) | Out-Null
+            icacls (Split-Path $store) /grant "*$($env:ACL_SID1):(OI)(CI)F" /q | Out-Null
+            $o = Join-Path $LAB "paired\o$n.txt"; $e = Join-Path $LAB "paired\e$n.txt"
+            Write-Output "===== execution $n  pair $pair  side=$side  build=$outDir ====="
+            Write-Output "  store fresh: $(-not (Test-Path $store))   repo fresh: $(-not (Test-Path $repo))"
+            $t0 = Get-Date
+            # --require on the child's OWN command line: Start-Process -Credential runs as another
+            # user and is not relied on to carry this process's environment across that boundary.
+            $argv = @("--require", $shim, $plant, "--out", $outDir, "--store", $store, "--repo", $repo)
+            $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            $ms = [int]((Get-Date) - $t0).TotalMilliseconds
+            $out = if (Test-Path $o) { Get-Content $o -Raw } else { "" }
+            $err = if (Test-Path $e) { Get-Content $e -Raw } else { "" }
+            $verdict = if ($p.ExitCode -eq 0) { "PASS" } else { "FAIL" }
+            Write-Output "  exit=$($p.ExitCode)  verdict=$verdict  wall=${ms}ms"
+            Write-Output "  --- fixture stdout"
+            if ($out) { $out.TrimEnd() -split "`n" | ForEach-Object { "      $_" } }
+            Write-Output "  --- instrumentation (proof it attached, then the operations)"
+            if ($err) {
+              ($err -split "`n" | Where-Object { $_ -match "INSTRUMENTATION ATTACHED|INJECTED CONTROL|allowance configured|operation \d+ (START|END|NESTED)|EXHAUSTED category|toolVerify (REQUEST|RESPONSE)|helper " }) |
+                ForEach-Object { "      $($_.TrimEnd())" }
+            } else { Write-Output "      (no stderr - instrumentation ABSENT, not 'nothing refused')" }
+            Write-Output "  --- store after: $(if (Test-Path $store) { (Get-ChildItem $store -Recurse -File | Measure-Object).Count } else { 'absent' }) file(s)"
+            $results += [pscustomobject]@{ n=$n; pair=$pair; side=$side; verdict=$verdict; wall=$ms }
+          }
+          Write-Output ""
+          Write-Output "===== SIX EXECUTIONS PLANNED, SIX RUN. THE SET IS NOT EXTENDED. ====="
+          $results | ForEach-Object { Write-Output ("  exec {0}  pair {1}  {2,-4}  {3}  {4} ms" -f $_.n,$_.pair,$_.side,$_.verdict,$_.wall) }
+          $mf = ($results | Where-Object { $_.side -eq "MAIN" -and $_.verdict -eq "FAIL" }).Count
+          $cf = ($results | Where-Object { $_.side -eq "CAND" -and $_.verdict -eq "FAIL" }).Count
+          Write-Output "  MAIN failures: $mf of 3      CANDIDATE failures: $cf of 3"
+          Write-Output "  Six executions cannot establish equal failure rates and do not explain the"
+          Write-Output "  historical failure. This step does not fail the job on a fixture refusal:"
+          Write-Output "  the refusal IS the measurement, and the trace above is what reports it."
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
