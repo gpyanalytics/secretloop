@@ -348,9 +348,10 @@ export function decideAncestorDacl(
  * EVERY CMDLET HERE IS MODULE-QUALIFIED, and that is a performance requirement, not a style
  * choice.
  *
- * An unqualified command name makes PowerShell build a command table by enumerating every module
- * on `PSModulePath` before it can dispatch. Measured on a GitHub `windows-11-arm` runner, whose
- * `PSModulePath` includes the Azure PowerShell module set ahead of the system module directory:
+ * An unqualified command name has to be RESOLVED before PowerShell can dispatch it, and on some
+ * machines that resolution is extraordinarily expensive. Measured on a GitHub `windows-11-arm`
+ * runner, whose `PSModulePath` lists the Azure PowerShell module set ahead of the system module
+ * directory:
  *
  *     powershell.exe -NoProfile -NonInteractive -Command "exit 0"            ~820 ms
  *     ... -Command "Get-Item -LiteralPath 'C:\' -Force"                   ~41,800 ms
@@ -359,7 +360,9 @@ export function decideAncestorDacl(
  *     ... -Command "Microsoft.PowerShell.Utility\ConvertTo-Json ... "        ~950 ms
  *
  * Resolving the .NET types this script uses costs nothing (~785 ms, i.e. the same as doing
- * nothing), so the cost was never the security work: it was command discovery. The whole helper
+ * nothing), so the cost was never the security work: it is paid when a COMMAND NAME is resolved,
+ * and naming the module removes it. What PowerShell does internally during that resolution was
+ * not traced, so no claim is made about it beyond the timings above. The whole helper
  * went from 22,361 ms to 341 ms on an empty path list, 22,416 to 442 ms on four real paths and
  * 22,456 to 375 ms on a refusal, with BYTE-IDENTICAL output and the same exit status in each
  * case.

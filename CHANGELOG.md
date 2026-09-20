@@ -35,9 +35,10 @@
 - **The Windows consent check is about fifty times faster.** Every cmdlet in the PowerShell
   helper that reads owners, access lists and reparse state is now written module-qualified
   (`Microsoft.PowerShell.Management\Get-Item` rather than `Get-Item`). An unqualified command
-  name makes PowerShell enumerate every module on `PSModulePath` before it can dispatch, and on
-  a machine whose `PSModulePath` carries a large module set that enumeration dominates
-  everything else. Measured on a GitHub `windows-11-arm` runner: the whole helper went from
+  name must be resolved before PowerShell can dispatch it, and on a machine whose
+  `PSModulePath` lists a large module set that resolution dominates everything else. The cost
+  and its removal are measured; PowerShell's internal resolution was not traced, and nothing
+  here claims to describe it. Measured on a GitHub `windows-11-arm` runner: the whole helper went from
   22,361 ms to **341 ms** on an empty path list, 22,416 ms to **442 ms** on four real paths, and
   22,456 ms to **375 ms** on a refusal — with **byte-identical output and the same exit status**
   in every case.
