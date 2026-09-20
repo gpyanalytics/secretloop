@@ -496,10 +496,21 @@ jobs:
           done
 
   diag-packaging-smoke:
-    # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged. It instruments the packaged
-    # npm-tarball smoke, which produced an operation-too-large refusal on run 35491820687 without
-    # any test fixture involved. Node 22 and windows-latest, matching THAT job exactly -- the
-    # original test failure was Node 20 and this one is not a same-runtime repeat of it.
+    # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged.
+    #
+    # packaging-windows produced an operation-too-large refusal on run 35491820687 with no test
+    # fixture: tools/call 05:30:48.022 -> tools/result 05:31:10.240, 22,218 ms inside one request,
+    # past the 20 s consent allowance and short of the smoke's own 30 s deadline. This job goes
+    # after that, on Node 22 and windows-latest, matching THAT job. The original test failure was
+    # Node 20, so this is not a same-runtime repeat of it.
+    #
+    # THE PACKAGED ARTIFACT IS A BUNDLE. prepack runs esbuild --bundle --minify over src/mcp.ts,
+    # so the tarball ships only out/cli.js and out/mcp.js with every module inlined. No module
+    # hook can reach the budget there -- an earlier attempt in this job failed exactly that way,
+    # looking for package/out/consent-budget.js, which does not exist. Checkpoint tracing therefore
+    # needs a PATCHED BUILD, and src/consent-budget.ts on this branch carries one. The patch is
+    # inert unless SECRETLOOP_DIAG_TRACE=1, so the same source can be run silent or tracing.
+    # child_process stays external to the bundle, so the NODE_OPTIONS shim still times the helpers.
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -510,23 +521,23 @@ jobs:
           cache: npm
       - run: npm ci
 
-      - name: Identity, and the store pre-flight that gates everything below
+      - name: Identity, artifact shape, and the store pre-flight that gates everything below
         shell: bash
         run: |
           set -uo pipefail
           echo "runner image: ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
           echo "checked out : $(git rev-parse HEAD)   (a GENERATED MERGE REF on pull_request)"
-          echo "node        : $(node -p 'process.version + \" \" + process.arch') at $(node -p 'process.execPath')"
+          echo "node        : $(node -p 'process.version') $(node -p 'process.arch') at $(node -p 'process.execPath')"
           echo "account     : $(whoami)"
-          echo "diagnostic file digests:"
-          for f in tests/fixtures/packaged-trace-shim.js tests/fixtures/packaged-budget-controls.js \
-                   scripts/smoke-tarball.sh src/consent-budget.ts src/consent.ts src/consent-acl-win.ts; do
-            echo "  $(git hash-object "$f")  $f"
-          done
-          # THE GATE. The smoke uses the real store under the runner account's profile, because
-          # the consent directory is deliberately not overridable from the environment. On an
-          # ephemeral GitHub-hosted runner that store must not exist yet. If it does, something
-          # unknown is there and this job stops WITHOUT READING IT.
+          echo "source identities:"
+          echo "  $(git hash-object src/consent-budget.ts)  src/consent-budget.ts        (PATCHED diagnostic build)"
+          echo "  $(git hash-object tests/fixtures/consent-budget.shipped.ts)  shipped fixture, must equal main's ec8ea398..."
+          echo "  $(git hash-object scripts/smoke-tarball.sh)  scripts/smoke-tarball.sh     (UNCHANGED)"
+          echo "  $(git hash-object tests/fixtures/packaged-trace-shim.js)  packaged-trace-shim.js"
+          echo "--- what the tarball actually contains, established rather than assumed"
+          npm pack --silent --pack-destination shape >/dev/null 2>&1 || npm pack --pack-destination shape
+          tar -tzf shape/*.tgz | grep "^package/out/" | sed 's/^/    /'
+          echo "    (only two files, both esbuild bundles: a module hook cannot see inside them)"
           STORE="$USERPROFILE/.secretloop"
           if [ -e "$STORE" ]; then
             echo "PRE-FLIGHT FAILED: a consent store already exists. Not read, not removed."
@@ -536,78 +547,80 @@ jobs:
             echo "EXPERIMENT_GATE=open" >> "$GITHUB_ENV"
           fi
 
-      - name: Pack the tarball once, and prove the hook attaches to THAT artifact
+      - name: Injected controls against a build of the patched source
         if: env.EXPERIMENT_GATE == 'open'
         shell: bash
         run: |
           set -uo pipefail
-          npm pack --silent > tarball.txt 2>/dev/null || npm pack > tarball.txt
-          TGZ=$(tail -1 tarball.txt | tr -d '\r')
-          echo "tarball     : $TGZ"
-          echo "tarball sha256: $(sha256sum "$TGZ" | cut -d" " -f1)"
-          mkdir -p probe && tar -xzf "$TGZ" -C probe
-          echo "packaged consent modules, by content:"
-          for f in probe/package/out/consent-budget.js probe/package/out/consent.js \
-                   probe/package/out/consent-acl-win.js probe/package/out/mcp.js; do
-            echo "  $(sha256sum "$f" | cut -d" " -f1)  ${f#probe/package/}"
-          done
-          echo "--- is it one bundle or separate modules? (Module._load can only hook the latter)"
-          grep -c 'require("./consent-budget")' probe/package/out/consent.js || true
-          echo "--- injected controls against the PACKED module"
-          node tests/fixtures/packaged-budget-controls.js "$PWD/probe/package/out/consent-budget.js" 2>&1 | tee controls.txt
+          npm run compile
+          echo "--- all four categories, injected, against the tsc build of the patched source"
+          SECRETLOOP_DIAG_TRACE=1 node tests/fixtures/packaged-budget-controls.js "$PWD/out/consent-budget.js" 2>&1 | tee controls.txt
           if grep -q "injected: deadline .* what=time" controls.txt \
              && grep -q "injected: entry count .* what=records" controls.txt \
              && grep -q "injected: inspections .* what=inspections" controls.txt \
-             && grep -q "injected: output bytes .* what=output" controls.txt; then
-            echo "CONTROLS PASSED: the packed artifact classifies all four categories."
+             && grep -q "injected: output bytes .* what=output" controls.txt \
+             && grep -q "EXHAUSTED category=DEADLINE" controls.txt; then
+            echo "CONTROLS PASSED: four categories classified, and the patch emits its events."
           else
             echo "CONTROLS FAILED: treat every category claim below as unestablished."
           fi
+          echo "--- and the patch is INERT with the variable unset (expect no BUDGETDIAG lines)"
+          node tests/fixtures/packaged-budget-controls.js "$PWD/out/consent-budget.js" 2>&1 | grep -c BUDGETDIAG || echo "0 BUDGETDIAG lines: inert"
 
-      - name: The bounded experiment - order fixed here, before it runs
+      - name: The bounded experiment - six attempts, order fixed here before it runs
         if: env.EXPERIMENT_GATE == 'open'
         shell: bash
         run: |
           set -uo pipefail
           SHIM="$(cygpath -w "$PWD/tests/fixtures/packaged-trace-shim.js")"
           STORE="$USERPROFILE/.secretloop"
-          # SIX attempts, alternating, decided now and NOT extended if nothing appears:
-          #   1 U-cold   2 I-cold   3 I       4 U       5 I       6 U
-          # U = the smoke exactly as CI runs it. I = the same smoke with the preload, which is
-          # the ONLY difference: the shim rides in on NODE_OPTIONS and the script is untouched,
-          # so its assertions and its 30 s per-request deadline are the shipped ones.
-          ORDER="U I I U I U"
+          cp src/consent-budget.ts /tmp/diag-budget.ts
+          # SIX attempts, decided now, NOT extended if nothing appears:
+          #   1 S   shipped source (main's budget module), no trace, no shim
+          #   2 D0  patched source, tracing OFF, no shim   -> shows the patch is inert
+          #   3 D1  patched source, tracing ON,  shim      -> the measurement
+          #   4 S   shipped source again
+          #   5 D1
+          #   6 D1
+          # The smoke script itself is never edited: it packs from the working tree, so the
+          # artifact is selected by which budget module is in place, and its own assertions and
+          # its 30 s per-request deadline are the shipped ones throughout.
+          ORDER="S D0 D1 S D1 D1"
           n=0
           for mode in $ORDER; do
             n=$((n+1))
             echo "===== attempt $n  mode=$mode ====="
-            # Matched fresh store. Only ever removes a store this job created: the pre-flight
-            # established there was none, and removal is bounded to that one directory.
-            if [ -e "$STORE" ]; then
-              echo "  store before cleanup: $(find "$STORE" -type f | wc -l) file(s); removing state this job created"
-              rm -rf "$STORE"
+            if [ "$mode" = "S" ]; then
+              cp tests/fixtures/consent-budget.shipped.ts src/consent-budget.ts
+            else
+              cp /tmp/diag-budget.ts src/consent-budget.ts
             fi
+            echo "  budget module in place: $(git hash-object src/consent-budget.ts)"
+            # Matched fresh store. The pre-flight established there was none, so anything here
+            # was made by this job, and removal is bounded to that one directory.
+            if [ -e "$STORE" ]; then rm -rf "$STORE"; fi
             echo "  store present at start: $([ -e "$STORE" ] && echo yes || echo no)"
             START=$(node -p "Date.now()")
-            if [ "$mode" = "I" ]; then
-              NODE_OPTIONS="--require $SHIM" npm run smoke:tarball > "smoke$n.txt" 2>&1 || true
-            else
-              npm run smoke:tarball > "smoke$n.txt" 2>&1 || true
-            fi
+            case "$mode" in
+              D1) NODE_OPTIONS="--require $SHIM" SECRETLOOP_DIAG_TRACE=1 npm run smoke:tarball > "smoke$n.txt" 2>&1 || true ;;
+              *)  npm run smoke:tarball > "smoke$n.txt" 2>&1 || true ;;
+            esac
             END=$(node -p "Date.now()")
             echo "  wall clock: $(( END - START )) ms"
-            echo "  verdict: $(grep -cE 'smoke: FAIL' "smoke$n.txt") failure line(s)"
+            echo "  packed bundle: $(sha256sum out/mcp.js | cut -d" " -f1)  out/mcp.js"
+            echo "  failure lines: $(grep -cE 'smoke: FAIL' "smoke$n.txt")"
             echo "  --- the MCP round trip, from the product's own log"
-            grep -E "tools/call|tools/result|smoke: (ok|FAIL|MCP)" "smoke$n.txt" | tail -12 || true
-            echo "  --- instrumentation, if this attempt carried it"
-            grep -E "INSTRUMENTATION ATTACHED|ATTACHMENT CONTROL|operation [0-9]+ (START|END)|EXHAUSTED category=|REQUEST RECEIVED|RESPONSE EMITTED" "smoke$n.txt" | head -40 || true
-            echo "  --- slowest helpers"
-            grep -oE "helper [a-z.]+ END [0-9]+ms status=[-0-9]+ outBytes=[0-9]+" "smoke$n.txt" | sort -t" " -k4 -rn | head -4 | sed "s/^/    /"
+            grep -E "tools/call|tools/result|smoke: (ok|FAIL|MCP)" "smoke$n.txt" | tail -10 || true
+            echo "  --- budget events from the patched build"
+            grep -E "BUDGETDIAG" "smoke$n.txt" | head -25 || echo "    (none - expected for S and D0)"
+            echo "  --- request boundary and helpers from the preload"
+            grep -E "PTRACE .*(REQUEST RECEIVED|RESPONSE EMITTED|helper )" "smoke$n.txt" | head -25 || true
             echo "  --- store after this attempt: $([ -e "$STORE" ] && find "$STORE" -type f | wc -l || echo 0) file(s)"
             echo "  --- tail, so a startup failure cannot hide"
-            tail -5 "smoke$n.txt" | sed "s/^/    /"
+            tail -4 "smoke$n.txt" | sed "s/^/    /"
           done
-          echo "===== bounded set complete. Six attempts were planned and six were run. ====="
+          cp /tmp/diag-budget.ts src/consent-budget.ts
+          echo "===== six attempts planned, six run. The set is not extended. ====="
           if [ -e "$STORE" ]; then rm -rf "$STORE"; echo "cleanup: removed the store this job created"; fi
 
       - name: Say so loudly if the gate blocked the experiment

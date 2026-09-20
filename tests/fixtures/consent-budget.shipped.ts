@@ -80,57 +80,6 @@ interface Budget {
 
 let active: Budget | undefined;
 
-/* ==========================================================================================
- * DIAGNOSTIC ONLY. NOT A PRODUCT CHANGE. Added on the throwaway branch diag-win-budget-51s to
- * trace the consent budget inside the PACKAGED npm tarball, whose out/mcp.js is a minified
- * esbuild bundle -- everything is inlined, so no module hook can reach these functions from
- * outside. A patched build is the only way in, and this is that patch.
- *
- * It is INERT unless SECRETLOOP_DIAG_TRACE=1: with the variable unset, diag() returns on its
- * first line and nothing else below changes any value, any order or any thrown error. The same
- * artifact is therefore run with tracing off and on, so the two differ by stderr writes alone.
- *
- * It writes counts, durations, categories and checkpoint names. Never a path, a record, a
- * credential, a commitment, helper output or an environment value.
- * ========================================================================================== */
-const DIAG_ON = process.env.SECRETLOOP_DIAG_TRACE === "1";
-const diagT0 = process.hrtime.bigint();
-const diagHits: Record<string, number> = {};
-let diagWhen: string[] = [];
-let diagOpStart = process.hrtime.bigint();
-let diagDepth = 0;
-let diagOp = 0;
-
-function diag(line: string): void {
-  if (!DIAG_ON) return;
-  try {
-    const ms = (Number(process.hrtime.bigint() - diagT0) / 1e6).toFixed(0);
-    process.stderr.write(`BUDGETDIAG ${ms}ms ${new Date().toISOString()} ${line}\n`);
-  } catch {
-    /* stderr closed; a diagnostic must never take the process down */
-  }
-}
-
-/** Counts a checkpoint and remembers WHERE in the operation it was reached. */
-function diagReach(name: string): void {
-  if (!DIAG_ON) return;
-  diagHits[name] = (diagHits[name] ?? 0) + 1;
-  if (diagWhen.length < 24) {
-    diagWhen.push(`${name}@${(Number(process.hrtime.bigint() - diagOpStart) / 1e6).toFixed(0)}ms`);
-  }
-}
-
-function diagSpend(): string {
-  if (!active) return "none";
-  return (
-    `calls=${active.helperCalls} bytes=${active.helperBytes} entries=${active.dirEntries}` +
-    ` elapsedMs=${now() - active.startedAt}` +
-    ` remainingMs=${Math.max(0, LIMITS.deadlineMs - (now() - active.startedAt))}` +
-    ` remainingCalls=${LIMITS.helperCalls - active.helperCalls}` +
-    ` remainingBytes=${LIMITS.helperBytes - active.helperBytes}`
-  );
-}
-
 /**
  * The clock, swappable for tests only. A deadline case driven by real sleeping is either slow or
  * flaky; a controlled clock makes it deterministic, and the record labels those cases as
@@ -148,44 +97,11 @@ export function setClockForTests(fn: (() => number) | undefined): void {
  * one user-visible operation would be no allowance at all.
  */
 export function withBudget<T>(fn: () => T): T {
-  if (active) {
-    // DIAGNOSTIC ONLY.
-    diagDepth += 1;
-    diag(`operation ${diagOp} NESTED depth=${diagDepth} (joins the outer allowance)`);
-    try {
-      return fn();
-    } finally {
-      diagDepth -= 1;
-    }
-  }
+  if (active) return fn();
   active = { helperCalls: 0, helperBytes: 0, dirEntries: 0, startedAt: now() };
-  // DIAGNOSTIC ONLY.
-  diagOp += 1;
-  diagDepth = 1;
-  diagOpStart = process.hrtime.bigint();
-  diagWhen = [];
-  for (const k of Object.keys(diagHits)) diagHits[k] = 0;
-  const diagMine = diagOp;
-  diag(`operation ${diagMine} START`);
-  let diagOutcome = "ok";
   try {
     return fn();
-  } catch (err) {
-    // DIAGNOSTIC ONLY: names the outcome, then rethrows the original error untouched.
-    const e = err as { name?: string; what?: string };
-    diagOutcome = `REFUSED name=${e?.name} what=${e?.what ?? "-"}`;
-    throw err;
   } finally {
-    // DIAGNOSTIC ONLY: read BEFORE the allowance is cleared, or the spend is always empty.
-    const diagFinal = diagSpend();
-    const diagMs = (Number(process.hrtime.bigint() - diagOpStart) / 1e6).toFixed(0);
-    const diagReached = Object.keys(diagHits).map((k) => `${k}=${diagHits[k]}`).join(" ") || "none";
-    const diagAt = diagWhen.length ? diagWhen.join(" ") : "no checkpoint reached";
-    diag(
-      `operation ${diagMine} END ${diagOutcome} ${diagMs}ms spend[${diagFinal}] ` +
-        `reached[${diagReached}] at[${diagAt}]`
-    );
-    diagDepth = 0;
     active = undefined;
   }
 }
@@ -203,7 +119,6 @@ export function currentSpend(): { helperCalls: number; helperBytes: number; dirE
 function checkDeadline(): void {
   if (!active) return;
   if (now() - active.startedAt >= LIMITS.deadlineMs) {
-    diag(`EXHAUSTED category=DEADLINE checkpoint=checkDeadline spend[${diagSpend()}]`);
     throw new BudgetExceededError("time");
   }
 }
@@ -213,25 +128,17 @@ function checkDeadline(): void {
  * when no budget is active, which is only the case outside a consent entry point.
  */
 export function remainingMs(cap: number): number {
-  diagReach("remainingMs");
   if (!active) return cap;
   const left = LIMITS.deadlineMs - (now() - active.startedAt);
-  if (left <= 0) {
-    diag(`EXHAUSTED category=DEADLINE checkpoint=remainingMs spend[${diagSpend()}]`);
-    throw new BudgetExceededError("time");
-  }
+  if (left <= 0) throw new BudgetExceededError("time");
   return Math.max(1, Math.min(cap, left));
 }
 
 /** Charge one helper invocation BEFORE starting it, so the cap stops work rather than reporting it. */
 export function spendHelperCall(): void {
-  diagReach("spendHelperCall");
   checkDeadline();
   if (!active) return;
-  if (active.helperCalls + 1 > LIMITS.helperCalls) {
-    diag(`EXHAUSTED category=INSPECTION-COUNT checkpoint=spendHelperCall spend[${diagSpend()}]`);
-    throw new BudgetExceededError("inspections");
-  }
+  if (active.helperCalls + 1 > LIMITS.helperCalls) throw new BudgetExceededError("inspections");
   active.helperCalls += 1;
 }
 
@@ -240,24 +147,16 @@ export function spendHelperCall(): void {
  * the operation as a whole has left. Returns `cap` when no allowance is active.
  */
 export function remainingBytes(cap: number): number {
-  diagReach("remainingBytes");
   if (!active) return cap;
   const left = LIMITS.helperBytes - active.helperBytes;
-  if (left <= 0) {
-    diag(`EXHAUSTED category=OUTPUT-BYTES checkpoint=remainingBytes spend[${diagSpend()}]`);
-    throw new BudgetExceededError("output");
-  }
+  if (left <= 0) throw new BudgetExceededError("output");
   return Math.max(1, Math.min(cap, left));
 }
 
 /** Charge a helper's output once it is in hand. */
 export function spendHelperBytes(bytes: number): void {
-  diagReach("spendHelperBytes");
   if (!active) return;
-  if (active.helperBytes + bytes > LIMITS.helperBytes) {
-    diag(`EXHAUSTED category=OUTPUT-BYTES checkpoint=spendHelperBytes spend[${diagSpend()}]`);
-    throw new BudgetExceededError("output");
-  }
+  if (active.helperBytes + bytes > LIMITS.helperBytes) throw new BudgetExceededError("output");
   active.helperBytes += bytes;
 }
 
@@ -266,18 +165,13 @@ export function spendHelperBytes(bytes: number): void {
  * directory larger than the allowance is never fully loaded: the read stops instead.
  */
 export function spendDirEntry(): void {
-  diagReach("spendDirEntry");
   checkDeadline();
   if (!active) return;
-  if (active.dirEntries + 1 > LIMITS.dirEntries) {
-    diag(`EXHAUSTED category=ENTRY-COUNT checkpoint=spendDirEntry spend[${diagSpend()}]`);
-    throw new BudgetExceededError("records");
-  }
+  if (active.dirEntries + 1 > LIMITS.dirEntries) throw new BudgetExceededError("records");
   active.dirEntries += 1;
 }
 
 /** Charge nothing; just refuse if the clock has run out. For loops that do no helper work. */
 export function checkBudgetDeadline(): void {
-  diagReach("checkBudgetDeadline");
   checkDeadline();
 }
