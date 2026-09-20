@@ -329,6 +329,47 @@ test("the inspection script is a constant that interpolates nothing", () => {
   assert.match(source, /catch\{ \$o\.errorType=.*Test-Path -LiteralPath/, "a failed inspection still reports whether the object is there");
 });
 
+test("every cmdlet in the inspection script is module-qualified", () => {
+  // A PERFORMANCE REQUIREMENT WITH A SECURITY-ADJACENT EDGE, pinned so it cannot regress.
+  //
+  // An unqualified command name makes PowerShell enumerate every module on PSModulePath before
+  // it can dispatch. Measured on a windows-11-arm runner whose PSModulePath carries the Azure
+  // module set ahead of the system one: `Get-Item` cost 41,817 ms and
+  // `Microsoft.PowerShell.Management\Get-Item` cost 900 ms, with byte-identical output. The
+  // whole helper went from 22.4 s to 0.4 s on the same inputs.
+  //
+  // This is a DISCRIMINATING regression: it fails against the previous, unqualified source.
+  const source = acl.HELPER_SCRIPT_FOR_TESTS;
+  const CMDLETS = ["Get-Item", "Test-Path", "New-Object", "Where-Object", "ConvertTo-Json"];
+  const MODULES: Record<string, string> = {
+    "Get-Item": "Microsoft.PowerShell.Management",
+    "Test-Path": "Microsoft.PowerShell.Management",
+    "New-Object": "Microsoft.PowerShell.Utility",
+    "Where-Object": "Microsoft.PowerShell.Core",
+    "ConvertTo-Json": "Microsoft.PowerShell.Utility",
+  };
+  for (const name of CMDLETS) {
+    // Every occurrence, not merely one: a single unqualified call reintroduces the whole cost.
+    const bare = new RegExp("(?<![\\w\\\\.])" + name + "\\b", "g");
+    const hits = source.match(bare) ?? [];
+    assert.strictEqual(
+      hits.length, 0,
+      `${name} appears unqualified ${hits.length} time(s); write ${MODULES[name]}\\${name} instead`
+    );
+    assert.ok(
+      source.includes(`${MODULES[name]}\\${name}`),
+      `${name} should still be used, qualified as ${MODULES[name]}\\${name}`
+    );
+  }
+  // The qualification must not have smuggled in a different module.
+  const qualified = source.match(/[A-Za-z0-9.]+\\[A-Z][A-Za-z]+-[A-Z][A-Za-z]+/g) ?? [];
+  for (const q of qualified) {
+    const [mod, cmd] = q.split("\\");
+    assert.strictEqual(mod, MODULES[cmd], `${cmd} must come from ${MODULES[cmd]}, not ${mod}`);
+  }
+  assert.ok(qualified.length >= CMDLETS.length, "every cmdlet is accounted for");
+});
+
 test("every refusal sentence is fixed words, with no path, descriptor, record or OS text in it", () => {
   const problems: consent.ConsentStoreProblem[] = [
     "not-a-directory", "symlink", "foreign-owner", "permissive", "inaccessible",
