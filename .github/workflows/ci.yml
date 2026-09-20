@@ -416,6 +416,10 @@ jobs:
         run: npx ts-node --transpile-only tests/consent-macos-two-user.test.ts
 
   diag-windows-budget:
+    # PARKED. Its measurements are frozen in pr96-budget-instrumentation (dfc9e5f3...) and
+    # re-running it would duplicate completed work. Left in place rather than deleted so the
+    # branch still shows what produced that record.
+    if: ${{ false }}
     # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged, asserts nothing beyond the
     # suite's own assertions, and exists to name the checkpoint that refuses. Node 20 and
     # windows-latest, matching the job that failed.
@@ -490,6 +494,129 @@ jobs:
             echo "  --- last 8 lines, so a startup failure cannot hide ---"
             tail -8 "run$i.txt" | sed 's/^/    /'
           done
+
+  diag-packaging-smoke:
+    # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged. It instruments the packaged
+    # npm-tarball smoke, which produced an operation-too-large refusal on run 35491820687 without
+    # any test fixture involved. Node 22 and windows-latest, matching THAT job exactly -- the
+    # original test failure was Node 20 and this one is not a same-runtime repeat of it.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Identity, and the store pre-flight that gates everything below
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "runner image: ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
+          echo "checked out : $(git rev-parse HEAD)   (a GENERATED MERGE REF on pull_request)"
+          echo "node        : $(node -p 'process.version + \" \" + process.arch') at $(node -p 'process.execPath')"
+          echo "account     : $(whoami)"
+          echo "diagnostic file digests:"
+          for f in tests/fixtures/packaged-trace-shim.js tests/fixtures/packaged-budget-controls.js \
+                   scripts/smoke-tarball.sh src/consent-budget.ts src/consent.ts src/consent-acl-win.ts; do
+            echo "  $(git hash-object "$f")  $f"
+          done
+          # THE GATE. The smoke uses the real store under the runner account's profile, because
+          # the consent directory is deliberately not overridable from the environment. On an
+          # ephemeral GitHub-hosted runner that store must not exist yet. If it does, something
+          # unknown is there and this job stops WITHOUT READING IT.
+          STORE="$USERPROFILE/.secretloop"
+          if [ -e "$STORE" ]; then
+            echo "PRE-FLIGHT FAILED: a consent store already exists. Not read, not removed."
+            echo "EXPERIMENT_GATE=blocked" >> "$GITHUB_ENV"
+          else
+            echo "PRE-FLIGHT OK: no consent store present, so anything found later was made here."
+            echo "EXPERIMENT_GATE=open" >> "$GITHUB_ENV"
+          fi
+
+      - name: Pack the tarball once, and prove the hook attaches to THAT artifact
+        if: env.EXPERIMENT_GATE == 'open'
+        shell: bash
+        run: |
+          set -uo pipefail
+          npm pack --silent > tarball.txt 2>/dev/null || npm pack > tarball.txt
+          TGZ=$(tail -1 tarball.txt | tr -d '\r')
+          echo "tarball     : $TGZ"
+          echo "tarball sha256: $(sha256sum "$TGZ" | cut -d" " -f1)"
+          mkdir -p probe && tar -xzf "$TGZ" -C probe
+          echo "packaged consent modules, by content:"
+          for f in probe/package/out/consent-budget.js probe/package/out/consent.js \
+                   probe/package/out/consent-acl-win.js probe/package/out/mcp.js; do
+            echo "  $(sha256sum "$f" | cut -d" " -f1)  ${f#probe/package/}"
+          done
+          echo "--- is it one bundle or separate modules? (Module._load can only hook the latter)"
+          grep -c 'require("./consent-budget")' probe/package/out/consent.js || true
+          echo "--- injected controls against the PACKED module"
+          node tests/fixtures/packaged-budget-controls.js "$PWD/probe/package/out/consent-budget.js" 2>&1 | tee controls.txt
+          if grep -q "injected: deadline .* what=time" controls.txt \
+             && grep -q "injected: entry count .* what=records" controls.txt \
+             && grep -q "injected: inspections .* what=inspections" controls.txt \
+             && grep -q "injected: output bytes .* what=output" controls.txt; then
+            echo "CONTROLS PASSED: the packed artifact classifies all four categories."
+          else
+            echo "CONTROLS FAILED: treat every category claim below as unestablished."
+          fi
+
+      - name: The bounded experiment - order fixed here, before it runs
+        if: env.EXPERIMENT_GATE == 'open'
+        shell: bash
+        run: |
+          set -uo pipefail
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/packaged-trace-shim.js")"
+          STORE="$USERPROFILE/.secretloop"
+          # SIX attempts, alternating, decided now and NOT extended if nothing appears:
+          #   1 U-cold   2 I-cold   3 I       4 U       5 I       6 U
+          # U = the smoke exactly as CI runs it. I = the same smoke with the preload, which is
+          # the ONLY difference: the shim rides in on NODE_OPTIONS and the script is untouched,
+          # so its assertions and its 30 s per-request deadline are the shipped ones.
+          ORDER="U I I U I U"
+          n=0
+          for mode in $ORDER; do
+            n=$((n+1))
+            echo "===== attempt $n  mode=$mode ====="
+            # Matched fresh store. Only ever removes a store this job created: the pre-flight
+            # established there was none, and removal is bounded to that one directory.
+            if [ -e "$STORE" ]; then
+              echo "  store before cleanup: $(find "$STORE" -type f | wc -l) file(s); removing state this job created"
+              rm -rf "$STORE"
+            fi
+            echo "  store present at start: $([ -e "$STORE" ] && echo yes || echo no)"
+            START=$(node -p "Date.now()")
+            if [ "$mode" = "I" ]; then
+              NODE_OPTIONS="--require $SHIM" npm run smoke:tarball > "smoke$n.txt" 2>&1 || true
+            else
+              npm run smoke:tarball > "smoke$n.txt" 2>&1 || true
+            fi
+            END=$(node -p "Date.now()")
+            echo "  wall clock: $(( END - START )) ms"
+            echo "  verdict: $(grep -cE 'smoke: FAIL' "smoke$n.txt") failure line(s)"
+            echo "  --- the MCP round trip, from the product's own log"
+            grep -E "tools/call|tools/result|smoke: (ok|FAIL|MCP)" "smoke$n.txt" | tail -12 || true
+            echo "  --- instrumentation, if this attempt carried it"
+            grep -E "INSTRUMENTATION ATTACHED|ATTACHMENT CONTROL|operation [0-9]+ (START|END)|EXHAUSTED category=|REQUEST RECEIVED|RESPONSE EMITTED" "smoke$n.txt" | head -40 || true
+            echo "  --- slowest helpers"
+            grep -oE "helper [a-z.]+ END [0-9]+ms status=[-0-9]+ outBytes=[0-9]+" "smoke$n.txt" | sort -t" " -k4 -rn | head -4 | sed "s/^/    /"
+            echo "  --- store after this attempt: $([ -e "$STORE" ] && find "$STORE" -type f | wc -l || echo 0) file(s)"
+            echo "  --- tail, so a startup failure cannot hide"
+            tail -5 "smoke$n.txt" | sed "s/^/    /"
+          done
+          echo "===== bounded set complete. Six attempts were planned and six were run. ====="
+          if [ -e "$STORE" ]; then rm -rf "$STORE"; echo "cleanup: removed the store this job created"; fi
+
+      - name: Say so loudly if the gate blocked the experiment
+        if: env.EXPERIMENT_GATE != 'open'
+        shell: bash
+        run: |
+          echo "EXPERIMENT NOT RUN: the pre-flight found an existing consent store and stopped"
+          echo "rather than read or remove it. This is NOT a non-reproduction."
+          exit 1
 
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
