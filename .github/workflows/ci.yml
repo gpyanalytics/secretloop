@@ -426,6 +426,10 @@ jobs:
   # package.json test-script change is left out so `npm test` is identical to #99's.
   # ==========================================================================================
   test-windows-arm:
+    # PARKED for the paired-comparison run only. This branch's arm64 evidence at 811bbb4 is
+    # already frozen in pr99-review, and the shared arm64 pool queued ~50 minutes last time,
+    # so re-running it here would duplicate completed work rather than add any.
+    if: ${{ false }}
     # NATIVE WINDOWS ON ARM64, WHICH IS ALSO A CLIENT SKU.
     #
     # `windows-11-arm` is a Windows 11 Enterprise DESKTOP image on arm64, so one standard runner
@@ -498,6 +502,10 @@ jobs:
 
 
   test-windows-arm-two-user:
+    # PARKED for the paired-comparison run only. This branch's arm64 evidence at 811bbb4 is
+    # already frozen in pr99-review, and the shared arm64 pool queued ~50 minutes last time,
+    # so re-running it here would duplicate completed work rather than add any.
+    if: ${{ false }}
     # THE SAME TWO-ACCOUNT FIXTURE, ON ARM64. Ordinary-account behaviour is the one thing the
     # suite job above cannot show, because that runner is an administrator.
     #
@@ -709,6 +717,10 @@ jobs:
 
 
   packaging-windows-arm:
+    # PARKED for the paired-comparison run only. This branch's arm64 evidence at 811bbb4 is
+    # already frozen in pr99-review, and the shared arm64 pool queued ~50 minutes last time,
+    # so re-running it here would duplicate completed work rather than add any.
+    if: ${{ false }}
     # The same two packaging smokes as `packaging-windows`, on native arm64. The npm tarball
     # smoke includes the MCP stdio round trip, so this covers the packaged CLI and MCP entry
     # points on this architecture as well as the archive contents.
@@ -822,8 +834,9 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
           $LAB = $env:ACL_LAB
-          $pw = ConvertTo-SecureString $env:ACL_PW1 -AsPlainText -Force
-          $cred = New-Object System.Management.Automation.PSCredential(".\slprobe", $pw)
+          # The password is deliberately NOT in the environment; the provisioning step writes
+          # it to RUNNER_TEMP. Read it exactly the way the existing two-account job does.
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
           $node = (Get-Command node).Source
           $shim = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
           $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
