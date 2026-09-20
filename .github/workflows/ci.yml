@@ -781,6 +781,24 @@ jobs:
           echo "packed: $tarball"
           tar -xzf "$work/$tarball" -C "$work"
           node "$GITHUB_WORKSPACE/tests/fixtures/win-mcp-trace.js" --work "$work" --limit-ms 180000 || true
+          # SEPARATE THE TWO TERMS. The trace above shows the time is inside powershell.exe, but
+          # not whether that is the interpreter STARTING or our helper script WORKING. Five bare
+          # startups with the same flags the product uses, so the two can be told apart. Cold and
+          # warm are reported separately and are not averaged together.
+          echo "--- bare powershell startup, same flags the product uses (-NoProfile -NonInteractive)"
+          for i in 1 2 3 4 5; do
+            s=$(date +%s%N)
+            "$SYSTEMROOT/System32/WindowsPowerShell/v1.0/powershell.exe" -NoProfile -NonInteractive -Command "exit 0" >/dev/null 2>&1 || true
+            e=$(date +%s%N)
+            echo "BARE-PWSH run $i: $(( (e - s) / 1000000 )) ms"
+          done
+          echo "--- and pwsh 7, for contrast (the product does NOT use this)"
+          for i in 1 2; do
+            s=$(date +%s%N)
+            pwsh -NoProfile -NonInteractive -Command "exit 0" >/dev/null 2>&1 || true
+            e=$(date +%s%N)
+            echo "BARE-PWSH7 run $i: $(( (e - s) / 1000000 )) ms"
+          done
       - name: Smoke the npm tarball
         shell: bash
         run: npm run smoke:tarball
