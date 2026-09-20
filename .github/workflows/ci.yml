@@ -415,6 +415,35 @@ jobs:
           SECRETLOOP_MAC_ATTACKER: slattack
         run: npx ts-node --transpile-only tests/consent-macos-two-user.test.ts
 
+  diag-windows-budget:
+    # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged, asserts nothing beyond the
+    # suite's own assertions, and exists to split the 51.1 s that the post-merge failure showed
+    # between fixture setup and the consent operation itself, and to name the checkpoint that
+    # refuses. Node 20 and windows-latest, matching the job that failed.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: The failing test, with its normal fixture and ordering, instrumented
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "--- environment"
+          node -p "'node ' + process.version + ' ' + process.arch + ' on ' + process.platform"
+          echo "--- three runs of the real file, stderr trace on, so variance is visible"
+          for i in 1 2 3; do
+            echo "===== attempt $i ====="
+            NODE_OPTIONS="--require $PWD/tests/fixtures/budget-trace-shim.js" \
+              npx ts-node --transpile-only tests/verify-consent.test.ts 2>&1 \
+              | grep -E "BTRACE|CONSENT_REQUIRED and makes zero|passed," | head -60 || true
+          done
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
