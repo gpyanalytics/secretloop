@@ -535,10 +535,16 @@ jobs:
           echo "  $(git hash-object scripts/smoke-tarball.sh)  scripts/smoke-tarball.sh     (UNCHANGED)"
           echo "  $(git hash-object tests/fixtures/packaged-trace-shim.js)  packaged-trace-shim.js"
           echo "--- what the tarball actually contains, established rather than assumed"
-          npm pack --silent --pack-destination shape >/dev/null 2>&1 || npm pack --pack-destination shape
+          mkdir -p shape
+          npm pack --pack-destination shape >/dev/null 2>&1
           tar -tzf shape/*.tgz | grep "^package/out/" | sed 's/^/    /'
           echo "    (only two files, both esbuild bundles: a module hook cannot see inside them)"
-          STORE="$USERPROFILE/.secretloop"
+          # Resolved by node, exactly as src/consent.ts:90 does it (homedir() + .secretloop),
+          # then converted for bash. $USERPROFILE is a backslash path and testing it directly
+          # can fail for the wrong reason -- a pre-flight that passes because its path was
+          # malformed is worse than no pre-flight at all.
+          STORE="$(cygpath "$(node -p "require('path').join(require('os').homedir(), '.secretloop')")")"
+          echo "store the product will use: $STORE"
           if [ -e "$STORE" ]; then
             echo "PRE-FLIGHT FAILED: a consent store already exists. Not read, not removed."
             echo "EXPERIMENT_GATE=blocked" >> "$GITHUB_ENV"
@@ -573,7 +579,7 @@ jobs:
         run: |
           set -uo pipefail
           SHIM="$(cygpath -w "$PWD/tests/fixtures/packaged-trace-shim.js")"
-          STORE="$USERPROFILE/.secretloop"
+          STORE="$(cygpath "$(node -p "require('path').join(require('os').homedir(), '.secretloop')")")"
           cp src/consent-budget.ts /tmp/diag-budget.ts
           # SIX attempts, decided now, NOT extended if nothing appears:
           #   1 S   shipped source (main's budget module), no trace, no shim
@@ -613,8 +619,11 @@ jobs:
             grep -E "tools/call|tools/result|smoke: (ok|FAIL|MCP)" "smoke$n.txt" | tail -10 || true
             echo "  --- budget events from the patched build"
             grep -E "BUDGETDIAG" "smoke$n.txt" | head -25 || echo "    (none - expected for S and D0)"
-            echo "  --- request boundary and helpers from the preload"
-            grep -E "PTRACE .*(REQUEST RECEIVED|RESPONSE EMITTED|helper )" "smoke$n.txt" | head -25 || true
+            # mcp-core is inlined in the bundle as well, so the preload cannot wrap the request
+            # boundary here; the product's own tools/call and tools/result lines above are that
+            # boundary. child_process stays external, which is why helper timings still appear.
+            echo "  --- helpers, from the preload (child_process is external to the bundle)"
+            grep -E "PTRACE .*helper " "smoke$n.txt" | head -25 || true
             echo "  --- store after this attempt: $([ -e "$STORE" ] && find "$STORE" -type f | wc -l || echo 0) file(s)"
             echo "  --- tail, so a startup failure cannot hide"
             tail -4 "smoke$n.txt" | sed "s/^/    /"
