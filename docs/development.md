@@ -273,11 +273,12 @@ and §7 records that the tag has drifted behind `main` more than once.
 
 - **The Windows consent helper was slow because of command discovery, and is not any more.**
   Kept here because the shape of the problem is worth remembering, not because anything is
-  outstanding. Unqualified cmdlet names make PowerShell enumerate every module on
-  `PSModulePath`; on a runner carrying the Azure module set that cost ~42 s per invocation
-  against ~0.8 s for an interpreter doing nothing, while .NET *type* resolution cost nothing at
-  all. Module-qualifying every cmdlet removed it, with byte-identical output. The lesson
-  generalises: in a helper script, a cmdlet is expensive to *find*, not to *run*.
+  outstanding. Resolving an unqualified cmdlet name was the cost: on a runner whose
+  `PSModulePath` lists the Azure module set it took ~42 s per invocation against ~0.8 s for an
+  interpreter doing nothing, while .NET *type* resolution cost nothing at all. Module-qualifying
+  every cmdlet removed it, with byte-identical output. The lesson generalises: in a helper
+  script, a cmdlet can be far more expensive to *find* than to *run*. Why resolution is that
+  expensive on such a machine was not traced, and is not asserted here.
 
 Accurate as of the 0.6.0 release (published 2026-09-15), except where an entry
 names an earlier release:

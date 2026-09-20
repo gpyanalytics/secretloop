@@ -332,9 +332,9 @@ test("the inspection script is a constant that interpolates nothing", () => {
 test("every cmdlet in the inspection script is module-qualified", () => {
   // A PERFORMANCE REQUIREMENT WITH A SECURITY-ADJACENT EDGE, pinned so it cannot regress.
   //
-  // An unqualified command name makes PowerShell enumerate every module on PSModulePath before
-  // it can dispatch. Measured on a windows-11-arm runner whose PSModulePath carries the Azure
-  // module set ahead of the system one: `Get-Item` cost 41,817 ms and
+  // An unqualified command name must be resolved before PowerShell can dispatch it, and that
+  // resolution is what costs. Measured on a windows-11-arm runner whose PSModulePath lists the
+  // Azure module set ahead of the system one: `Get-Item` cost 41,817 ms and
   // `Microsoft.PowerShell.Management\Get-Item` cost 900 ms, with byte-identical output. The
   // whole helper went from 22.4 s to 0.4 s on the same inputs.
   //
