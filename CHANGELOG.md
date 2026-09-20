@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+### Validation
+
+- **The Windows suite now runs natively on ARM64, on a Windows 11 client
+  edition.** Three CI jobs on the standard `windows-11-arm` runner: the full
+  suite on Node 20 and 22, the two-account consent fixture, and the packaging
+  smokes. Measured rather than assumed — Windows 11 Enterprise 10.0.26200,
+  `ProductType 1` (workstation, not Server), ARM 64-bit, Node reporting
+  `process.arch=arm64` with no emulation indicator — and the job **fails** if
+  any of that is untrue, because an emulated x64 result presented as native
+  ARM64 evidence would be worse than none. **Node 18 is not in that matrix and
+  cannot be**: nodejs.org publishes no `win-arm64` build for any v18 release.
+  `engines.node` is unchanged at `">=18.0.0"`; it states the lowest version the
+  code supports, not a promise of a binary for every platform and architecture.
+  No product behaviour changed.
+- **What that does not establish.** One hosted image is not universal client
+  support. The ordinary suite jobs run **elevated**, so only the two-account
+  jobs are evidence about ordinary-account behaviour, and the existing x64
+  two-account results stay x64 results. Local accounts say nothing about domain
+  accounts. Non-English hosts, managed or relocated profiles, and non-NTFS
+  volumes are still unexercised.
+
 ### Consent
 
 - **SecretLoop refuses to trust consent records when the consent directory

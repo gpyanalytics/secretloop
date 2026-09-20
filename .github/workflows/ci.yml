@@ -506,6 +506,17 @@ jobs:
             console.log('store dir under test  : ' + dir);
             console.log('budget deadline is 20000 ms for a WHOLE operation, and a verify runs several of these');
           "
+      - name: Where the time goes in one consent operation
+        # DIAGNOSTIC, asserting nothing and always exiting 0. "verify timed out" is not a
+        # diagnosis. The packaged MCP smoke allows 30 s per request and secretloop_verify
+        # exceeded it here while taking 17.9 s on x64, so this breaks the cost down by helper
+        # with monotonic durations, against a disposable store with the provider intercepted.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $lab = Join-Path $env:RUNNER_TEMP "cost-lab"
+          New-Item -ItemType Directory -Force $lab | Out-Null
+          node (Join-Path $PWD "tests\fixtures\win-consent-cost.js") --out (Join-Path $PWD "out") --lab $lab
       - run: npm test
 
 
@@ -554,8 +565,41 @@ jobs:
           # list-children, and /inheritance:r stops the child from receiving it.
           $LAB = "C:\sl-acl-lab"
           New-Item -ItemType Directory -Force $LAB | Out-Null
-          icacls $LAB /inheritance:r /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
-          "--- the lab root, after resetting inheritance"; icacls $LAB
+          "--- the lab root as created, BEFORE anything is applied"; icacls $LAB
+          # Two separate icacls calls with their exit codes checked. The previous attempt combined
+          # /inheritance:r and /grant:r in one invocation, piped to Out-Null, and the result still
+          # carried "NT AUTHORITY\Authenticated Users:(M)" -- twice, and with no (I) marker. A
+          # swallowed failure and a silently ineffective option look identical through Out-Null,
+          # so neither is guessed at here.
+          icacls $LAB /inheritance:r /q
+          if ($LASTEXITCODE -ne 0) { throw "could not remove inherited ACEs from $LAB" }
+          "--- after /inheritance:r alone"; icacls $LAB
+          icacls $LAB /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not set the lab root's access list" }
+          "--- after /grant:r"; icacls $LAB
+          # THE FIXTURE ASSERTS ITS OWN PRECONDITION. The lab's parents must not be modifiable by
+          # some other account, or the refusal the test is built to observe cannot be told apart
+          # from the product objecting to the harness. C:\ grants Authenticated Users an
+          # INHERIT-ONLY entry (OICIIO with SD/GX/GW/GR), so a child receives it unless inheritance
+          # is really gone. Fail loudly here rather than three steps later.
+          $labAcl = (icacls $LAB | Out-String)
+          if ($labAcl -match "Authenticated Users") {
+            throw "the lab root still grants Authenticated Users after /inheritance:r, so its own parents are unsafe and nothing below would be evidence:`n$labAcl"
+          }
+          "--- effective ancestry of the lab, as the product sees it"
+          node -e "
+            const acl = require('./out/consent-acl-win.js');
+            const sid = acl.currentUserSid();
+            const chain = acl.ancestorChainOf('C:\\sl-acl-lab\\private') || [];
+            const info = acl.inspectPaths(chain);
+            console.log('builder sid:', sid);
+            if (!info.ok) { console.log('inspect failed:', info.problem); }
+            else for (const c of chain) {
+              const e = info.byPath.get(require('path').win32.resolve(c).toLowerCase());
+              console.log('  ', c, 'owner', e && e.ownerSid);
+              console.log('      sddl', e && e.sddl);
+            }
+          "
           # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
           New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
           icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
