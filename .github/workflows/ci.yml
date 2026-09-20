@@ -761,6 +761,26 @@ jobs:
           $lab = Join-Path $env:USERPROFILE "sl-cost-lab"
           New-Item -ItemType Directory -Force $lab | Out-Null
           node (Join-Path $PWD "tests\fixtures\win-consent-cost.js") --out (Join-Path $PWD "out") --lab $lab
+      - name: TRACE the packaged server, with a longer diagnostic ceiling
+        # DISPOSABLE DIAGNOSTIC. Asserts nothing, always exits 0, and is NOT a packaging gate --
+        # the real smoke below keeps its own 30-second ceiling, unchanged, and is what decides
+        # the job. This exists because the library-level timing measured 5.8 s while the packaged
+        # server returns nothing in 30 s, and that gap cannot be closed by reasoning about it.
+        #
+        # It packs and extracts the tarball exactly as the smoke does, then drives the same
+        # request sequence against the same packaged bytes with the trace shim preloaded via
+        # --require, so the package's own files are never modified. The shim writes to stderr
+        # only, because stdout is the JSON-RPC transport. Its heartbeat is the discriminator: if
+        # it stops, the event loop is blocked inside a synchronous call.
+        shell: bash
+        run: |
+          set -uo pipefail
+          work="$(mktemp -d)"
+          trap 'rm -rf "$work"' EXIT
+          tarball="$(cd "$work" && npm pack "$PWD" --silent 2>/dev/null || cd "$work" && npm pack "$GITHUB_WORKSPACE" --silent)"
+          echo "packed: $tarball"
+          tar -xzf "$work/$tarball" -C "$work"
+          node "$GITHUB_WORKSPACE/tests/fixtures/win-mcp-trace.js" --work "$work" --limit-ms 180000 || true
       - name: Smoke the npm tarball
         shell: bash
         run: npm run smoke:tarball
