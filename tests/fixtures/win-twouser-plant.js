@@ -54,12 +54,18 @@ if (!out || !store || !repoDir) {
   const finding = scan.payload.findings.find((f) => f.ruleId === "github-token");
   if (!finding) throw new Error("the fixture repository produced no verifiable finding");
 
+  // Timed, because a refusal here has to be attributable. A budget refusal after roughly the
+  // 20,000 ms allowance is a DEADLINE; one that arrives promptly is a count or byte cap. Without
+  // this the two are indistinguishable, since every category maps to one message.
+  const startedAt = Date.now();
   const first = await mcp.toolVerify({ path: repo, fingerprint: finding.fingerprint });
+  const verifyMs = Date.now() - startedAt;
+  console.log(`PLANT-TIMING first verify took ${verifyMs} ms`);
   if (!first.ok || first.payload.state !== "CONSENT_REQUIRED") {
     // Say what actually came back. A fixture that cannot explain its own failure turns a
     // diagnosable problem into a guess.
     const detail = first.ok ? `state ${first.payload.state}` : `refused: ${String(first.error).slice(0, 160)}`;
-    throw new Error(`the first request did not ask for consent (${detail})`);
+    throw new Error(`the first request did not ask for consent after ${verifyMs} ms (${detail})`);
   }
   if (outbound !== 0) throw new Error("the first request attempted to transmit");
 
