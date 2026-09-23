@@ -415,6 +415,555 @@ jobs:
           SECRETLOOP_MAC_ATTACKER: slattack
         run: npx ts-node --transpile-only tests/consent-macos-two-user.test.ts
 
+  # ==========================================================================================
+  # ARM64 JOBS BELOW ARE TAKEN VERBATIM FROM PR #95's BRANCH windows-arm64-validation.
+  #
+  # This is an ISOLATED INTEGRATION BRANCH, never merged and never pushed to #95. It exists
+  # because the ARM64 runner configuration is not on main, and the budget accounting needs
+  # native ARM64 evidence. WHAT IT TESTS: the product source of PR #99 (this branch's parent),
+  # with #95's workflow configuration only. NOTHING else from #95 is here -- in particular its
+  # src/consent-acl-win.ts predates #96 and would revert the module qualification, and its
+  # package.json test-script change is left out so `npm test` is identical to #99's.
+  # ==========================================================================================
+  test-windows-arm:
+    # PARKED for the paired-comparison run only. This branch's arm64 evidence at 811bbb4 is
+    # already frozen in pr99-review, and the shared arm64 pool queued ~50 minutes last time,
+    # so re-running it here would duplicate completed work rather than add any.
+    if: ${{ false }}
+    # NATIVE WINDOWS ON ARM64, WHICH IS ALSO A CLIENT SKU.
+    #
+    # `windows-11-arm` is a Windows 11 Enterprise DESKTOP image on arm64, so one standard runner
+    # covers two things this repository had never measured: a non-Server Windows edition, and an
+    # architecture other than x64. Everything below is the `test-windows` job unchanged except
+    # for the runner label, the Node matrix and the environment assertion, so a difference in
+    # results is a difference in the platform rather than in how it was driven.
+    #
+    # NODE 20 AND 22, AND NOT 18. nodejs.org publishes no win-arm64 build for any v18 release --
+    # v18.20.8 lists only win-x64 and win-x86 files, and win-arm64 first appears at v20. The x64
+    # job still covers 18; this one cannot, and the gap is stated rather than papered over.
+    #
+    # Added beside the existing jobs and taking nothing away: every existing job, check name and
+    # permission is untouched, so branch protection keeps requiring exactly what it required
+    # before. This job is NOT a required check.
+    runs-on: windows-11-arm
+    # A hard ceiling, because the readers under test are exactly the code whose
+    # failure mode is an indefinite block on open. The Linux job inherits the
+    # 360-minute default; a Windows hang would otherwise hold a runner for six
+    # hours and report nothing legible.
+    timeout-minutes: 30
+    strategy:
+      # Report both majors. With fail-fast, a Windows-only defect on 18 would
+      # cancel 20 and hide whether the defect is version-specific -- which is
+      # the first question asked when diagnosing one.
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - run: npm ci
+      # Before the suite, not after: five test files spawn `out/cli.js` as a
+      # child process, so an unbuilt or stale `out/` makes the suite a test of
+      # the wrong artifact. `pretest` guards this too; building here is what
+      # lets that guard pass.
+      - run: npm run compile
+      - name: Prove this is native arm64 on a Windows 11 client, before anything is measured
+        # If this step is wrong, every result below describes some other machine. It fails the
+        # job rather than warning, because an emulated or Server result presented as native
+        # client evidence is worse than no evidence.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cs = Get-CimInstance Win32_ComputerSystem
+          "edition            : $($os.Caption)"
+          "version / build    : $($os.Version) build $($os.BuildNumber)"
+          "ProductType        : $($os.ProductType)   (1 = workstation/client, 2 = domain controller, 3 = server)"
+          "OS architecture    : $($os.OSArchitecture)"
+          "runner image       : $env:ImageOS / $env:ImageVersion"
+          "PROCESSOR_ARCHITECTURE : $env:PROCESSOR_ARCHITECTURE"
+          "PROCESSOR_ARCHITEW6432 : $(if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { '(unset - not emulated)' })"
+          "whoami             : $(whoami)"
+          $admin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          "elevated           : $admin"
+          "node               : $(node -p 'process.version')  arch=$(node -p 'process.arch')  execPath=$(node -p 'process.execPath')"
+          if ($os.ProductType -ne 1) { throw "this is not a client SKU (ProductType $($os.ProductType)); the client claim would be false" }
+          $nodeArch = node -p "process.arch"
+          if ($nodeArch -ne "arm64") { throw "node reports arch=$nodeArch, not arm64: an emulated x64 process does not establish native ARM64 execution" }
+          if ($env:PROCESSOR_ARCHITEW6432) { throw "PROCESSOR_ARCHITEW6432 is set, which means this process is running under emulation" }
+          # Recorded, NOT asserted: the runner is an administrator by design, so nothing in this
+          # job is evidence about ordinary-user behaviour. The two-account job is.
+          "NOTE: elevated=$admin - results here are ELEVATED results; ordinary-account evidence"
+          "      comes only from test-windows-arm-two-user."
+      - run: npm test
+
+
+  test-windows-arm-two-user:
+    # PARKED for the paired-comparison run only. This branch's arm64 evidence at 811bbb4 is
+    # already frozen in pr99-review, and the shared arm64 pool queued ~50 minutes last time,
+    # so re-running it here would duplicate completed work rather than add any.
+    if: ${{ false }}
+    # THE SAME TWO-ACCOUNT FIXTURE, ON ARM64. Ordinary-account behaviour is the one thing the
+    # suite job above cannot show, because that runner is an administrator.
+    #
+    # The steps are the x64 job's steps, copied so the two cannot drift apart, with only the
+    # runner label changed. The HARNESS is not duplicated: both jobs drive the same
+    # tests/consent-acl-win-twouser.test.ts and the same tests/fixtures/win-twouser-*.js. What is
+    # duplicated is job plumbing, deliberately, because turning the existing job into a matrix
+    # would rename its check and this task must leave existing check names alone. Collapsing the
+    # two is worth doing later, in a change that is allowed to touch the existing job.
+    #
+    # EXISTING x64 EVIDENCE IS NOT PROMOTED. If this job cannot provision a second account on
+    # this image it FAILS rather than skipping, and the gap is reported as a gap.
+    runs-on: windows-11-arm
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: Provision two ordinary accounts and the fixture parents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          # NOT under RUNNER_TEMP on this image. Measured here: C:\a\_temp\acl-lab inherits
+          # "NT AUTHORITY\Authenticated Users:(M)" from C:\a, so EVERY authenticated account can
+          # modify the lab's own parents. The product is right to refuse a store under that, and
+          # it did -- the x64 job never hit it only because its RUNNER_TEMP is on D:\ and that
+          # chain is clean. The lab's location is harness plumbing, not the property under test,
+          # so it moves to a directory whose whole chain to the root is trusted. C:\ itself is
+          # trusted by the rule: its Authenticated Users entry is inherit-only (OICIIO) plus
+          # list-children, and /inheritance:r stops the child from receiving it.
+          $LAB = "C:\sl-acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          "--- the lab root as created, BEFORE anything is applied"; icacls $LAB
+          # Two separate icacls calls with their exit codes checked. The previous attempt combined
+          # /inheritance:r and /grant:r in one invocation, piped to Out-Null, and the result still
+          # carried "NT AUTHORITY\Authenticated Users:(M)" -- twice, and with no (I) marker. A
+          # swallowed failure and a silently ineffective option look identical through Out-Null,
+          # so neither is guessed at here.
+          icacls $LAB /inheritance:r /q
+          if ($LASTEXITCODE -ne 0) { throw "could not remove inherited ACEs from $LAB" }
+          "--- after /inheritance:r alone"; icacls $LAB
+          icacls $LAB /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not set the lab root's access list" }
+          "--- after /grant:r"; icacls $LAB
+          # MEASURED, not assumed: a directory created at the C:\ root comes into existence ALREADY
+          # carrying "Authenticated Users:(M)" and "BUILTIN\Users:(RX)" as EXPLICIT entries -- icacls
+          # prints them with no (I) marker. /inheritance:r therefore removes nothing and still
+          # reports "Successfully processed 1 files; Failed processing 0 files", which is why the
+          # previous attempt looked like it had worked. They have to be removed by name.
+          icacls $LAB /remove "*S-1-5-11" "*S-1-5-32-545" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not remove the Authenticated Users and Users entries from the lab root" }
+          "--- after removing Authenticated Users and BUILTIN\Users"; icacls $LAB
+          # THE FIXTURE ASSERTS ITS OWN PRECONDITION. The lab's parents must not be modifiable by
+          # some other account, or the refusal the test is built to observe cannot be told apart
+          # from the product objecting to the harness. C:\ grants Authenticated Users an
+          # INHERIT-ONLY entry (OICIIO with SD/GX/GW/GR), so a child receives it unless inheritance
+          # is really gone. Fail loudly here rather than three steps later.
+          $labAcl = (icacls $LAB | Out-String)
+          if ($labAcl -match "Authenticated Users") {
+            throw "the lab root still grants Authenticated Users after /inheritance:r, so its own parents are unsafe and nothing below would be evidence:`n$labAcl"
+          }
+          "--- effective ancestry of the lab, as the product sees it"
+          node -e "
+            const acl = require('./out/consent-acl-win.js');
+            const sid = acl.currentUserSid();
+            const chain = acl.ancestorChainOf('C:\\sl-acl-lab\\private') || [];
+            const info = acl.inspectPaths(chain);
+            console.log('builder sid:', sid);
+            if (!info.ok) { console.log('inspect failed:', info.problem); }
+            else for (const c of chain) {
+              const e = info.byPath.get(require('path').win32.resolve(c).toLowerCase());
+              console.log('  ', c, 'owner', e && e.ownerSid);
+              console.log('      sddl', e && e.sddl);
+            }
+          "
+          # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          # A parent the second account can write: the shape the policy must refuse.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "permissive") | Out-Null
+          icacls (Join-Path $LAB "permissive") /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("out", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          }
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          $pw2 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p2.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+          "ACL_SID1=$sid1" >> $env:GITHUB_ENV
+          "ACL_SID2=$sid2" >> $env:GITHUB_ENV
+      - name: Where the ancestor rule draws the line on THIS image, before anything is planted
+        # Moved ahead of the fixture on purpose. On x64 this diagnostic runs after the plant
+        # step, which is fine there because the plant succeeds. Here the plant is the thing that
+        # might refuse, and a refusal with no chain verdict beside it is a guess. The x64 job is
+        # left exactly as it was.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          "workspace : $PWD"
+          "RUNNER_TEMP: $env:RUNNER_TEMP"
+          "profile   : $env:USERPROFILE"
+          node (Join-Path $PWD "tests\\fixtures\\win-chain-diagnostic.js") (Join-Path $PWD "out\\consent-acl-win.js")
+          "--- the lab parents this job actually uses"
+          foreach ($d in @($env:ACL_LAB, (Join-Path $env:ACL_LAB "private"))) {
+            "=== $d"; icacls $d
+          }
+      - name: Plant a record with the real product, then hand it to the second account
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $store = Join-Path $LAB "private\.secretloop"
+          $repo = Join-Path $LAB "private\repo"
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $o = Join-Path $env:RUNNER_TEMP "plant.out"; $e = Join-Path $env:RUNNER_TEMP "plant.err"
+          $args = @((Join-Path $PWD "tests\fixtures\win-twouser-plant.js"), "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+          $p = Start-Process -FilePath $node -ArgumentList $args -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          Get-Content $o; if (Test-Path $e) { Get-Content $e }
+          if ($p.ExitCode -ne 0) { throw "the fixture could not be planted (exit $($p.ExitCode)); nothing below would be evidence" }
+          $record = ((Get-Content $o | Select-String -Pattern '^PLANTED-RECORD: ').Line -replace '^PLANTED-RECORD: ', '')
+          if (-not $record) { throw "the fixture helper printed no record path" }
+          # Ownership moves to the second account; the access list is left exactly as inherited,
+          # which is the laundered state the policy has to catch.
+          icacls $record /setowner "*$($env:ACL_SID2)" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not hand the planted record to the second account" }
+          "--- the planted record, as the runner sees it"; icacls $record
+          "ACL_STORE=$store" >> $env:GITHUB_ENV
+          "ACL_REPO=$repo" >> $env:GITHUB_ENV
+          # A second store whose pending directory grants the ordinary owner read access only.
+          # The rule refuses it; because that account is NOT an administrator, the write it
+          # governs must really fail, which an elevated job could never show.
+          $rx = Join-Path $LAB "private\\rxstore"
+          New-Item -ItemType Directory -Force (Join-Path $rx "pending") | Out-Null
+          icacls $rx /inheritance:r /grant:r "*$($env:ACL_SID1):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          icacls (Join-Path $rx "pending") /inheritance:r /grant:r "*$($env:ACL_SID1):(OI)(CI)RX" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          "ACL_RX_STORE=$rx" >> $env:GITHUB_ENV
+      - name: What the second ordinary account can and cannot do
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p2.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $probe = Join-Path $PWD "tests\fixtures\win-twouser-attempt.js"
+          function Attempt($tag, $dir, $out) {
+            $err = "$out.err"
+            $p = Start-Process -FilePath $node -ArgumentList @($probe, "--dir", $dir) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $out -RedirectStandardError $err -PassThru -NoNewWindow -Wait
+            $text = ((Get-Content $out) -join " ")
+            Write-Host "=== [$tag] as slprobe2: exit $($p.ExitCode) :: $text"
+            if (Test-Path $err) { Get-Content $err | ForEach-Object { Write-Host "stderr: $_" } }
+            if ($p.ExitCode -ne 0) { throw "the attempt probe [$tag] did not run; that is a non-measurement, not a refusal" }
+            return $text
+          }
+          $private = Attempt "under the private parent" (Join-Path $LAB "private") (Join-Path $env:RUNNER_TEMP "a1.out")
+          foreach ($op in @("create-store-name", "rename-parent", "delete-parent", "list-parent")) {
+            if ($private -match ('"' + $op + '":"SUCCEEDED"')) { throw "the second account could $op under the private parent" }
+          }
+          # The control. These operations are not impossible; they are prevented by the parent's
+          # permissions. Without a parent where they succeed, the refusals above prove nothing.
+          $permissive = Attempt "under the permissive parent (the control)" (Join-Path $LAB "permissive") (Join-Path $env:RUNNER_TEMP "a2.out")
+          if ($permissive -notmatch '"create-store-name":"SUCCEEDED"') {
+            throw "the control failed: the second account could not create the store name even under a permissive parent, so the refusal above is not evidence"
+          }
+      - name: Where the ancestor rule draws the line on this image
+        # Diagnostic, and evidence for the record: the chain verdict for the profile, for the
+        # store path a real user would have, and for the OS temporary directory the test suite
+        # uses. It asserts nothing; the cases above and below do the asserting.
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node (Join-Path $PWD "tests\\fixtures\\win-chain-diagnostic.js") (Join-Path $PWD "out\\consent-acl-win.js")
+      - name: The product, as the ordinary owner, against that fixture
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $runner = Join-Path $LAB "run-two-user.cmd"
+          $lines = @(
+            "@echo off",
+            ("cd /d " + '"' + $PWD + '"'),
+            "set SECRETLOOP_WIN_TWOUSER_STORE=$env:ACL_STORE",
+            "set SECRETLOOP_WIN_TWOUSER_REPO=$env:ACL_REPO",
+            "set SECRETLOOP_WIN_ATTACKER_SID=$env:ACL_SID2",
+            ("set SECRETLOOP_WIN_PERMISSIVE_PARENT=" + (Join-Path $LAB "permissive")),
+            "set SECRETLOOP_WIN_RX_STORE=$env:ACL_RX_STORE",
+            "set SECRETLOOP_WIN_EXPECTED_SID=$env:ACL_SID1",
+            "node node_modules\ts-node\dist\bin.js --transpile-only tests\consent-acl-win-twouser.test.ts"
+          )
+          Set-Content -Path $runner -Value $lines -Encoding ASCII
+          icacls $runner /grant "*$($env:ACL_SID1):RX" /q | Out-Null
+          $o = Join-Path $env:RUNNER_TEMP "suite.out"; $e = Join-Path $env:RUNNER_TEMP "suite.err"
+          $p = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") -ArgumentList @("/d", "/c", $runner) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          Get-Content $o; if (Test-Path $e) { Get-Content $e }
+          if ($p.ExitCode -ne 0) { throw "the two-account cases failed (exit $($p.ExitCode))" }
+          if (((Get-Content $o) -join "`n") -match "skip - ") { throw "a two-account case skipped inside the job that exists to run it" }
+
+
+  packaging-windows-arm:
+    # PARKED for the paired-comparison run only. This branch's arm64 evidence at 811bbb4 is
+    # already frozen in pr99-review, and the shared arm64 pool queued ~50 minutes last time,
+    # so re-running it here would duplicate completed work rather than add any.
+    if: ${{ false }}
+    # The same two packaging smokes as `packaging-windows`, on native arm64. The npm tarball
+    # smoke includes the MCP stdio round trip, so this covers the packaged CLI and MCP entry
+    # points on this architecture as well as the archive contents.
+    # Node 22 for the same reason the x64 job pins it: @vscode/vsce requires node >= 20.
+    # Not a required check; it adds beside the existing jobs and takes nothing away.
+    runs-on: windows-11-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Smoke the npm tarball
+        shell: bash
+        run: npm run smoke:tarball
+      - name: Smoke the VSIX
+        shell: bash
+        if: always()
+        run: npm run smoke:vsix
+
+
+
+  diag-twouser-paired:
+    # DISPOSABLE DIAGNOSTIC JOB on the integration branch. Never merged.
+    #
+    # THE CANDIDATE-FIRST SET. The earlier paired set (run 35542327029) gave its only cold execution
+    # to MAIN, so the candidate was never measured cold. This runs the same fixture six times, in the
+    # order CAND,MAIN / MAIN,CAND / CAND,MAIN on ONE fresh runner, so the first product execution on
+    # the runner is the candidate's. Nothing invokes the product, powershell.exe 5.1 or whoami.exe
+    # before execution 1; the builds are compiled, not run. Controls run only AFTER the six.
+    #
+    # x64 and Node 20. THE SET IS SIX EXECUTIONS AND IS NOT EXTENDED, whatever the results are.
+    # The plan is frozen in pr99-candidate-first/record/PLAN.md; its SHA-256 is in the commit.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+
+      - name: Identity, and the two builds under test, from identified sources
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "runner image : ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
+          echo "os           : $(node -p 'require("os").release()')  PROCESSOR_ARCHITECTURE=${PROCESSOR_ARCHITECTURE:-?}  PROCESSOR_ARCHITEW6432=${PROCESSOR_ARCHITEW6432:-unset}"
+          echo "checked out  : $(git rev-parse HEAD)   (a GENERATED MERGE REF on pull_request)"
+          echo "tree         : $(git rev-parse 'HEAD^{tree}')"
+          echo "node         : $(node -p 'process.version') $(node -p 'process.arch') at $(node -p 'process.execPath')"
+          echo "account      : $(whoami)"
+          check() { local got; got=$(git hash-object "$1"); echo "  $got  $1"; [ "$got" = "$2" ] || { echo "SOURCE IDENTITY MISMATCH for $1 (expected $2) - the set is NOT RUN"; exit 1; }; }
+          echo "source identities, by content (the job stops here on any mismatch):"
+          check src/consent-acl-win.ts                    7af286d9ceb5cd1c95323b67595c7dc7323a9f66
+          check src/consent.ts                            f2a05bc39824927fd6bd4865d44726220c60d6db
+          check tests/fixtures/main-consent-acl-win.ts.txt 1ff05e80bd6792503537ec550a69ebadedfd2017
+          check tests/fixtures/main-consent.ts.txt         677ac0d26e4eac672e725ea344d565275af73057
+          check src/consent-budget.ts                     ec8ea39807350433f57ac45e51654cf824f9db94
+          check src/mcp-core.ts                           92098e945a95e21ca2ba29d9bcbe2b5aa4612d3f
+          for f in tests/fixtures/win-twouser-plant.js tests/fixtures/twouser-trace-shim.js tests/fixtures/twouser-budget-control.js; do
+            echo "  $(git hash-object "$f")  $f  (shared harness)"
+          done
+          echo "--- build CANDIDATE (the branch source as-is), from a removed out/"
+          rm -rf out out-cand out-main
+          npm run compile
+          cp -r out out-cand
+          echo "--- build MAIN (only the two product files swapped), from a removed out/"
+          cp src/consent-acl-win.ts "$RUNNER_TEMP/cand-acl.ts"
+          cp src/consent.ts "$RUNNER_TEMP/cand-consent.ts"
+          cp tests/fixtures/main-consent-acl-win.ts.txt src/consent-acl-win.ts
+          cp tests/fixtures/main-consent.ts.txt src/consent.ts
+          rm -rf out
+          npm run compile
+          cp -r out out-main
+          cp "$RUNNER_TEMP/cand-acl.ts" src/consent-acl-win.ts
+          cp "$RUNNER_TEMP/cand-consent.ts" src/consent.ts
+          check src/consent-acl-win.ts 7af286d9ceb5cd1c95323b67595c7dc7323a9f66
+          check src/consent.ts         f2a05bc39824927fd6bd4865d44726220c60d6db
+          echo "--- build identities (sha256), and the two builds differ only where they should:"
+          for f in consent-acl-win.js consent.js consent-budget.js mcp-core.js; do
+            a=$(sha256sum "out-main/$f" | cut -d" " -f1); b=$(sha256sum "out-cand/$f" | cut -d" " -f1)
+            v=$([ "$a" = "$b" ] && echo IDENTICAL || echo DIFFERENT)
+            echo "  $f  main=$a  cand=$b  $v"
+            case "$f:$v" in
+              consent-acl-win.js:DIFFERENT|consent.js:DIFFERENT|consent-budget.js:IDENTICAL|mcp-core.js:IDENTICAL) ;;
+              *) echo "BUILD IDENTITY UNEXPECTED for $f - the set is NOT RUN"; exit 1 ;;
+            esac
+          done
+
+      - name: Provision two ordinary accounts and the fixture parents, and verify the distinctions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $me = [Security.Principal.WindowsPrincipal]::new([Security.Principal.WindowsIdentity]::GetCurrent())
+          $elevated = $me.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+          "builder elevated (Administrator role): $elevated"
+          if (-not $elevated) { throw "SETUP-INVALID: the builder is not elevated - the set is NOT RUN" }
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $admins = (net localgroup Administrators) -join "`n"
+          foreach ($u in @("slprobe", "slprobe2")) {
+            $isAdmin = $admins -match "(?m)^\s*(.*\\)?$u\s*$"
+            "$u in Administrators: $isAdmin"
+            if ($isAdmin) { throw "SETUP-INVALID: $u is an administrator - the set is NOT RUN" }
+          }
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          "owner and attacker SIDs distinct: $($sid1 -ne $sid2)"
+          if ($sid1 -eq $sid2) { throw "SETUP-INVALID: the two accounts share a SID - the set is NOT RUN" }
+          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          # A parent the second account can write: the shape the policy must refuse.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "permissive") | Out-Null
+          icacls (Join-Path $LAB "permissive") /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          # The safe-parent precondition, checked and reported as a verdict only (no descriptor).
+          $bad = @($sid2, "S-1-5-32-545", "S-1-5-11", "S-1-1-0")
+          $w = [Security.AccessControl.FileSystemRights]"Write, Delete, ChangePermissions, TakeOwnership"
+          function Writers($p) {
+            @((Get-Acl $p).Access | Where-Object {
+              $_.AccessControlType -eq "Allow" -and ($_.FileSystemRights -band $w) -ne 0 -and
+              ($bad -contains $_.IdentityReference.Translate([Security.Principal.SecurityIdentifier]).Value) }).Count
+          }
+          $privWriters = Writers (Join-Path $LAB "private")
+          $permWriters = Writers (Join-Path $LAB "permissive")
+          "safe parent private: foreign/broad write grants = $privWriters (must be 0)"
+          "permissive control parent: foreign/broad write grants = $permWriters (must be > 0)"
+          if ($privWriters -ne 0) { throw "SETUP-INVALID: the safe parent is not safe - the set is NOT RUN" }
+          if ($permWriters -eq 0) { throw "SETUP-INVALID: the permissive parent is not permissive - the controls would prove nothing" }
+          foreach ($d in @("out-main", "out-cand", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          }
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          $pw2 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p2.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+          "ACL_SID1=$sid1" >> $env:GITHUB_ENV
+          "ACL_SID2=$sid2" >> $env:GITHUB_ENV
+          "PowerShell used so far in this job: pwsh 7 (this step). powershell.exe 5.1, whoami.exe and the product: not invoked by this job."
+
+      - name: Six executions - candidate first, order fixed before running
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          # The password is deliberately NOT in the environment; the provisioning step writes
+          # it to RUNNER_TEMP. Read it exactly the way the existing two-account job does.
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $shim = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          $control = Join-Path $PWD "tests\fixtures\twouser-budget-control.js"
+          $keep = "preload installed|INSTRUMENTATION ATTACHED|INJECTED CONTROL|allowance configured|operation \d+ (START|END|NESTED)|EXHAUSTED category|toolVerify (REQUEST|RESPONSE)|helper |EXIT code"
+          # Display goes to Write-Host so that only the result object is returned from the function.
+          function Launch($argv, $o, $e) {
+            $sw = [Diagnostics.Stopwatch]::StartNew()
+            $code = $null; $launchError = $null
+            try {
+              $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+              $code = $p.ExitCode
+            } catch { $launchError = $_.Exception.GetType().Name }
+            $sw.Stop()
+            $out = if (Test-Path $o) { Get-Content $o -Raw } else { "" }
+            $err = if (Test-Path $e) { Get-Content $e -Raw } else { "" }
+            Write-Host "  exit=$code  wall=$($sw.ElapsedMilliseconds)ms (Stopwatch)$(if ($launchError) { "  LAUNCH FAILED: $launchError" })"
+            Write-Host "  --- fixture stdout"
+            if ($out) { foreach ($l in ($out.TrimEnd() -split "`n")) { Write-Host "      $($l.TrimEnd())" } }
+            Write-Host "  --- instrumentation"
+            if ($err) { foreach ($l in ($err -split "`n")) { if ($l -match $keep) { Write-Host "      $($l.TrimEnd())" } } }
+            else { Write-Host "      (no stderr - instrumentation ABSENT, not 'nothing refused')" }
+            return [pscustomobject]@{ code=$code; wall=$sw.ElapsedMilliseconds; out=$out; err=$err; launchError=$launchError }
+          }
+          # THE ORDER, decided in the plan and not changed here. Candidate first.
+          $order = @("CAND","MAIN", "MAIN","CAND", "CAND","MAIN")
+          $n = 0
+          $results = @()
+          foreach ($side in $order) {
+            $n++
+            $pair = [math]::Ceiling($n / 2)
+            $tag = $(if ($side -eq "MAIN") { "out-main" } else { "out-cand" })
+            $outDir = Join-Path $PWD $tag
+            $store = Join-Path $LAB "private\s$n\.secretloop"
+            $repo  = Join-Path $LAB "private\s$n\repo"
+            $fresh = (-not (Test-Path $store)) -and (-not (Test-Path $repo))
+            New-Item -ItemType Directory -Force (Join-Path $LAB "private\s$n") | Out-Null
+            $o = Join-Path $LAB "private\o$n.txt"; $e = Join-Path $LAB "private\e$n.txt"
+            Write-Output "===== execution $n  pair $pair  side=$side  build=$tag ====="
+            Write-Output "  store and repo fresh: $fresh"
+            $r = Launch @("--require", $shim, $plant, "--out", $outDir, "--store", $store, "--repo", $repo) $o $e
+            # Captured whatever the outcome, before anything is judged.
+            $files = if (Test-Path $store) { (Get-ChildItem $store -Recurse -File | Measure-Object).Count } else { "absent" }
+            Write-Output "  --- store after: $files file(s)"
+            $attached = ($r.err -match "INSTRUMENTATION ATTACHED to consent-budget\.js from $tag") -and ($r.err -match "helper \S+ START")
+            $asked = $r.err -match "toolVerify REQUEST"
+            $verdict = if (-not $fresh -or $r.launchError) { "SETUP-INVALID" }
+                       elseif ($r.code -eq 0) { "PASS" }
+                       elseif (-not $asked) { "SETUP-INVALID" }
+                       else { "FAIL" }
+            Write-Output "  hooks attached to the executed build and saw a helper: $attached"
+            Write-Output "  VERDICT: $verdict"
+            $results += [pscustomobject]@{ n=$n; pair=$pair; side=$side; verdict=$verdict; wall=$r.wall; attached=$attached }
+          }
+          Write-Output ""
+          Write-Output "===== SIX EXECUTIONS PLANNED, SIX RUN. THE SET IS NOT EXTENDED. ====="
+          $results | ForEach-Object { Write-Output ("  exec {0}  pair {1}  {2,-4}  {3,-13}  {4} ms  hooks={5}" -f $_.n,$_.pair,$_.side,$_.verdict,$_.wall,$_.attached) }
+          $mf = ($results | Where-Object { $_.side -eq "MAIN" -and $_.verdict -eq "FAIL" }).Count
+          $cf = ($results | Where-Object { $_.side -eq "CAND" -and $_.verdict -eq "FAIL" }).Count
+          $si = ($results | Where-Object { $_.verdict -eq "SETUP-INVALID" }).Count
+          Write-Output "  MAIN failures: $mf of 3      CANDIDATE failures: $cf of 3      SETUP-INVALID: $si"
+
+          Write-Output ""
+          Write-Output "===== CONTROLS - after the six, excluded from every count above ====="
+          $c = 0
+          foreach ($tag in @("out-cand", "out-main")) {
+            $c++
+            Write-Output "----- CONTROL injected-deadline  build=$tag"
+            $null = Launch @("--require", $shim, $control, "--out", (Join-Path $PWD $tag)) (Join-Path $LAB "private\co$c.txt") (Join-Path $LAB "private\ce$c.txt")
+          }
+          foreach ($tag in @("out-cand", "out-main")) {
+            $c++
+            Write-Output "----- CONTROL permissive-parent (writable by slprobe2; must be refused)  build=$tag"
+            $store = Join-Path $LAB "permissive\c$c\.secretloop"
+            $repo  = Join-Path $LAB "permissive\c$c\repo"
+            New-Item -ItemType Directory -Force (Join-Path $LAB "permissive\c$c") | Out-Null
+            $r = Launch @("--require", $shim, $plant, "--out", (Join-Path $PWD $tag), "--store", $store, "--repo", $repo) (Join-Path $LAB "private\co$c.txt") (Join-Path $LAB "private\ce$c.txt")
+            $refused = ($r.code -ne 0) -and ($r.err -match "REFUSED name=ConsentStoreError") -and ($r.err -match "outboundAfter=0") -and ($r.err -notmatch "BudgetExceededError")
+            Write-Output "  CONTROL refused by the store policy (not the budget), nothing transmitted: $refused"
+          }
+          Write-Output ""
+          Write-Output "  Six executions cannot establish equal failure rates and do not explain the"
+          Write-Output "  historical failures. This step does not fail the job on a fixture refusal:"
+          Write-Output "  the refusal IS the measurement, and the trace above is what reports it."
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
