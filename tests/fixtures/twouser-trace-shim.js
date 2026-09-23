@@ -17,6 +17,7 @@
 const Module = require("module");
 const path = require("path");
 const cp = require("child_process");
+const os = require("os");
 
 const t0 = process.hrtime.bigint();
 const ms = () => (Number(process.hrtime.bigint() - t0) / 1e6).toFixed(1).padStart(9);
@@ -29,6 +30,22 @@ const role = (p) => {
   if (/repo/i.test(s)) return "<repo>";
   return "<path>";
 };
+
+// Set once the budget module is wrapped, so a helper boundary can report the allowance left.
+let budget = null;
+const allowance = () => {
+  try {
+    const L = budget.LIMITS || {};
+    const s = budget.currentSpend && budget.currentSpend();
+    if (!s) return "no-operation";
+    return `remainingMs=${Math.max(0, (L.deadlineMs || 0) - s.elapsedMs)}` +
+      ` remainingCalls=${Math.max(0, (L.helperCalls || 0) - s.helperCalls)}` +
+      ` remainingBytes=${Math.max(0, (L.helperBytes || 0) - s.helperBytes)}`;
+  } catch (_) { return budget ? "?" : "budget-not-loaded"; }
+};
+// The shim's OWN tally of what it saw the helpers do, independent of the product's accounting.
+const seen = { calls: 0, stdoutBytes: 0, stderrBytes: 0, totalCalls: 0, totalStdout: 0, totalStderr: 0 };
+const nbytes = (v) => (v == null ? 0 : Buffer.isBuffer(v) ? v.length : Buffer.byteLength(String(v), "utf8"));
 
 // ---- helpers: invocation, duration, TIMEOUT ARGUMENT, status, captured bytes ----------------
 for (const fn of ["spawnSync", "execFileSync"]) {
@@ -44,20 +61,23 @@ for (const fn of ["spawnSync", "execFileSync"]) {
         if ("maxBuffer" in a) maxBufferArg = a.maxBuffer;
       }
     }
-    if (interesting) log(`helper ${name} START timeoutArg=${timeoutArg} maxBufferArg=${maxBufferArg}`);
+    if (interesting) {
+      seen.calls++; seen.totalCalls++;
+      log(`helper ${name} START timeoutArg=${timeoutArg} maxBufferArg=${maxBufferArg} allowance[${allowance()}]`);
+    }
     const a0 = process.hrtime.bigint();
     try {
       const r = real.apply(this, arguments);
       if (interesting) {
         const d = (Number(process.hrtime.bigint() - a0) / 1e6).toFixed(1);
-        const so = r && r.stdout ? Buffer.byteLength(String(r.stdout), "utf8") : 0;
-        const se = r && r.stderr ? Buffer.byteLength(String(r.stderr), "utf8") : 0;
+        const so = nbytes(r && r.stdout), se = nbytes(r && r.stderr);
+        seen.stdoutBytes += so; seen.stderrBytes += se; seen.totalStdout += so; seen.totalStderr += se;
         log(`helper ${name} END ${d}ms status=${r && r.status} signal=${r && r.signal} ` +
-            `err=${(r && r.error && r.error.code) || "-"} stdoutBytes=${so} stderrBytes=${se}`);
+            `err=${(r && r.error && r.error.code) || "-"} stdoutBytes=${so} stderrBytes=${se} allowance[${allowance()}]`);
       }
       return r;
     } catch (e) {
-      if (interesting) log(`helper ${name} THREW ${(Number(process.hrtime.bigint() - a0) / 1e6).toFixed(1)}ms code=${(e && e.code) || "?"}`);
+      if (interesting) log(`helper ${name} THREW ${(Number(process.hrtime.bigint() - a0) / 1e6).toFixed(1)}ms code=${(e && e.code) || "?"} allowance[${allowance()}]`);
       throw e;
     }
   };
@@ -68,6 +88,7 @@ function wrapBudget(exp, resolved) {
   if (!exp || exp.__ttraced) return exp;
   try { Object.defineProperty(exp, "__ttraced", { value: true, enumerable: false }); } catch (_) { return exp; }
   const L = exp.LIMITS || {};
+  budget = exp;
   log(`INSTRUMENTATION ATTACHED to ${path.basename(resolved)} from ${/out-main/.test(resolved) ? "out-main (MAIN)" : /out-cand/.test(resolved) ? "out-cand (CANDIDATE)" : "?"} pid=${process.pid}`);
   log(`allowance configured: helperCalls=${L.helperCalls} helperBytes=${L.helperBytes} dirEntries=${L.dirEntries} deadlineMs=${L.deadlineMs}`);
 
@@ -83,7 +104,11 @@ function wrapBudget(exp, resolved) {
   };
   const hits = {};
   let opStart = process.hrtime.bigint(), when = [], depth = 0, op = 0;
-  const reset = () => { for (const k of Object.keys(hits)) hits[k] = 0; opStart = process.hrtime.bigint(); when = []; };
+  const reset = () => {
+    for (const k of Object.keys(hits)) hits[k] = 0;
+    opStart = process.hrtime.bigint(); when = [];
+    seen.calls = 0; seen.stdoutBytes = 0; seen.stderrBytes = 0;
+  };
   const hitLine = () => Object.keys(hits).map((k) => `${k}=${hits[k]}`).join(" ");
   const whenLine = () => (when.length ? when.join(" ") : "no checkpoint reached");
 
@@ -116,15 +141,21 @@ function wrapBudget(exp, resolved) {
     catch (e) { outcome = `REFUSED name=${e && e.name} what=${(e && e.what) || "-"}`; throw e; }
     finally {
       depth = 0;
-      log(`operation ${mine} END ${outcome} ${(Number(process.hrtime.bigint() - a0) / 1e6).toFixed(1)}ms spend[${last}] reached[${reached}] at[${at}]`);
+      log(`operation ${mine} END ${outcome} ${(Number(process.hrtime.bigint() - a0) / 1e6).toFixed(1)}ms spend[${last}] reached[${reached}] at[${at}]` +
+          ` shimSaw[calls=${seen.calls} stdoutBytes=${seen.stdoutBytes} stderrBytes=${seen.stderrBytes}]`);
     }
   };
 
   /*
-   * INJECTED CONTROL, run once at attach time, before any request. It proves the hook is live in
-   * THIS process. It is injected, it reproduces nothing, and it is excluded from the paired
-   * success/failure counts.
+   * INJECTED CONTROL. It proves the hook is live, reproduces nothing, and is excluded from every
+   * count. It runs ONLY in a separate control process that sets the flag in its own environment
+   * (twouser-budget-control.js), never inside one of the measured executions, so it cannot touch
+   * their timing or their order.
    */
+  if (process.env.TTRACE_INJECTED_CONTROL !== "1") {
+    log("INJECTED CONTROL not run in this process (measured execution)");
+    return exp;
+  }
   try {
     let refused = "NO REFUSAL - CONTROL FAILED";
     exp.withBudget(() => {
@@ -174,4 +205,10 @@ Module._load = function (request, parent, isMain) {
   } catch (_) {}
   return exp;
 };
-log(`preload installed pid=${process.pid} node=${process.version} ${process.arch}`);
+// Final counters, written however the process ends -- including when the fixture's assertion fails.
+process.on("exit", (code) => {
+  log(`EXIT code=${code} shimSawTotal[calls=${seen.totalCalls} stdoutBytes=${seen.totalStdout} stderrBytes=${seen.totalStderr}]`);
+});
+let account = "?";
+try { account = os.userInfo().username; } catch (_) {}
+log(`preload installed pid=${process.pid} node=${process.version} ${process.arch} account=${account}`);
