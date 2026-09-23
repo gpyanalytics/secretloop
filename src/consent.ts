@@ -21,7 +21,13 @@ import { homedir } from "os";
 import * as path from "path";
 import { checkMacAcl, type MacAclTarget } from "./consent-acl-macos";
 import { checkParentChain } from "./consent-parent-chain";
-import { BudgetExceededError, checkBudgetDeadline, spendDirEntry, withBudget } from "./consent-budget";
+import {
+  BudgetExceededError,
+  type BudgetCategory,
+  checkBudgetDeadline,
+  spendDirEntry,
+  withBudget,
+} from "./consent-budget";
 import {
   CheckTarget,
   checkWindowsStore,
@@ -152,14 +158,27 @@ export type ConsentStoreProblem =
  * carry a path.
  */
 export class ConsentStoreError extends Error {
-  constructor(public readonly problem: ConsentStoreProblem) {
-    super(describeStoreProblem(problem));
+  /**
+   * WHICH allowance ran out, when `problem` is "operation-too-large". The four are different
+   * situations with different remedies, and a user can act on only some of them, so collapsing
+   * them into one sentence sends people to look in the wrong place -- which is exactly what the
+   * old single sentence did, blaming pending-record count for what was really elapsed time.
+   * Undefined for every other problem, and for a budget refusal whose category did not survive.
+   */
+  constructor(
+    public readonly problem: ConsentStoreProblem,
+    public readonly category?: BudgetCategory
+  ) {
+    super(describeStoreProblem(problem, category));
     this.name = "ConsentStoreError";
   }
 }
 
 /** The one sentence callers show. Fixed text per problem; nothing interpolated. */
-export function describeStoreProblem(problem: ConsentStoreProblem): string {
+export function describeStoreProblem(
+  problem: ConsentStoreProblem,
+  category?: BudgetCategory
+): string {
   const where = "the consent store (.secretloop under your home directory)";
   switch (problem) {
     case "not-a-directory":
@@ -204,7 +223,25 @@ export function describeStoreProblem(problem: ConsentStoreProblem): string {
       // Deliberately says nothing about permissions or access-control lists: the store may be
       // perfectly safe and simply too large to check within one operation. Suggesting an ACL
       // repair here would send someone to fix something that is not wrong.
-      return `checking ${where} needed more work than SecretLoop allows for one request, so it stopped rather than answer from a partial check; nothing was changed.`;
+      //
+      // IT SAYS "no consent record was written" AND NOT "nothing was changed", because the
+      // second is not always true. ensureDir() may create .secretloop and .secretloop/pending
+      // before a later checkpoint refuses, and a refusal raised after it returns leaves those
+      // directories behind. The record itself is safe to promise: in every operation the write
+      // is a temp file and a rename with no budgeted work after it, so no allowance can run out
+      // between writing a record and returning.
+      switch (category) {
+        case "time":
+          return `the checks on ${where} ran out of the time SecretLoop allows for one request, so it stopped rather than answer from a partial check; no consent record was written.`;
+        case "records":
+          return `there are more pending requests under ${where} than SecretLoop will consider in one request, so it stopped rather than answer from a partial check; no consent record was written.`;
+        case "inspections":
+          return `checking ${where} needed more separate inspections than SecretLoop allows for one request, so it stopped rather than answer from a partial check; no consent record was written.`;
+        case "output":
+          return `the checks on ${where} returned more detail than SecretLoop will take in for one request, so it stopped rather than answer from a partial check; no consent record was written.`;
+        default:
+          return `checking ${where} needed more work than SecretLoop allows for one request, so it stopped rather than answer from a partial check; no consent record was written.`;
+      }
     case "inaccessible":
       return `${where} could not be inspected, so consent records cannot be trusted.`;
     case "identity-unreadable":
@@ -249,12 +286,15 @@ export const CONSENT_STORE_GUIDANCE_WINDOWS =
   "create aside rather than deleting or loosening it, then ask the client to request the verification again.";
 
 /** The guidance for the platform this process is running on. */
-export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
+export function consentStoreGuidance(
+  problem?: ConsentStoreProblem,
+  category?: BudgetCategory
+): string {
   if (problem === "extended-acl" || problem === "acl-tool-unavailable" || problem === "acl-unreadable")
     return CONSENT_MACOS_ACL_GUIDANCE;
   if (problem === "unsafe-parent-posix" || problem === "parent-unreadable")
     return CONSENT_PARENT_CHAIN_GUIDANCE;
-  if (problem === "operation-too-large") return CONSENT_TOO_LARGE_GUIDANCE;
+  if (problem === "operation-too-large") return tooLargeGuidance(category);
   // "record-too-large" is the one refusal that is not about the store, so it must not send the
   // user to inspect a store that is perfectly healthy. The default stays the store guidance,
   // including when no problem is given.
@@ -276,11 +316,60 @@ export function consentStoreGuidance(problem?: ConsentStoreProblem): string {
  * Guidance for the size/time refusal. It asks for nothing to be loosened and suggests no ACL
  * change, because the store's permissions are not what went wrong.
  */
+/**
+ * One fixed sentence per category. Nothing is interpolated: no counts, no paths, no elapsed
+ * times, no store contents. A refusal that echoes state back is a refusal that leaks it.
+ *
+ * The DEADLINE wording is the reason this exists. The single sentence these replace told every
+ * refusal that the usual cause was "a large number of old requests in .secretloop/pending, or a
+ * home directory an unusually long way down the filesystem". For a deadline that is simply
+ * wrong, and it was observed being wrong: a store holding ONE record, on a short path, refused
+ * because starting the Windows security helper took most of the allowance. Time is not size.
+ */
+export const CONSENT_TOO_LARGE_GUIDANCE_TIME =
+  "This is about how long the checks took, not about how much is stored and not about " +
+  "permissions: nothing needs loosening. Ask the client to request the verification again. If " +
+  "it keeps happening, the machine is heavily loaded, or starting the security helper on it is " +
+  "unusually slow.";
+
+export const CONSENT_TOO_LARGE_GUIDANCE_RECORDS =
+  "This is about how much is stored, not permissions: nothing needs loosening. Look at what is " +
+  "in .secretloop/pending and remove requests you no longer want to approve, then ask the " +
+  "client to request the verification again.";
+
+export const CONSENT_TOO_LARGE_GUIDANCE_INSPECTIONS =
+  "This is about how many separate checks the store needed, not permissions: nothing needs " +
+  "loosening. It is usually a home directory an unusually long way down the filesystem, or a " +
+  "store holding many records.";
+
+export const CONSENT_TOO_LARGE_GUIDANCE_OUTPUT =
+  "This is about the volume of the answers the checks returned, not permissions: nothing needs " +
+  "loosening.";
+
+/**
+ * What to say when the category did not survive. It names no cause at all, because naming the
+ * wrong one is worse than naming none: the old text guessed, and the guess was wrong wherever
+ * the real cause was elapsed time.
+ */
 export const CONSENT_TOO_LARGE_GUIDANCE =
-  "This is about size, not permissions: nothing needs loosening. The usual cause is a large " +
-  "number of old requests in .secretloop/pending, or a home directory an unusually long way down " +
-  "the filesystem. Look at what is in pending and remove requests you no longer want to approve, " +
-  "then ask the client to request the verification again.";
+  "This is about the size of the job or the time it took, not permissions: nothing needs " +
+  "loosening. Ask the client to request the verification again, and if it keeps happening look " +
+  "at what is in .secretloop/pending.";
+
+function tooLargeGuidance(category?: BudgetCategory): string {
+  switch (category) {
+    case "time":
+      return CONSENT_TOO_LARGE_GUIDANCE_TIME;
+    case "records":
+      return CONSENT_TOO_LARGE_GUIDANCE_RECORDS;
+    case "inspections":
+      return CONSENT_TOO_LARGE_GUIDANCE_INSPECTIONS;
+    case "output":
+      return CONSENT_TOO_LARGE_GUIDANCE_OUTPUT;
+    default:
+      return CONSENT_TOO_LARGE_GUIDANCE;
+  }
+}
 
 export const CONSENT_PARENT_CHAIN_GUIDANCE =
   "Check the directories above .secretloop with `ls -ld`, starting at your home directory. " +
@@ -389,7 +478,11 @@ function operation<T>(fn: () => T): T {
     try {
       return fn();
     } catch (err) {
-      if (err instanceof BudgetExceededError) throw new ConsentStoreError("operation-too-large");
+      // The category is carried, not discarded. This one line is why the four exhaustion
+      // situations can be told apart in what a user reads.
+      if (err instanceof BudgetExceededError) {
+        throw new ConsentStoreError("operation-too-large", err.what);
+      }
       throw err;
     }
   });

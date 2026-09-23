@@ -33,9 +33,16 @@
  * transmission are untouched.
  */
 
+/**
+ * Which allowance ran out. The four are genuinely different situations and a user can act on
+ * only some of them, so the distinction has to survive translation rather than collapse into one
+ * sentence. `consent.ts` carries it onto `ConsentStoreError` and picks the wording from it.
+ */
+export type BudgetCategory = "time" | "inspections" | "output" | "records";
+
 /** Thrown when an operation exceeds its allowance. Translated by consent.ts; never surfaced raw. */
 export class BudgetExceededError extends Error {
-  constructor(public readonly what: string) {
+  constructor(public readonly what: BudgetCategory) {
     super("consent operation budget exhausted: " + what);
     this.name = "BudgetExceededError";
   }

@@ -1473,7 +1473,12 @@ export async function toolVerify(input: VerifyInput): Promise<ToolResult> {
     // written, claimed or deleted, and before the provider boundary. The
     // sentence is fixed text: no path, no record content, no OS message.
     if (err instanceof ConsentStoreError) {
-      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${consentStoreGuidance(err.problem)}`);
+      // "Nothing was transmitted" is kept because the caller trace supports it, not because
+      // it reads well: verifyFindings is the only outbound call in this function and NO
+      // consent-store operation follows it, so a ConsentStoreError cannot be raised after
+      // transmission and reach this catch. The category is passed on so the guidance can
+      // name the right cause instead of guessing one.
+      return fail(`${err.message} Nothing was transmitted and no consent was recorded. ${consentStoreGuidance(err.problem, err.category)}`);
     }
     throw err;
   }
