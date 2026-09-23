@@ -415,6 +415,151 @@ jobs:
           SECRETLOOP_MAC_ATTACKER: slattack
         run: npx ts-node --transpile-only tests/consent-macos-two-user.test.ts
 
+  diag-cold-startup:
+    # DISPOSABLE DIAGNOSTIC. Never merged. Its FIRST action is a bare interpreter probe, so the
+    # cold measurement belongs to powershell.exe itself and not to anything SecretLoop warmed.
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cold interpreter probe, before anything else runs
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          "image        : $env:ImageOS $env:ImageVersion"
+          "checked out  : $(git rev-parse HEAD)"
+          "account      : $(whoami)"
+          $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          "powershell   : $ps  exists=$(Test-Path $ps)"
+          ""
+          "--- 1. bare interpreter startup, nothing else. FIRST IS COLD."
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            & $ps -NoProfile -NonInteractive -Command "exit 0" | Out-Null
+            $t.Stop()
+            "    probe $i  exit=$LASTEXITCODE  $([int]$t.ElapsedMilliseconds) ms"
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      - name: The product's own helper script, interpreter already warm
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          # HELPER_SOURCE is taken from the compiled product, not retyped, so this is the exact
+          # script the product sends. An empty path list means the interpreter parses and starts
+          # the script but does no per-object security work: the difference from the bare probe
+          # above is what the SCRIPT costs, separately from the interpreter.
+          $src = node -e "const m=require('./out/consent-acl-win.js'); process.stdout.write(m.HELPER_SCRIPT_FOR_TESTS)"
+          "script bytes : $($src.Length)"
+          $enc = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($src))
+          $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          "--- 2. the real helper script, empty path list, interpreter warm"
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            "" | & $ps -NoProfile -NonInteractive -EncodedCommand $enc | Out-Null
+            $t.Stop()
+            "    helper $i  exit=$LASTEXITCODE  $([int]$t.ElapsedMilliseconds) ms"
+          }
+
+  diag-cold-verify:
+    # DISPOSABLE DIAGNOSTIC. Never merged. Its first measured action is a REAL first verify on a
+    # cold runner, through the real two-account fixture. Nothing is pre-warmed before it.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: Identity
+        shell: bash
+        run: |
+          echo "image       : ${ImageOS:-?} ${ImageVersion:-?}   ${RUNNER_ARCH}"
+          echo "checked out : $(git rev-parse HEAD)"
+          echo "node        : $(node -p 'process.version') $(node -p 'process.arch')"
+          echo "account     : $(whoami)"
+          echo "  $(git hash-object src/consent-acl-win.ts)  src/consent-acl-win.ts"
+          echo "  $(git hash-object tests/fixtures/twouser-trace-shim.js)  twouser-trace-shim.js"
+
+      - name: Provision two ordinary accounts and the fixture parents
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          "slprobe:";  net user slprobe  | Select-String -Pattern "Local Group Memberships"
+          "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          # A parent the second account can write: the shape the policy must refuse.
+          New-Item -ItemType Directory -Force (Join-Path $LAB "permissive") | Out-Null
+          icacls (Join-Path $LAB "permissive") /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("out", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          }
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          $pw2 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p2.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+          "ACL_SID1=$sid1" >> $env:GITHUB_ENV
+          "ACL_SID2=$sid2" >> $env:GITHUB_ENV
+      - name: One cold verify, then two warm, then the packaged smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $shim = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          # THREE executions, fixed here. The first is the cold one and nothing precedes it.
+          foreach ($n in 1..3) {
+            $store = Join-Path $LAB "private\c$n\.secretloop"
+            $repo  = Join-Path $LAB "private\c$n\repo"
+            New-Item -ItemType Directory -Force (Join-Path $LAB "private\c$n") | Out-Null
+            $o = Join-Path $LAB "private\o$n.txt"; $e = Join-Path $LAB "private\e$n.txt"
+            $label = if ($n -eq 1) { "COLD" } else { "warm" }
+            "===== verify $n ($label) ====="
+            $argv = @("--require", $shim, $plant, "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+            $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            "  exit=$($p.ExitCode)"
+            if (Test-Path $o) { (Get-Content $o -Raw).TrimEnd() -split "`n" | ForEach-Object { "    $_" } }
+            if (Test-Path $e) {
+              ((Get-Content $e -Raw) -split "`n" | Where-Object { $_ -match "INSTRUMENTATION ATTACHED|INJECTED CONTROL|operation \d+ (START|END)|EXHAUSTED category|helper |toolVerify (REQUEST|RESPONSE)" }) |
+                ForEach-Object { "    $($_.TrimEnd())" }
+            } else { "    (no stderr - instrumentation ABSENT, not 'nothing refused')" }
+          }
+
+      - name: The packaged smoke, instrumented
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/twouser-trace-shim.js")"
+          NODE_OPTIONS="--require $SHIM" npm run smoke:tarball > smoke.txt 2>&1 || true
+          echo "--- the product's own MCP timeline"
+          grep -E "tools/call|tools/result|smoke: (ok|FAIL|MCP)" smoke.txt | tail -8 || true
+          echo "--- helper timings from the preload (child_process is external to the bundle)"
+          grep -E "TTRACE .*helper " smoke.txt | head -20 || true
+          echo "--- tail"
+          tail -4 smoke.txt
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
