@@ -415,6 +415,231 @@ jobs:
           SECRETLOOP_MAC_ATTACKER: slattack
         run: npx ts-node --transpile-only tests/consent-macos-two-user.test.ts
 
+  diag-windows-budget:
+    # PARKED. Its measurements are frozen in pr96-budget-instrumentation (dfc9e5f3...) and
+    # re-running it would duplicate completed work. Left in place rather than deleted so the
+    # branch still shows what produced that record.
+    if: ${{ false }}
+    # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged, asserts nothing beyond the
+    # suite's own assertions, and exists to name the checkpoint that refuses. Node 20 and
+    # windows-latest, matching the job that failed.
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Build identity and runner identity
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "runner image: ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
+          echo "commit: $(git rev-parse HEAD)"
+          echo "node executable: $(node -p 'process.execPath')"
+          node -p "'node ' + process.version + ' ' + process.arch + ' on ' + process.platform"
+          echo "account: $(whoami)   elevated: $(net session >/dev/null 2>&1 && echo yes || echo no)"
+          echo "instrumented source digests (what these results belong to):"
+          for f in src/consent-budget.ts src/consent.ts src/consent-acl-win.ts \
+                   tests/verify-consent.test.ts tests/fixtures/budget-trace-shim.js \
+                   tests/fixtures/budget-controls.ts; do
+            echo "  $(git hash-object "$f")  $f"
+          done
+
+      - name: Controls - prove the instrumentation attached, and classify each category
+        shell: bash
+        run: |
+          set -uo pipefail
+          # $PWD under Git-bash is a POSIX path (/d/a/...) that node on Windows cannot resolve
+          # through NODE_OPTIONS --require, so it must be converted first.
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/budget-trace-shim.js")"
+          echo "shim path: $SHIM"
+          NODE_OPTIONS="--require $SHIM" \
+            npx ts-node --transpile-only tests/fixtures/budget-controls.ts > controls.txt 2>&1 || true
+          cat controls.txt
+          echo "--- did the instrumentation actually attach to the executing module?"
+          if grep -q "INSTRUMENTATION ATTACHED to consent-budget.ts" controls.txt \
+             && grep -q "EXHAUSTED category=DEADLINE checkpoint=checkBudgetDeadline" controls.txt; then
+            echo "ATTACHMENT CONTROL PASSED: the shim is attached to the ts-node instance and a"
+            echo "known checkpoint produced its expected event. Budget observations below are"
+            echo "readable. Every exhaustion in controls.txt is INJECTED and reproduces nothing."
+          else
+            echo "ATTACHMENT CONTROL FAILED: treat every budget observation in this run as absent,"
+            echo "not as evidence that no checkpoint refused."
+          fi
+
+      - name: The failing test, with its normal fixture and ordering, instrumented
+        shell: bash
+        run: |
+          set -uo pipefail
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/budget-trace-shim.js")"
+          # A predetermined set of three. It is NOT repeated until a failure appears.
+          # This second pass adds one quantity the first did not record: how often each checkpoint
+          # was REACHED. A checkpoint never reached cannot be the one that refused, which turns an
+          # argument from reading the source into an observation on the same code path.
+          for i in 1 2 3; do
+            echo "===== attempt $i ====="
+            NODE_OPTIONS="--require $SHIM" \
+              npx ts-node --transpile-only tests/verify-consent.test.ts > "run$i.txt" 2>&1 || true
+            echo "  exit captured; $(wc -l < "run$i.txt") lines"
+            echo "  --- budget operations, refusals, and the verify outcome"
+            grep -E "operation [0-9]+ (START|END)|EXHAUSTED category=|toolVerify RETURNED|CONSENT_REQUIRED and makes zero|not ok|passed," "run$i.txt" | head -60 || true
+            echo "  --- slowest helper calls in this attempt"
+            grep -oE "helper [a-z.]+ [0-9]+ms status=[-0-9]+ outBytes=[0-9]+" "run$i.txt" \
+              | sort -t' ' -k3 -rn | head -5 | sed 's/^/    /'
+            echo "  --- last 8 lines, so a startup failure cannot hide ---"
+            tail -8 "run$i.txt" | sed 's/^/    /'
+          done
+
+  diag-packaging-smoke:
+    # DISPOSABLE DIAGNOSTIC JOB on a throwaway branch. Never merged.
+    #
+    # packaging-windows produced an operation-too-large refusal on run 35491820687 with no test
+    # fixture: tools/call 05:30:48.022 -> tools/result 05:31:10.240, 22,218 ms inside one request,
+    # past the 20 s consent allowance and short of the smoke's own 30 s deadline. This job goes
+    # after that, on Node 22 and windows-latest, matching THAT job. The original test failure was
+    # Node 20, so this is not a same-runtime repeat of it.
+    #
+    # THE PACKAGED ARTIFACT IS A BUNDLE. prepack runs esbuild --bundle --minify over src/mcp.ts,
+    # so the tarball ships only out/cli.js and out/mcp.js with every module inlined. No module
+    # hook can reach the budget there -- an earlier attempt in this job failed exactly that way,
+    # looking for package/out/consent-budget.js, which does not exist. Checkpoint tracing therefore
+    # needs a PATCHED BUILD, and src/consent-budget.ts on this branch carries one. The patch is
+    # inert unless SECRETLOOP_DIAG_TRACE=1, so the same source can be run silent or tracing.
+    # child_process stays external to the bundle, so the NODE_OPTIONS shim still times the helpers.
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      - name: Identity, artifact shape, and the store pre-flight that gates everything below
+        shell: bash
+        run: |
+          set -uo pipefail
+          echo "runner image: ${ImageOS:-?} ${ImageVersion:-?}   labels: ${RUNNER_OS} ${RUNNER_ARCH}"
+          echo "checked out : $(git rev-parse HEAD)   (a GENERATED MERGE REF on pull_request)"
+          echo "node        : $(node -p 'process.version') $(node -p 'process.arch') at $(node -p 'process.execPath')"
+          echo "account     : $(whoami)"
+          echo "source identities:"
+          echo "  $(git hash-object src/consent-budget.ts)  src/consent-budget.ts        (PATCHED diagnostic build)"
+          echo "  $(git hash-object tests/fixtures/consent-budget.shipped.ts)  shipped fixture, must equal main's ec8ea398..."
+          echo "  $(git hash-object scripts/smoke-tarball.sh)  scripts/smoke-tarball.sh     (UNCHANGED)"
+          echo "  $(git hash-object tests/fixtures/packaged-trace-shim.js)  packaged-trace-shim.js"
+          echo "--- what the tarball actually contains, established rather than assumed"
+          mkdir -p shape
+          npm pack --pack-destination shape >/dev/null 2>&1
+          tar -tzf shape/*.tgz | grep "^package/out/" | sed 's/^/    /'
+          echo "    (only two files, both esbuild bundles: a module hook cannot see inside them)"
+          # Resolved by node, exactly as src/consent.ts:90 does it (homedir() + .secretloop),
+          # then converted for bash. $USERPROFILE is a backslash path and testing it directly
+          # can fail for the wrong reason -- a pre-flight that passes because its path was
+          # malformed is worse than no pre-flight at all.
+          STORE="$(cygpath "$(node -p "require('path').join(require('os').homedir(), '.secretloop')")")"
+          echo "store the product will use: $STORE"
+          if [ -e "$STORE" ]; then
+            echo "PRE-FLIGHT FAILED: a consent store already exists. Not read, not removed."
+            echo "EXPERIMENT_GATE=blocked" >> "$GITHUB_ENV"
+          else
+            echo "PRE-FLIGHT OK: no consent store present, so anything found later was made here."
+            echo "EXPERIMENT_GATE=open" >> "$GITHUB_ENV"
+          fi
+
+      - name: Injected controls against a build of the patched source
+        if: env.EXPERIMENT_GATE == 'open'
+        shell: bash
+        run: |
+          set -uo pipefail
+          npm run compile
+          echo "--- all four categories, injected, against the tsc build of the patched source"
+          SECRETLOOP_DIAG_TRACE=1 node tests/fixtures/packaged-budget-controls.js "$PWD/out/consent-budget.js" 2>&1 | tee controls.txt
+          if grep -q "injected: deadline .* what=time" controls.txt \
+             && grep -q "injected: entry count .* what=records" controls.txt \
+             && grep -q "injected: inspections .* what=inspections" controls.txt \
+             && grep -q "injected: output bytes .* what=output" controls.txt \
+             && grep -q "EXHAUSTED category=DEADLINE" controls.txt; then
+            echo "CONTROLS PASSED: four categories classified, and the patch emits its events."
+          else
+            echo "CONTROLS FAILED: treat every category claim below as unestablished."
+          fi
+          echo "--- and the patch is INERT with the variable unset (expect no BUDGETDIAG lines)"
+          node tests/fixtures/packaged-budget-controls.js "$PWD/out/consent-budget.js" 2>&1 | grep -c BUDGETDIAG || echo "0 BUDGETDIAG lines: inert"
+
+      - name: The bounded experiment - six attempts, order fixed here before it runs
+        if: env.EXPERIMENT_GATE == 'open'
+        shell: bash
+        run: |
+          set -uo pipefail
+          SHIM="$(cygpath -w "$PWD/tests/fixtures/packaged-trace-shim.js")"
+          STORE="$(cygpath "$(node -p "require('path').join(require('os').homedir(), '.secretloop')")")"
+          cp src/consent-budget.ts /tmp/diag-budget.ts
+          # SIX attempts, decided now, NOT extended if nothing appears:
+          #   1 S   shipped source (main's budget module), no trace, no shim
+          #   2 D0  patched source, tracing OFF, no shim   -> shows the patch is inert
+          #   3 D1  patched source, tracing ON,  shim      -> the measurement
+          #   4 S   shipped source again
+          #   5 D1
+          #   6 D1
+          # The smoke script itself is never edited: it packs from the working tree, so the
+          # artifact is selected by which budget module is in place, and its own assertions and
+          # its 30 s per-request deadline are the shipped ones throughout.
+          ORDER="S D0 D1 S D1 D1"
+          n=0
+          for mode in $ORDER; do
+            n=$((n+1))
+            echo "===== attempt $n  mode=$mode ====="
+            if [ "$mode" = "S" ]; then
+              cp tests/fixtures/consent-budget.shipped.ts src/consent-budget.ts
+            else
+              cp /tmp/diag-budget.ts src/consent-budget.ts
+            fi
+            echo "  budget module in place: $(git hash-object src/consent-budget.ts)"
+            # Matched fresh store. The pre-flight established there was none, so anything here
+            # was made by this job, and removal is bounded to that one directory.
+            if [ -e "$STORE" ]; then rm -rf "$STORE"; fi
+            echo "  store present at start: $([ -e "$STORE" ] && echo yes || echo no)"
+            START=$(node -p "Date.now()")
+            case "$mode" in
+              D1) NODE_OPTIONS="--require $SHIM" SECRETLOOP_DIAG_TRACE=1 npm run smoke:tarball > "smoke$n.txt" 2>&1 || true ;;
+              *)  npm run smoke:tarball > "smoke$n.txt" 2>&1 || true ;;
+            esac
+            END=$(node -p "Date.now()")
+            echo "  wall clock: $(( END - START )) ms"
+            echo "  packed bundle: $(sha256sum out/mcp.js | cut -d" " -f1)  out/mcp.js"
+            echo "  failure lines: $(grep -cE 'smoke: FAIL' "smoke$n.txt")"
+            echo "  --- the MCP round trip, from the product's own log"
+            grep -E "tools/call|tools/result|smoke: (ok|FAIL|MCP)" "smoke$n.txt" | tail -10 || true
+            echo "  --- budget events from the patched build"
+            grep -E "BUDGETDIAG" "smoke$n.txt" | head -25 || echo "    (none - expected for S and D0)"
+            # mcp-core is inlined in the bundle as well, so the preload cannot wrap the request
+            # boundary here; the product's own tools/call and tools/result lines above are that
+            # boundary. child_process stays external, which is why helper timings still appear.
+            echo "  --- helpers, from the preload (child_process is external to the bundle)"
+            grep -E "PTRACE .*helper " "smoke$n.txt" | head -25 || true
+            echo "  --- store after this attempt: $([ -e "$STORE" ] && find "$STORE" -type f | wc -l || echo 0) file(s)"
+            echo "  --- tail, so a startup failure cannot hide"
+            tail -4 "smoke$n.txt" | sed "s/^/    /"
+          done
+          cp /tmp/diag-budget.ts src/consent-budget.ts
+          echo "===== six attempts planned, six run. The set is not extended. ====="
+          if [ -e "$STORE" ]; then rm -rf "$STORE"; echo "cleanup: removed the store this job created"; fi
+
+      - name: Say so loudly if the gate blocked the experiment
+        if: env.EXPERIMENT_GATE != 'open'
+        shell: bash
+        run: |
+          echo "EXPERIMENT NOT RUN: the pre-flight found an existing consent store and stopped"
+          echo "rather than read or remove it. This is NOT a non-reproduction."
+          exit 1
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
