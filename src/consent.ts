@@ -350,11 +350,15 @@ export const CONSENT_TOO_LARGE_GUIDANCE_OUTPUT =
  * What to say when the category did not survive. It names no cause at all, because naming the
  * wrong one is worse than naming none: the old text guessed, and the guess was wrong wherever
  * the real cause was elapsed time.
+ *
+ * It does not point at `.secretloop/pending` either, not even as a hedge. An earlier draft of
+ * this constant ended "and if it keeps happening look at what is in .secretloop/pending", which
+ * is the same wrong steer in a quieter voice: when the category is unknown, pending is one
+ * possibility out of four and is no more likely than the rest.
  */
 export const CONSENT_TOO_LARGE_GUIDANCE =
   "This is about the size of the job or the time it took, not permissions: nothing needs " +
-  "loosening. Ask the client to request the verification again, and if it keeps happening look " +
-  "at what is in .secretloop/pending.";
+  "loosening. Ask the client to request the verification again.";
 
 function tooLargeGuidance(category?: BudgetCategory): string {
   switch (category) {
