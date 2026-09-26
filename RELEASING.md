@@ -166,6 +166,16 @@ stronger ones.
 - [ ] **Push `main` before `npm publish`.** A version on npm whose source is
       not yet public undercuts `SECURITY.md`'s own invitation to check an
       installed version against the public git tag.
+- [ ] **Native Windows consent green on the exact release candidate.**
+      `test-windows-two-user` and `packaging-windows` both green on the
+      release PR **and** on the push-to-`main` commit it produced. If either
+      is red, missing, or still running, **pause publication and investigate**
+      — do not rerun solely to obtain green.
+
+      This is a **manual release requirement, not a GitHub required status
+      check.** `main` requires only `self-scan`, `packaging`, `test (18)` and
+      `test (20)`, so nothing stops a merge or a publish on your behalf; this
+      checklist is the only thing that does.
 - [ ] `npm publish` from the clean-room checkout — completes 2FA in a browser
       and cannot be scripted — then `npm view secretloop version` confirms it.
 - [ ] **Open VSX:** publish with a fresh `OVSX_PAT`.
