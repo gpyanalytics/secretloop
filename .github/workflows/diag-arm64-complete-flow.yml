@@ -1,0 +1,175 @@
+# DISPOSABLE DIAGNOSTIC. One job, one attempt, never merged, never required.
+#
+# cold-decomposition has no arm64 measurement of a COMPLETE consent flow: its arm64 leg refused
+# after 2 of 6 helper calls with unsafe-parent on C:\a, a lab-path harness defect since diagnosed
+# by run 36262942570. This obtains the missing total. x64 is not repeated.
+#
+# The lab is #100's proven setup: C:\sl-acl-lab, NOT under RUNNER_TEMP, because C:\a grants
+# Authenticated Users an effective DELETE ACE while C:\ itself does not (its AU entry is
+# inherit-only). A directory born at the C:\ root carries Authenticated Users:(M) and
+# BUILTIN\Users:(RX) as EXPLICIT entries, so /inheritance:r removes neither and still reports
+# success -- they are removed by name, with exit codes checked, and the precondition asserted.
+#
+# DEVIATION from #100, deliberate: its chain check calls inspectPaths through node, which spawns
+# powershell.exe and would pre-warm the very call this job measures. The pre-verify check here is
+# icacls only. The node chain check runs AFTER the cold verify, where warming no longer matters.
+name: diag arm64 complete flow
+
+on:
+  push:
+    branches: [diag-arm64-complete-flow]
+
+permissions:
+  contents: read
+
+jobs:
+  complete-flow:
+    runs-on: windows-11-arm
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Identity (whoami only; nothing here touches powershell.exe)
+        shell: pwsh
+        run: |
+          "image   : $env:ImageOS  $env:ImageVersion"
+          "arch    : $env:RUNNER_ARCH  PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE  ARCHITEW6432=$env:PROCESSOR_ARCHITEW6432"
+          "account : $(whoami.exe)"
+          "node    : $(node -p 'process.version') $(node -p 'process.arch')"
+          "commit  : $(git rev-parse HEAD)"
+
+      - name: Provision two accounts and the lab, exactly as #100 established
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+
+          $LAB = "C:\sl-acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          "--- lab root as created, BEFORE anything"; icacls $LAB
+
+          icacls $LAB /inheritance:r /q
+          if ($LASTEXITCODE -ne 0) { throw "could not remove inherited ACEs from $LAB" }
+          icacls $LAB /grant:r "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not set the lab root's access list" }
+          # Explicit, not inherited: /inheritance:r does not touch these. Remove by name.
+          icacls $LAB /remove "*S-1-5-11" "*S-1-5-32-545" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not remove Authenticated Users and BUILTIN\Users from the lab root" }
+          "--- lab root after cleanup"; icacls $LAB
+
+          # PRECONDITION. A refusal below must not be confusable with an unsafe harness.
+          $labAcl = (icacls $LAB | Out-String)
+          if ($labAcl -match "Authenticated Users") { throw "lab root still grants Authenticated Users:`n$labAcl" }
+          if ($labAcl -match "BUILTIN\\Users")      { throw "lab root still grants BUILTIN\Users:`n$labAcl" }
+
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
+          if ($LASTEXITCODE -ne 0) { throw "could not set private's access list" }
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private\c1") | Out-Null
+          foreach ($d in @("out", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" /q | Out-Null
+          }
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+
+      - name: Chain verification, icacls ONLY (no powershell.exe, so nothing is pre-warmed)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          foreach ($p in @("C:\", "C:\sl-acl-lab", "C:\sl-acl-lab\private", "C:\sl-acl-lab\private\c1")) {
+            "===== $p ====="; icacls $p
+          }
+          $ErrorActionPreference = "Stop"
+          foreach ($p in @("C:\sl-acl-lab", "C:\sl-acl-lab\private", "C:\sl-acl-lab\private\c1")) {
+            $a = (icacls $p | Out-String)
+            if ($a -match "Authenticated Users") { throw "$p grants Authenticated Users; the lab is unsafe and nothing below is evidence" }
+            if ($a -match "BUILTIN\\Users")      { throw "$p grants BUILTIN\Users; the lab is unsafe" }
+          }
+          "chain verification passed: no lab component grants Authenticated Users or BUILTIN\Users"
+
+      - name: 'PHASE A: the COLD verify — nothing touching powershell.exe precedes this'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $shim  = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          $store = Join-Path $LAB "private\c1\.secretloop"
+          $repo  = Join-Path $LAB "private\c1\repo"
+          $o = Join-Path $LAB "private\o1.txt"; $e = Join-Path $LAB "private\e1.txt"
+          "===== PHASE A: verify 1, COLD ====="
+          $argv = @("--require", $shim, $plant, "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+          $t = [Diagnostics.Stopwatch]::StartNew()
+          $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          $t.Stop()
+          "  OUTER wall time (includes first-logon profile creation) : $([int]$t.ElapsedMilliseconds) ms"
+          "  exit=$($p.ExitCode)"
+          if (Test-Path $o) { (Get-Content $o -Raw).TrimEnd() -split "`n" | ForEach-Object { "    $_" } }
+          if (Test-Path $e) {
+            ((Get-Content $e -Raw) -split "`n" | Where-Object { $_ -match "INSTRUMENTATION ATTACHED|operation \d+ (START|END)|EXHAUSTED category|helper |toolVerify (REQUEST|RESPONSE)|FIXTURE-ERROR" }) |
+              ForEach-Object { "    $($_.TrimEnd())" }
+          } else { "    (no stderr - instrumentation ABSENT)" }
+
+      - name: 'PHASE B: warm baseline on this same runner'
+        if: always()
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $shim  = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          foreach ($n in 2..3) {
+            New-Item -ItemType Directory -Force (Join-Path $LAB "private\c$n") | Out-Null
+            $store = Join-Path $LAB "private\c$n\.secretloop"
+            $repo  = Join-Path $LAB "private\c$n\repo"
+            $o = Join-Path $LAB "private\o$n.txt"; $e = Join-Path $LAB "private\e$n.txt"
+            "===== PHASE B: verify $n, warm ====="
+            $argv = @("--require", $shim, $plant, "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            $t.Stop()
+            "  OUTER wall time : $([int]$t.ElapsedMilliseconds) ms   exit=$($p.ExitCode)"
+            if (Test-Path $o) { (Get-Content $o -Raw).TrimEnd() -split "`n" | ForEach-Object { "    $_" } }
+            if (Test-Path $e) {
+              ((Get-Content $e -Raw) -split "`n" | Where-Object { $_ -match "operation \d+ (START|END)|EXHAUSTED category|helper |toolVerify (REQUEST|RESPONSE)|FIXTURE-ERROR" }) |
+                ForEach-Object { "    $($_.TrimEnd())" }
+            }
+          }
+
+      - name: Post-hoc chain verdict and machine identity
+        if: always()
+        shell: pwsh
+        env:
+          SL_STORE: 'C:\sl-acl-lab\private\c1\.secretloop'
+        run: |
+          $ErrorActionPreference = "Continue"
+          node -e "
+            const path = require('path');
+            const acl = require('./out/consent-acl-win.js');
+            const store = process.env.SL_STORE;
+            const me = acl.currentUserSid();
+            const r = acl.checkWindowsStore(store, [], me);
+            console.log('post-hoc chain verdict as', me, ':', r.ok ? 'chain-trusted' : r.problem,
+                        JSON.stringify(acl.lastRefusalDetail() || {}));
+          "
+          $os = Get-CimInstance Win32_OperatingSystem
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          "image  : $env:ImageOS $env:ImageVersion"
+          "os     : $($os.Caption) build $($os.BuildNumber) ProductType $($os.ProductType)"
+          "cpu    : $($cpu.Name) cores=$($cpu.NumberOfCores) logical=$($cpu.NumberOfLogicalProcessors) maxMHz=$($cpu.MaxClockSpeed)"
+          "memMB  : $([int]($os.TotalVisibleMemorySize/1024))"
