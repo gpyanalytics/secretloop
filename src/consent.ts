@@ -337,10 +337,28 @@ export const CONSENT_TOO_LARGE_GUIDANCE_RECORDS =
   "in .secretloop/pending and remove requests you no longer want to approve, then ask the " +
   "client to request the verification again.";
 
+/**
+ * NAMES NO CAUSE, deliberately. `inspections` counts `spendHelperCall()`, which is charged once
+ * per child process started to inspect permissions -- and what drives that count is not the same
+ * on every platform:
+ *
+ *   macOS   `runLs` in consent-acl-macos.ts spawns one `ls` PER TARGET, and the ancestor walk
+ *           calls it once per component, so a deep home directory and a store holding many
+ *           records both raise the count.
+ *   Windows `checkWindowsStore` batches the whole ancestor chain AND every target into ONE
+ *           `inspectPaths([...chain, ...targetPaths])` call, so neither depth nor record count
+ *           raises it; they raise bytes and elapsed time instead.
+ *
+ * An earlier draft asserted both macOS causes as though they held everywhere. That is the same
+ * mistake this whole constant family exists to correct, one category further along: stating a
+ * cause that is true on the platform you happened to test and false on the one that refused.
+ * It also must not send anyone to delete records -- that advice belongs to `records`, where
+ * `spendDirEntry()` counts exactly the entries in `.secretloop/pending` and nothing else.
+ */
 export const CONSENT_TOO_LARGE_GUIDANCE_INSPECTIONS =
-  "This is about how many separate checks the store needed, not permissions: nothing needs " +
-  "loosening. It is usually a home directory an unusually long way down the filesystem, or a " +
-  "store holding many records.";
+  "This is about how many separate permission checks one request needed, not about permissions " +
+  "themselves: nothing needs loosening. What raises that count differs between platforms, so " +
+  "this does not guess at a cause. Ask the client to request the verification again.";
 
 export const CONSENT_TOO_LARGE_GUIDANCE_OUTPUT =
   "This is about the volume of the answers the checks returned, not permissions: nothing needs " +

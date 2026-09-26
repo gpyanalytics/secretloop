@@ -144,4 +144,46 @@ test("SOURCE-LEVEL: no budgeted call follows the mutation in any operation", () 
   }
 });
 
+/**
+ * Found in the pre-merge review. The `inspections` guidance named "a home directory an unusually
+ * long way down the filesystem, or a store holding many records" as the likely causes. Both hold
+ * on macOS and NEITHER holds on Windows, so it was the same defect this suite exists to catch,
+ * one category further along.
+ */
+test("no category blames path depth, because that cause is not cross-platform", () => {
+  for (const c of [...CATS, undefined]) {
+    const both = (msg(c) + " " + adv(c)).toLowerCase();
+    assert.ok(!both.includes("long way down"), `category ${c} blames path depth: ${both}`);
+    assert.ok(!both.includes("far down"), `category ${c} blames path depth`);
+  }
+});
+
+test("only the records category may blame record count, and only it may say to remove records", () => {
+  // dirEntries is spent ONLY in readPendingEntries(), one per entry in .secretloop/pending, so
+  // "many records" and "remove requests" are earned there and nowhere else. helperCalls is a
+  // count of child processes, which record count raises on macOS and not on Windows.
+  for (const c of CATS) {
+    if (c === "records") continue;
+    const both = msg(c) + " " + adv(c);
+    assert.ok(!/many records/i.test(both), `category ${c} blames record count`);
+    assert.ok(!/remove requests|remove records|delete/i.test(both),
+      `category ${c} tells the user to remove something: ${both}`);
+  }
+  assert.match(adv("records"), /remove requests/);
+});
+
+/**
+ * The wording above is only correct while Windows keeps batching. If checkWindowsStore ever
+ * inspects paths one at a time, depth WOULD raise the helper-call count there and the guidance
+ * would be worth revisiting -- so fail here rather than let the prose quietly go stale.
+ */
+test("SOURCE-LEVEL: Windows still batches the whole chain into one inspection call", () => {
+  const src = require("fs").readFileSync(
+    require("path").join(__dirname, "..", "src", "consent-acl-win.ts"), "utf8");
+  assert.match(src, /inspectPaths\(\[\s*\.\.\.chain,\s*\.\.\.targetPaths\s*\]\)/,
+    "checkWindowsStore no longer batches chain+targets in one call; revisit the inspections guidance");
+  const calls = (src.match(/\bspendHelperCall\(\)/g) || []).length;
+  assert.strictEqual(calls, 1, `expected exactly one spendHelperCall() site on Windows, found ${calls}`);
+});
+
 finish();
