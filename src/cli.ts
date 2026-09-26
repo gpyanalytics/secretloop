@@ -1416,7 +1416,7 @@ export async function runApprove(
     // The consent store failed its private-store checks. Nothing was
     // approved; the sentence is fixed text (no path, record or OS message).
     if (err instanceof consent.ConsentStoreError) {
-      io.err(`secretloop: ${err.message} Nothing was approved. ${consent.consentStoreGuidance(err.problem)}\n`);
+      io.err(`secretloop: ${err.message} Nothing was approved. ${consent.consentStoreGuidance(err.problem, err.category)}\n`);
       return 2;
     }
     throw err;
