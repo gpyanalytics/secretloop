@@ -134,7 +134,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "@types/node": "^18.0.0",
     "@types/vscode": "^1.85.0",
-    "@vscode/vsce": "^3.0.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.28.2",
     "ovsx": "^1.1.1",
     "ts-node": "^10.9.0",
