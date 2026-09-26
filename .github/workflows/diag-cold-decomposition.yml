@@ -1,0 +1,247 @@
+# DISPOSABLE DIAGNOSTIC. Never merged, never required, never reviewed as product code.
+#
+# Every earlier cost figure for a Windows first verify was measured on a DIFFERENT runner from
+# the one it was subtracted from, so the decomposition could not be checked. This measures every
+# term on ONE machine, and the two jobs below are the whole measurement: one per architecture.
+#
+# The trigger is this branch only. CI's push trigger is `branches: [main]` and its pull_request
+# trigger needs a PR, so pushing this branch with no PR runs EXACTLY these two jobs.
+name: diag cold decomposition
+
+on:
+  push:
+    branches: [diag-cold-decomposition]
+
+permissions:
+  contents: read
+
+jobs:
+  decomp:
+    name: decomp-${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { arch: x64,   os: windows-latest }
+          - { arch: arm64, os: windows-11-arm }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      # PHASE 0. The first native binary this job spawns. whoami.exe touches neither
+      # powershell.exe nor icacls.exe, so taking its cold cost here costs nothing later.
+      - name: 'PHASE 0: whoami.exe, FIRST IS COLD'
+        shell: pwsh
+        run: |
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew(); & whoami.exe /user | Out-Null; $t.Stop()
+            $label = if ($i -eq 1) { "COLD" } else { "warm" }
+            "    whoami $i ($label)  $([int]$t.ElapsedMilliseconds) ms"
+          }
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      # Written to FILES, never through PowerShell command substitution. The prior probe
+      # (diag-cold-startup, run 35931105681) passed the script through $(node -e ...), which
+      # collapsed its newlines into one line and failed with UnexpectedToken parse errors.
+      - name: Emit the product's real helper script, without letting a shell touch it
+        shell: bash
+        run: |
+          node -e "
+            const m = require('./out/consent-acl-win.js');
+            const fs = require('fs');
+            const s = m.HELPER_SCRIPT_FOR_TESTS;
+            if (typeof s !== 'string' || s.length < 200) { throw new Error('helper script missing'); }
+            fs.writeFileSync('helper-src.txt', s, 'utf8');
+            fs.writeFileSync('helper-b64.txt', Buffer.from(s, 'utf16le').toString('base64'), 'utf8');
+            console.log('script chars: ' + s.length + '  lines: ' + s.split('\n').length);
+          "
+          echo "b64 bytes: $(wc -c < helper-b64.txt)"
+
+      # net user and icacls are UNAVOIDABLE here, and they warm those two binaries. Their cold
+      # cost is therefore NOT measurable in this job and is not claimed. powershell.exe is a
+      # different binary from the pwsh.exe running these steps, so it stays cold for phase A.
+      - name: Provision two ordinary accounts (warms icacls and whoami; not powershell.exe)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
+          $pw1 = NewPw; $pw2 = NewPw
+          net user slprobe $pw1 /add /y | Out-Null
+          net user slprobe2 $pw2 /add /y | Out-Null
+          $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          New-Item -ItemType Directory -Force $LAB | Out-Null
+          # PHASE 0b. This is the FIRST icacls invocation on this machine: its cold cost.
+          $t = [Diagnostics.Stopwatch]::StartNew()
+          icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          $t.Stop()
+          "    icacls 1 (COLD)  $([int]$t.ElapsedMilliseconds) ms"
+          $t = [Diagnostics.Stopwatch]::StartNew()
+          icacls $LAB /q | Out-Null
+          $t.Stop()
+          "    icacls 2 (warm)  $([int]$t.ElapsedMilliseconds) ms"
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
+          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          foreach ($d in @("out", "node_modules", "tests")) {
+            icacls (Join-Path $PWD $d) /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
+          }
+          icacls (Join-Path $PWD "helper-b64.txt") /grant "*${sid1}:RX" /q | Out-Null
+          $pw1 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p1.txt")
+          $pw2 | Out-File -NoNewline (Join-Path $env:RUNNER_TEMP "p2.txt")
+          "ACL_LAB=$LAB" >> $env:GITHUB_ENV
+          "ACL_SID1=$sid1" >> $env:GITHUB_ENV
+
+      # ============================================================================ PHASE A
+      # Nothing that touches powershell.exe precedes this, so its FIRST PowerShell call is the
+      # cold one and pays both the OS-level term and slprobe's per-user term.
+      # A fully cold BARE launch cannot also exist on this machine: whichever runs first pays the
+      # OS-level term and the other cannot pay it again. The cold verify is the more informative
+      # of the two, so it goes first; PHASE B recovers the per-user component on a fresh profile.
+      - name: 'PHASE A: one COLD verify, per-child trace, nothing pre-warmed'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $shim  = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          $store = Join-Path $LAB "private\c1\.secretloop"
+          $repo  = Join-Path $LAB "private\c1\repo"
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private\c1") | Out-Null
+          $o = Join-Path $LAB "private\o1.txt"; $e = Join-Path $LAB "private\e1.txt"
+          "===== PHASE A: verify 1, COLD ====="
+          $argv = @("--require", $shim, $plant, "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+          $t = [Diagnostics.Stopwatch]::StartNew()
+          $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          $t.Stop()
+          "  OUTER wall time incl. Start-Process -Credential : $([int]$t.ElapsedMilliseconds) ms"
+          "  exit=$($p.ExitCode)"
+          if (Test-Path $o) { (Get-Content $o -Raw).TrimEnd() -split "`n" | ForEach-Object { "    $_" } }
+          if (Test-Path $e) {
+            ((Get-Content $e -Raw) -split "`n" | Where-Object { $_ -match "INSTRUMENTATION ATTACHED|INJECTED CONTROL|operation \d+ (START|END|NESTED)|EXHAUSTED category|helper |toolVerify (REQUEST|RESPONSE)" }) |
+              ForEach-Object { "    $($_.TrimEnd())" }
+          } else { "    (no stderr - instrumentation ABSENT, not 'nothing refused')" }
+
+      # ============================================================================ PHASE B
+      # Warm baselines, as the WORKFLOW user. Labelled as such: the PowerShell module analysis
+      # cache is per-user, so these are not the same user context as phase A. The warm figure
+      # that pairs with phase A's cold call is phase A's OWN later calls, in the same process.
+      # PHASE B. A SECOND fresh profile that has never run PowerShell. Phase A already paid the
+      # OS-level term, so what is left here is the PER-USER module-cache term on its own. This is
+      # the part of a fully cold bare launch that is still recoverable after A.
+      - name: 'PHASE B: bare powershell.exe as slprobe2, a profile that has never run it'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred2 = New-Object System.Management.Automation.PSCredential("slprobe2", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p2.txt")) -AsPlainText -Force))
+          $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $ps -ArgumentList @("-NoProfile","-NonInteractive","-Command","exit 0") -Credential $cred2 -WorkingDirectory $LAB -PassThru -NoNewWindow -Wait
+            $t.Stop()
+            $label = if ($i -eq 1) { "first for this profile" } else { "repeat" }
+            "    slprobe2 bare $i ($label)  exit=$($p.ExitCode)  $([int]$t.ElapsedMilliseconds) ms  [includes Start-Process -Credential overhead]"
+          }
+          "--- Start-Process -Credential overhead alone, same shape, trivial target"
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath (Join-Path $env:SystemRoot "System32\cmd.exe") -ArgumentList @("/c","exit","0") -Credential $cred2 -WorkingDirectory $LAB -PassThru -NoNewWindow -Wait
+            $t.Stop()
+            "    slprobe2 cmd $i  exit=$($p.ExitCode)  $([int]$t.ElapsedMilliseconds) ms"
+          }
+
+      - name: 'PHASE C/D: warm baselines (workflow user, not slprobe)'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $ps = Join-Path $env:SystemRoot "System32\WindowsPowerShell\v1.0\powershell.exe"
+          "powershell.exe : $ps  exists=$(Test-Path $ps)"
+          "NOTE: the workflow user is $(whoami), phase A ran as slprobe. Per-user module cache differs."
+          ""
+          "--- C. bare interpreter, warm x3"
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            & $ps -NoProfile -NonInteractive -Command "exit 0" | Out-Null
+            $t.Stop()
+            "    bare $i   exit=$LASTEXITCODE  $([int]$t.ElapsedMilliseconds) ms"
+          }
+          ""
+          "--- D1. the REAL helper script, empty path list, warm x3"
+          $enc = (Get-Content -Raw (Join-Path $PWD "helper-b64.txt")).Trim()
+          "    b64 chars: $($enc.Length)"
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $out = "" | & $ps -NoProfile -NonInteractive -EncodedCommand $enc 2>&1
+            $t.Stop()
+            "    helper $i exit=$LASTEXITCODE  $([int]$t.ElapsedMilliseconds) ms  outchars=$(($out | Out-String).Length)"
+            if ($LASTEXITCODE -ne 0) { "      RAW: $(($out | Out-String).Trim() -replace "`n", ' | ')" }
+          }
+          ""
+          "--- D2. whoami.exe and icacls.exe, warm x3 (cold figures are in PHASE 0 and 0b)"
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew(); & whoami.exe /user | Out-Null; $t.Stop()
+            "    whoami $i  $([int]$t.ElapsedMilliseconds) ms"
+          }
+          $d = Join-Path $env:RUNNER_TEMP "icacls-probe"
+          New-Item -ItemType Directory -Force $d | Out-Null
+          foreach ($i in 1..3) {
+            $t = [Diagnostics.Stopwatch]::StartNew(); & icacls.exe $d | Out-Null; $t.Stop()
+            "    icacls $i  $([int]$t.ElapsedMilliseconds) ms"
+          }
+
+      # ============================================================================ PHASE E
+      - name: 'PHASE E: two WARM verifies, same user as phase A'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw (Join-Path $env:RUNNER_TEMP "p1.txt")) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $shim  = Join-Path $PWD "tests\fixtures\twouser-trace-shim.js"
+          $plant = Join-Path $PWD "tests\fixtures\win-twouser-plant.js"
+          foreach ($n in 2..3) {
+            $store = Join-Path $LAB "private\c$n\.secretloop"
+            $repo  = Join-Path $LAB "private\c$n\repo"
+            New-Item -ItemType Directory -Force (Join-Path $LAB "private\c$n") | Out-Null
+            $o = Join-Path $LAB "private\o$n.txt"; $e = Join-Path $LAB "private\e$n.txt"
+            "===== PHASE E: verify $n, warm ====="
+            $argv = @("--require", $shim, $plant, "--out", (Join-Path $PWD "out"), "--store", $store, "--repo", $repo)
+            $t = [Diagnostics.Stopwatch]::StartNew()
+            $p = Start-Process -FilePath $node -ArgumentList $argv -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+            $t.Stop()
+            "  OUTER wall time : $([int]$t.ElapsedMilliseconds) ms   exit=$($p.ExitCode)"
+            if (Test-Path $o) { (Get-Content $o -Raw).TrimEnd() -split "`n" | ForEach-Object { "    $_" } }
+            if (Test-Path $e) {
+              ((Get-Content $e -Raw) -split "`n" | Where-Object { $_ -match "operation \d+ (START|END)|EXHAUSTED category|helper |toolVerify (REQUEST|RESPONSE)" }) |
+                ForEach-Object { "    $($_.TrimEnd())" }
+            }
+          }
+
+      # ============================================================================ PHASE F
+      - name: 'PHASE F: identity of the machine these numbers came from'
+        if: always()
+        shell: pwsh
+        run: |
+          "image          : $env:ImageOS  $env:ImageVersion"
+          "runner arch    : $env:RUNNER_ARCH   matrix arch: ${{ matrix.arch }}"
+          "PROCESSOR_ARCH : $env:PROCESSOR_ARCHITECTURE   ARCHITEW6432=$env:PROCESSOR_ARCHITEW6432 (blank = not emulated)"
+          "node           : $(node -p 'process.version') $(node -p 'process.arch')"
+          "commit         : $(git rev-parse HEAD)"
+          $os = Get-CimInstance Win32_OperatingSystem
+          "os             : $($os.Caption)  build $($os.BuildNumber)  ProductType $($os.ProductType)"
+          $cpu = Get-CimInstance Win32_Processor | Select-Object -First 1
+          "cpu            : $($cpu.Name)  cores=$($cpu.NumberOfCores) logical=$($cpu.NumberOfLogicalProcessors)  maxMHz=$($cpu.MaxClockSpeed)"
+          "memory MB      : $([int]($os.TotalVisibleMemorySize/1024))"
+          "  $(git hash-object src/consent-acl-win.ts)  src/consent-acl-win.ts"
+          "  $(git hash-object tests/fixtures/twouser-trace-shim.js)  twouser-trace-shim.js"
+          "  $(git hash-object tests/fixtures/win-twouser-plant.js)  win-twouser-plant.js"
