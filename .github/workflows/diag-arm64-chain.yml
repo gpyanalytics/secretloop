@@ -1,0 +1,120 @@
+# DISPOSABLE DIAGNOSTIC. One job. Never merged, never required.
+#
+# Run 36261243294 job decomp-arm64 refused `unsafe-parent` on its first helper call, before any
+# store existed, with 11,776 ms of allowance remaining. It recorded no ACL data and never called
+# lastRefusalDetail(), so WHICH component of the ancestor chain failed is unknown.
+#
+# This measures it. No accounts, no verify, no timing, no product-source change.
+#
+# The shipped fixture tests/fixtures/win-chain-diagnostic.js cannot be used: its probe bases are
+# hardcoded (line 14) to os.tmpdir(), os.homedir()/.secretloop and os.homedir(), and it takes only
+# the module path as an argument. It cannot be pointed at the lab path, and one of its bases is a
+# store-shaped path under the home directory. Its exported functions are reused inline instead.
+name: diag arm64 chain
+
+on:
+  push:
+    branches: [diag-arm64-chain]
+
+permissions:
+  contents: read
+
+jobs:
+  chain:
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Identity of this runner
+        shell: pwsh
+        run: |
+          "image          : $env:ImageOS  $env:ImageVersion"
+          "runner arch    : $env:RUNNER_ARCH"
+          "PROCESSOR_ARCH : $env:PROCESSOR_ARCHITECTURE   ARCHITEW6432=$env:PROCESSOR_ARCHITEW6432"
+          "RUNNER_TEMP    : $env:RUNNER_TEMP"
+          "node           : $(node -p 'process.version') $(node -p 'process.arch')"
+          "commit         : $(git rev-parse HEAD)"
+          $os = Get-CimInstance Win32_OperatingSystem
+          "os             : $($os.Caption)  build $($os.BuildNumber)  ProductType $($os.ProductType)"
+          "whoami         : $(whoami)"
+          ""
+          "COMPARISON POINT: run 36261243294 decomp-arm64 ran on win11-arm64 20260920.174.1;"
+          "#100's ACL measurement (run 35540257109) ran on win11-arm64 20260914.169."
+
+      # Recreates the SHAPE of the failing path only. No grants are applied, because applying the
+      # decomposition run's grants would need the slprobe accounts this job deliberately does not
+      # create. The ACL of every component is printed below, so a reader can see exactly what the
+      # difference is rather than take a claim about it.
+      - name: Recreate the disposable lab shape (no accounts, no grants, no records)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = "C:\a\_temp\acl-lab"
+          if ($env:RUNNER_TEMP -ne "C:\a\_temp") {
+            "NOTE: RUNNER_TEMP is $env:RUNNER_TEMP, not C:\a\_temp. The lab path is pinned to the"
+            "      literal path the failing run used, so the chain under test is the same one."
+          }
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private\c1") | Out-Null
+          "created: $LAB\private\c1"
+
+      - name: icacls for every component of the chain, raw
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          foreach ($p in @("C:\", "C:\a", "C:\a\_temp", "C:\a\_temp\acl-lab", "C:\a\_temp\acl-lab\private", "C:\a\_temp\acl-lab\private\c1")) {
+            "===== $p ====="
+            icacls $p
+          }
+
+      - name: The ancestor rule's own verdict, and the failing component
+        shell: pwsh
+        env:
+          SL_STORE: 'C:\a\_temp\acl-lab\private\c1\.secretloop'
+        run: |
+          $ErrorActionPreference = "Stop"
+          node -e "
+            const path = require('path');
+            const acl = require('./out/consent-acl-win.js');
+            const store = process.env.SL_STORE;
+            const me = acl.currentUserSid();
+            console.log('store dir under test :', store);
+            console.log('running as SID       :', me);
+            const chain = acl.ancestorChainOf(path.dirname(path.resolve(store))) || [];
+            console.log('chain (' + chain.length + '):');
+            for (const c of chain) console.log('   ', c);
+
+            // VERDICT 1: as this job's own account.
+            const r1 = acl.checkWindowsStore(store, [], me);
+            console.log('');
+            console.log('VERDICT as this account :', r1.ok ? 'chain-trusted' : r1.problem,
+                        JSON.stringify(acl.lastRefusalDetail() || {}));
+
+            // VERDICT 2: as an ordinary non-admin account, WITHOUT creating one. The same
+            // inspected chain is re-evaluated against a synthetic SID, which is what the failing
+            // run's slprobe would have been. evaluateInspected is the same decision function the
+            // real path uses.
+            const synthetic = 'S-1-5-21-1111111111-2222222222-3333333333-1601';
+            const info = acl.inspectPaths(chain);
+            if (!info.ok) {
+              console.log('inspectPaths failed:', info.problem);
+            } else {
+              const r2 = acl.evaluateInspected(chain, [], info.byPath, synthetic);
+              console.log('VERDICT as ordinary SID :', r2.ok ? 'chain-trusted' : r2.problem,
+                          JSON.stringify(acl.lastRefusalDetail() || {}));
+              console.log('');
+              console.log('PER-COMPONENT owner and SDDL:');
+              for (const c of chain) {
+                const e = info.byPath.get(path.resolve(c).toLowerCase());
+                console.log('   ', c);
+                console.log('        owner', e && e.ownerSid);
+                console.log('        sddl ', e && e.sddl);
+              }
+            }
+          "
