@@ -36,11 +36,15 @@ import { test, suite, finish, assert, skip } from "./harness";
  *
  * WHAT IS CLAIMED, AND ONLY THAT. Linux with procfs: no bytes are read from an
  * object whose kernel-recorded location, at the check that immediately
- * precedes the first read, is outside the root. Every platform: no bytes are
- * read from an object other than the one inspected one syscall before the
- * open. NOT claimed, and asserted here as the residual it is: location at the
- * open (MI1/MI2 are accepted by design), location throughout the read (MO1 is
- * read by design), the parent case without a kernel path.
+ * precedes the first read, is outside the root; and no bytes are RETURNED from
+ * a descriptor whose kernel-recorded location, at the check that follows the
+ * last read, is outside the root (MO1 is refused and its bytes discarded).
+ * Every platform: no bytes are read from an object other than the one inspected
+ * one syscall before the open. NOT claimed, and asserted here as the residual it
+ * is: location at the open (MI1/MI2 are accepted by design), location THROUGHOUT
+ * the read (an object outside only between the two checks is read: two points
+ * are not an interval), the parent case without a kernel path, and MO1 itself
+ * where there is no kernel path.
  */
 
 const INSIDE = "INSIDE_CONTENT_" + "9c1e";
@@ -153,7 +157,7 @@ test("a regular file is read, and its one descriptor records identity verified a
     const { checks, hooks } = collect();
     const r = readTextFileResult(lab.root, REL, cfg(), hooks);
     assert.strictEqual((r as { text: string }).text, INSIDE);
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED }]);
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED, kernelPathAfterRead: KP_EXPECTED }]);
     console.log(`    kernel-path check on ${process.platform}: ${KP_EXPECTED} (measured: /proc/self/fd ${KERNEL_PATH ? "present" : "absent"})`);
   });
 });
@@ -195,7 +199,7 @@ test("T2 A1': the final component replaced by an outside symlink after the ident
     platformSkip(w.state, "replacing the inspected name");
     assertFired(w.state, "A1'");
     assert.strictEqual((r as { skipped: string }).skipped, "replaced");
-    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -207,7 +211,7 @@ test("T3 A2': the parent replaced by an outside link after the identity capture 
     platformSkip(w.state, "replacing the parent directory");
     assertFired(w.state, "A2'");
     assert.strictEqual((r as { skipped: string }).skipped, "replaced");
-    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -231,7 +235,7 @@ test("T4 SB: swapped out before the open and back after it is refused -- the des
     assertFired(swapIn.state, "SB swap-in");
     assertFired(swapBack.state, "SB swap-back");
     assert.strictEqual((r as { skipped: string }).skipped, "replaced");
-    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -253,12 +257,12 @@ function realpathGapCase(lab: Lab, linkTo: string, what: string): void {
   assertFired(w.state, what);
   if (KERNEL_PATH) {
     assert.strictEqual((r as { skipped: string }).skipped, "outside", `${what}: the kernel path must refuse the outside object`);
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "refused" }]);
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "refused", kernelPathAfterRead: "not-reached" }]);
   } else {
     // RESIDUAL, measured and documented: without a kernel path the one-syscall
     // gap is crossed and the outside object's bytes are read.
     assert.strictEqual((r as { text: string }).text, OUTSIDE, `${what}: expected the documented residual on ${process.platform}`);
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable" }]);
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" }]);
     console.log(`    RESIDUAL on ${process.platform}: ${what} crossed the realpath-to-identity gap (no kernel path); outside bytes were read`);
   }
 }
@@ -306,13 +310,13 @@ test("T7 M2: a parent moved out of the root after the open and before the kernel
     assertFired(w.state, "M2");
     if (KERNEL_PATH) {
       assert.strictEqual((r as { skipped: string }).skipped, "outside");
-      assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "refused" }]);
+      assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "refused", kernelPathAfterRead: "not-reached" }]);
     } else {
       // The object IS the inspected inside file; without a kernel path its
       // movement is not observed and it is read. Inside content, so the
       // residual here is a location claim, not an outside read.
       assert.strictEqual((r as { text: string }).text, INSIDE);
-      assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable" }]);
+      assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" }]);
     }
   });
 });
@@ -325,7 +329,7 @@ test("T8 D1: a file unlinked after the open is still read; on Linux its raw `(de
     platformSkip(w.state, "unlinking an open file");
     assertFired(w.state, "D1");
     assert.strictEqual((r as { text: string }).text, INSIDE);
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED }]);
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED, kernelPathAfterRead: KP_EXPECTED }]);
   });
 });
 
@@ -361,7 +365,7 @@ test("T9a: with no readable /proc/self/fd at all the read continues and the desc
     }
     assert.ok(sawLink && sawProbe, "the reader must try the link and then probe the directory");
     assert.strictEqual((r as { text: string }).text, INSIDE, "an absent capability continues the read");
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable" }]);
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" }]);
   });
 });
 
@@ -383,7 +387,7 @@ test("T9b: with /proc/self/fd present but THIS descriptor's link unreadable the 
     }
     assert.ok(saw, "the link read did not happen");
     assert.strictEqual((r as { skipped: string }).skipped, "unreadable", "a failed attempt to obtain evidence refuses; it is not an absence");
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "failed" }]);
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "failed", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -409,7 +413,7 @@ test("T10: an inspected object reporting no identity (dev 0, ino 0) is read with
     }
     assert.ok(saw, "the identity capture did not happen on the target");
     assert.strictEqual((r as { text: string }).text, INSIDE);
-    assert.deepStrictEqual(checks, [{ identity: "unavailable", kernelPath: KP_EXPECTED }]);
+    assert.deepStrictEqual(checks, [{ identity: "unavailable", kernelPath: KP_EXPECTED, kernelPathAfterRead: KP_EXPECTED }]);
   });
 });
 
@@ -430,7 +434,7 @@ test("a failed fstat on the open descriptor refuses as unreadable and records id
     }
     assert.ok(saw);
     assert.strictEqual((r as { skipped: string }).skipped, "unreadable");
-    assert.deepStrictEqual(checks, [{ identity: "failed", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks, [{ identity: "failed", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -465,7 +469,7 @@ function movedInCase(lab: Lab, second: "openSync" | "fstatSync", what: string): 
   assertFired(first.state, `${what} parent swap`);
   assertFired(w2.state, `${what} move-in`);
   assert.strictEqual((r as { text: string }).text, OUTSIDE, `${what}: accepted by design -- the object is under the root at the check`);
-  assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED }]);
+  assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED, kernelPathAfterRead: KP_EXPECTED }]);
   console.log(`    ${what} on ${process.platform}: ACCEPTED BY DESIGN (check-time containment); outside-origin bytes were read`);
 }
 
@@ -477,7 +481,7 @@ test("T15 MI2: the same, moved in after the fstat and before the kernel-path che
   withLab((lab) => movedInCase(lab, "fstatSync", "MI2"));
 });
 
-test("T16 MO1: an inside object moved out after the checks and before the read is still read -- the reads are not re-validated", () => {
+test("T16 MO1: an inside object moved out after the checks and before the read is refused by the post-read kernel-path check on Linux, and read by design where there is no kernel path", () => {
   withLab((lab) => {
     const { checks, hooks } = collect();
     let fired = false;
@@ -494,9 +498,76 @@ test("T16 MO1: an inside object moved out after the checks and before the read i
     const r = readTextFileResult(lab.root, REL, cfg(), hooks);
     platformSkip({ error }, "moving the parent of an open file");
     assert.strictEqual(fired, true, "MO1: the seam did not fire");
-    assert.strictEqual((r as { text: string }).text, INSIDE, "MO1: read by design; the object was inside at the check");
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED }]);
-    console.log(`    MO1 on ${process.platform}: READ BY DESIGN (the descriptor is not re-validated after the check)`);
+    if (KERNEL_PATH) {
+      assert.strictEqual((r as { skipped: string }).skipped, "outside", "MO1: the post-read check must refuse the object that is outside after the last read");
+      assert.ok(!("text" in r), "MO1: no content may be returned once the post-read check refused");
+      assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "verified", kernelPathAfterRead: "refused" }]);
+    } else {
+      // No kernel path, nothing to repeat: the object was inside at every check
+      // that could run, and the bytes are returned under the identity check only.
+      assert.strictEqual((r as { text: string }).text, INSIDE, "MO1: read by design where there is no kernel path");
+      assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" }]);
+      console.log(`    MO1 on ${process.platform}: READ BY DESIGN (no kernel path to repeat after the read)`);
+    }
+  });
+});
+
+test("T16b: with the post-read link unreadable the file is refused and the descriptor records kernelPathAfterRead failed -- a failure after the read is not an absence", () => {
+  linuxOnly();
+  withLab((lab) => {
+    const { checks, hooks } = collect();
+    const realReadlink = fs.readlinkSync;
+    let procCalls = 0;
+    (fs as any).readlinkSync = function (this: unknown, p: unknown, ...rest: unknown[]) {
+      if (String(p).startsWith("/proc/self/fd/")) {
+        procCalls++;
+        // The check before the reads answers; the one after them cannot.
+        if (procCalls === 2) throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+      }
+      return (realReadlink as any).apply(this, [p, ...rest]);
+    };
+    let r;
+    try {
+      r = readTextFileResult(lab.root, REL, cfg(), hooks);
+    } finally {
+      (fs as any).readlinkSync = realReadlink;
+    }
+    assert.strictEqual(procCalls, 2, "the reader must read the link once before the reads and once after them");
+    assert.strictEqual((r as { skipped: string }).skipped, "unreadable");
+    assert.ok(!("text" in r), "no content may be returned when the post-read evidence could not be obtained");
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "verified", kernelPathAfterRead: "failed" }]);
+  });
+});
+
+test("T16c RESIDUAL: an object outside only BETWEEN the two checks is read and recorded verified -- two point checks are not an interval", () => {
+  linuxOnly();
+  withLab((lab) => {
+    const { checks, hooks } = collect();
+    const moved = path.join(lab.outside, "sub.moved");
+    let out = false;
+    let back = false;
+    // Out after the pre-read check (the existing seam), back in just before the
+    // post-read check: wrapped BEFORE the real second link read, not after it.
+    hooks.afterOpen = () => { fs.renameSync(path.join(lab.root, "sub"), moved); out = true; };
+    const realReadlink = fs.readlinkSync;
+    let procCalls = 0;
+    (fs as any).readlinkSync = function (this: unknown, p: unknown, ...rest: unknown[]) {
+      if (String(p).startsWith("/proc/self/fd/") && ++procCalls === 2 && out) {
+        fs.renameSync(moved, path.join(lab.root, "sub"));
+        back = true;
+      }
+      return (realReadlink as any).apply(this, [p, ...rest]);
+    };
+    let r;
+    try {
+      r = readTextFileResult(lab.root, REL, cfg(), hooks);
+    } finally {
+      (fs as any).readlinkSync = realReadlink;
+    }
+    assert.ok(out && back, "the object must have been out and back for this to measure the interval");
+    assert.strictEqual((r as { text: string }).text, INSIDE, "RESIDUAL: the object was inside at both checks and its bytes are returned");
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: "verified", kernelPathAfterRead: "verified" }]);
+    console.log("    RESIDUAL on linux: outside only between the two checks is not observed (G3 remains open)");
   });
 });
 
@@ -518,7 +589,7 @@ test("T17: a parent swap after the binary reader's lstat gate hands the header a
     assertFired(w.state, "T17");
     assert.strictEqual(received.length, 0, `the header acceptor received ${received.length} call(s) with ${received.map((b) => JSON.stringify(b.toString())).join(", ")}`);
     assert.strictEqual((r as { skipped: string }).skipped, "replaced");
-    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -551,7 +622,7 @@ test("a declined header still reads nothing further and is still not counted as 
     const { checks, hooks } = collect();
     const r = readBinaryCandidate(lab.root, REL, cfg(), () => false, 16, hooks);
     assert.strictEqual((r as { skipped: string }).skipped, "not-a-file");
-    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED }], "the descriptor was checked before the head was read");
+    assert.deepStrictEqual(checks, [{ identity: "verified", kernelPath: KP_EXPECTED, kernelPathAfterRead: "not-reached" }], "the descriptor was checked before the head was read; the bulk read never ran, so the post-read check was not reached");
   });
 });
 
@@ -570,7 +641,7 @@ test("T13: a junction swapped in for the parent after the identity capture is re
     platformSkip(w.state, "swapping a junction in for the parent");
     assertFired(w.state, "T13");
     assert.strictEqual((r as { skipped: string }).skipped, "replaced");
-    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks, [{ identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
   });
 });
 
@@ -654,17 +725,19 @@ test("records are counted per descriptor into five buckets per check, and a late
     opened: 0,
     identity: { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
     kernelPath: { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
+    kernelPathAfterRead: { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
   });
-  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "unavailable" });
-  recordOpenedFileCheck(acc, { identity: "refused", kernelPath: "not-reached" });
-  recordOpenedFileCheck(acc, { identity: "unavailable", kernelPath: "failed" });
-  recordOpenedFileCheck(acc, { identity: "failed", kernelPath: "not-reached" });
-  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "verified" });
-  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "verified" });
+  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" });
+  recordOpenedFileCheck(acc, { identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" });
+  recordOpenedFileCheck(acc, { identity: "unavailable", kernelPath: "failed", kernelPathAfterRead: "not-reached" });
+  recordOpenedFileCheck(acc, { identity: "failed", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" });
+  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "verified", kernelPathAfterRead: "verified" });
+  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "verified", kernelPathAfterRead: "refused" });
   assert.strictEqual(acc.opened, 6);
   assert.deepStrictEqual(acc.identity, { verified: 3, refused: 1, unavailable: 1, failed: 1, notReached: 0 });
   assert.deepStrictEqual(acc.kernelPath, { verified: 2, refused: 0, unavailable: 1, failed: 1, notReached: 2 });
-  for (const c of [acc.identity, acc.kernelPath]) {
+  assert.deepStrictEqual(acc.kernelPathAfterRead, { verified: 1, refused: 1, unavailable: 1, failed: 0, notReached: 3 });
+  for (const c of [acc.identity, acc.kernelPath, acc.kernelPathAfterRead]) {
     assert.strictEqual(c.verified + c.refused + c.unavailable + c.failed + c.notReached, acc.opened, "every descriptor has exactly one outcome per check");
   }
 });
@@ -672,19 +745,20 @@ test("records are counted per descriptor into five buckets per check, and a late
 test("the clause lists every non-zero outcome, says zero as zero, and is the LAST clause -- in report.ts and mcp-core.ts alike", () => {
   const acc = emptyOpenedFileChecks();
   assert.strictEqual(describeOpenedFileChecks(acc), "0 descriptor(s) opened for content");
-  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "unavailable" });
-  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "unavailable" });
-  recordOpenedFileCheck(acc, { identity: "refused", kernelPath: "not-reached" });
+  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" });
+  recordOpenedFileCheck(acc, { identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" });
+  recordOpenedFileCheck(acc, { identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" });
   assert.strictEqual(describeCheckCounts(acc.identity), "2 verified, 1 refused");
   assert.strictEqual(describeCheckCounts(acc.kernelPath), "2 unavailable, 1 not reached");
+  assert.strictEqual(describeCheckCounts(acc.kernelPathAfterRead), "2 unavailable, 1 not reached");
   assert.strictEqual(
     describeOpenedFileChecks(acc),
-    "3 descriptor(s) opened for content: identity 2 verified, 1 refused; kernel path 2 unavailable, 1 not reached"
+    "3 descriptor(s) opened for content: identity 2 verified, 1 refused; kernel path 2 unavailable, 1 not reached; kernel path after read 2 unavailable, 1 not reached"
   );
   const notes = { unreadableExcluded: 1, replacedExcluded: 1, openedFileChecks: acc };
   const expected =
     "4 file(s); 1 file(s) not scanned — could not be read; 1 file(s) not scanned — replaced between inspection and read; " +
-    "3 descriptor(s) opened for content: identity 2 verified, 1 refused; kernel path 2 unavailable, 1 not reached";
+    "3 descriptor(s) opened for content: identity 2 verified, 1 refused; kernel path 2 unavailable, 1 not reached; kernel path after read 2 unavailable, 1 not reached";
   assert.strictEqual(describeScope(4, "file", notes), expected);
   assert.strictEqual(mcpDescribeScope(4, "file", notes), expected, "the MCP copy must agree word for word");
   assert.strictEqual(describeScope(4, "file", {}), "4 file(s)", "no accounting supplied, no clause");

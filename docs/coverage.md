@@ -140,6 +140,7 @@ one open to the next, and a file served from an editor buffer opens nothing.
 |---|---|---|
 | `identity` (all platforms) | the device and inode captured by `lstat` one syscall before the open must equal `fstat` of the descriptor | `verified`; `refused` (file skipped as `replaced`); `unavailable` (the inspected object reported no identity — dev 0, ino 0 — and the read continued); `failed` (`fstat` itself failed; file skipped `unreadable`); `notReached` (refused before this check, e.g. not a regular file after the open) |
 | `kernelPath` (Linux, procfs) | the kernel's own path for the descriptor, `/proc/self/fd/N`, read raw and compared by path component against the canonical root — never by string prefix, and never with the ` (deleted)` suffix stripped | `verified`; `refused` (file skipped as `outside`); `unavailable` (not Linux, or no readable `/proc/self/fd`; the read continued under the identity check alone); `failed` (procfs present but this descriptor's link unreadable; file skipped `unreadable`); `notReached` |
+| `kernelPathAfterRead` (Linux, procfs) | the same kernel-path test repeated on the same descriptor after its last read and before a byte of it is used; `refused` discards the bytes already read and skips the file as `outside`; `unavailable` either mirrors a pre-read `unavailable` or is measured when the later lookup finds no procfs; `notReached` when the reads never completed (refused earlier, declined by a format probe at its header, refused mid-read as `oversized`, or a read threw) | as `kernelPath` |
 
 For each check, `verified + refused + unavailable + failed + notReached` equals
 `opened`. Counts only ever grow during a scan: a capability that stops working
@@ -170,8 +171,10 @@ volume that reports no inode it is every descriptor for identity — and the blo
 is where that is said; nothing is claimed for it. **What they do not establish:** containment at
 the moment of the open (an outside object moved under the root after the open
 and before the check is accepted, and its bytes are read), containment
-throughout the read (an inside object moved out after the check is still read),
-the parent-replacement case where there is no kernel path (a parent swapped
+throughout the read (the pre-read and post-read checks are two points that
+bracket the reads: an inside object still outside at the post-read check is
+refused on Linux with its bytes discarded, but one outside only between the two
+checks is read), the parent-replacement case where there is no kernel path (a parent swapped
 between path resolution and the identity capture is read on darwin and
 Windows), or content stability. These are measured results, recorded in the
 project's containment design records. On darwin and Windows the identity check

@@ -196,8 +196,8 @@ test("describeScope matches the CLI's, word for word", () => {
   // silently stopped disclosing skipped files. A pin that only exercises the
   // arguments that existed yesterday fails the same way tomorrow.
   const CHECKS = emptyOpenedFileChecks();
-  recordOpenedFileCheck(CHECKS, { identity: "verified", kernelPath: "unavailable" });
-  recordOpenedFileCheck(CHECKS, { identity: "refused", kernelPath: "not-reached" });
+  recordOpenedFileCheck(CHECKS, { identity: "verified", kernelPath: "unavailable", kernelPathAfterRead: "unavailable" });
+  recordOpenedFileCheck(CHECKS, { identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" });
   const NOTES: Array<Record<string, unknown>> = [
     {},
     { generatedExcluded: 12 },

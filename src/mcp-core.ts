@@ -160,7 +160,8 @@ function describeOpenedFileChecks(o: OpenedFileChecks): string {
   if (o.opened === 0) return "0 descriptor(s) opened for content";
   return (
     `${o.opened} descriptor(s) opened for content: ` +
-    `identity ${describeCheckCounts(o.identity)}; kernel path ${describeCheckCounts(o.kernelPath)}`
+    `identity ${describeCheckCounts(o.identity)}; kernel path ${describeCheckCounts(o.kernelPath)}; ` +
+    `kernel path after read ${describeCheckCounts(o.kernelPathAfterRead)}`
   );
 }
 

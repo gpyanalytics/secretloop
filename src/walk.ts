@@ -241,7 +241,8 @@ export type SkipReason =
    * The name resolved outside the scan root -- before the open (a symlink,
    * as always) or, on Linux, after it: the kernel's own record of the OPENED
    * object's location lay outside the root at the check that precedes the
-   * first read. See readChecked.
+   * first read, or at the check that follows the last read -- in which case
+   * the bytes already read were discarded. See readChecked.
    */
   | "outside"
   /**
@@ -258,7 +259,7 @@ export type SkipReason =
 export type ReadResult = { text: string } | { skipped: SkipReason };
 
 /**
- * What happened to ONE content descriptor's two checks. Recorded per
+ * What happened to ONE content descriptor's three checks. Recorded per
  * descriptor, never per file: a file may be opened by up to three readers and
  * each open is checked, and accounted for, on its own.
  *
@@ -268,11 +269,17 @@ export type ReadResult = { text: string } | { skipped: SkipReason };
  *                the read continued under the remaining checks and says so
  *   failed       the attempt to obtain the evidence itself failed; the file was
  *                refused (`unreadable`) -- a failure is not an absence
- *   not-reached  the descriptor was refused before this check ran
+ *   not-reached  the descriptor was refused, declined by a format probe, or
+ *                its reads did not complete (a mid-read `oversized` refusal
+ *                or a thrown read), before this check ran
  *
  * `verified` is written only after the comparison or the link read actually
  * succeeded on the descriptor in hand. It is never inferred from the platform
- * name or from an earlier descriptor.
+ * name or from an earlier descriptor. The one inference made is the negative
+ * one: a descriptor whose kernel path was `unavailable` before the reads has
+ * nothing to repeat afterwards, and `kernelPathAfterRead` says `unavailable`
+ * without asking again. `unavailable` after the reads can also be MEASURED:
+ * the link read before the reads and the later lookup finds no procfs at all.
  */
 export type CheckOutcome = "verified" | "refused" | "unavailable" | "failed" | "not-reached";
 
@@ -281,6 +288,18 @@ export interface OpenedFileCheck {
   identity: CheckOutcome;
   /** Linux only: the kernel's path for the descriptor, inside the root by component boundary. */
   kernelPath: CheckOutcome;
+  /**
+   * Linux only: the SAME kernel-path test, repeated on the SAME descriptor after
+   * its last read and before any byte it returned is used. `refused` means the
+   * object was under the root at the check before the first read and outside it
+   * at the check after the last one; the bytes already read were discarded and
+   * the file refused as `outside`. `unavailable` either mirrors a pre-read
+   * `unavailable` (nothing to repeat) or is measured, when the later lookup
+   * itself finds no procfs. `not-reached` means the reads never completed on
+   * this descriptor: it was refused earlier, a format probe declined it at the
+   * header, the bounded read refused it as `oversized`, or a read threw.
+   */
+  kernelPathAfterRead: CheckOutcome;
 }
 
 /** Counts of one check's outcomes over a scan. Sums to `opened`. */
@@ -307,6 +326,8 @@ export interface OpenedFileChecks {
   opened: number;
   identity: CheckCounts;
   kernelPath: CheckCounts;
+  /** Unreleased, beside the two above: the post-read repeat of the kernel-path check. */
+  kernelPathAfterRead: CheckCounts;
 }
 
 function emptyCheckCounts(): CheckCounts {
@@ -314,7 +335,7 @@ function emptyCheckCounts(): CheckCounts {
 }
 
 export function emptyOpenedFileChecks(): OpenedFileChecks {
-  return { opened: 0, identity: emptyCheckCounts(), kernelPath: emptyCheckCounts() };
+  return { opened: 0, identity: emptyCheckCounts(), kernelPath: emptyCheckCounts(), kernelPathAfterRead: emptyCheckCounts() };
 }
 
 function countOutcome(counts: CheckCounts, outcome: CheckOutcome): void {
@@ -336,6 +357,7 @@ export function recordOpenedFileCheck(acc: OpenedFileChecks, check: OpenedFileCh
   acc.opened++;
   countOutcome(acc.identity, check.identity);
   countOutcome(acc.kernelPath, check.kernelPath);
+  countOutcome(acc.kernelPathAfterRead, check.kernelPathAfterRead);
 }
 
 /**
@@ -468,11 +490,20 @@ interface ObjectIdentity {
  *      procfs present but this link unreadable: `failed`, refused.
  *   9  the reads -- the optional header probe and then the bulk read -- from
  *      THIS descriptor, positionally, with the cap enforced in the loop.
+ *  10  KERNEL PATH AGAIN (Linux), on the same descriptor, after the last read
+ *      and before a byte of it is returned. Outside now: the bytes are
+ *      discarded and the file is refused as `outside`. Nothing to repeat
+ *      (step 8 was `unavailable`), or procfs gone by now: `unavailable`,
+ *      disclosed, the bytes are returned under the remaining checks. Link
+ *      unreadable now with procfs present: `failed`, refused.
  *
  * WHAT THIS ESTABLISHES, EXACTLY -- PER DESCRIPTOR, AS RECORDED. For a
  * descriptor the record says `kernelPath: verified`: its kernel-recorded
  * location, AT THE INSTANT OF THE CHECK THAT IMMEDIATELY PRECEDES THE FIRST
  * READ, lay inside the root, and no byte was read before that check. For a
+ * descriptor the record says `kernelPathAfterRead: verified`: its
+ * kernel-recorded location ALSO lay inside the root at the check that follows
+ * the last read, and no byte was returned before that check. For a
  * descriptor the record says `identity: verified`: every byte read came from
  * the object inspected one syscall before the open. Neither claim extends to
  * a descriptor recorded `unavailable`: such a descriptor IS READ, under the
@@ -485,8 +516,14 @@ interface ObjectIdentity {
  *     (measured: f1-containment-design-review-addendum-timing, MI1/MI2). Only an
  *     open that cannot escape the root -- openat2(RESOLVE_BENEATH), which Node
  *     does not expose -- would make the open the guarantee.
- *   - location THROUGHOUT THE READ. An inside object moved out after step 8 is
- *     still read (MO1); the reads are not re-validated.
+ *   - location THROUGHOUT THE READ. Steps 8 and 10 are two point checks that
+ *     bracket the reads; an inside object moved out after step 8 and still
+ *     outside at step 10 (MO1) is now refused with its bytes discarded, but an
+ *     object outside only BETWEEN the two checks is read and recorded verified.
+ *     Two points are not an interval.
+ *   - the header probe's first bytes. Up to `header.bytes` bytes reach the
+ *     format acceptor in step 9 before step 10 runs; they classify the object
+ *     and are discarded, and nothing is returned from them, but they were read.
  *   - the parent case without a kernel path. On darwin and win32 a parent
  *     replaced between realpath and the caller's lstat is captured as approved
  *     and passes step 7; step 8 is unavailable there. Risk reduction, disclosed.
@@ -517,7 +554,7 @@ function readChecked(
     return { skipped: "unreadable" };
   }
   // Written as each step actually completes; reported from the finally below.
-  const check: OpenedFileCheck = { identity: "not-reached", kernelPath: "not-reached" };
+  const check: OpenedFileCheck = { identity: "not-reached", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" };
   try {
     let st: BigIntStats;
     try {
@@ -607,6 +644,29 @@ function readChecked(
       // buffer is discarded before anything classifies or scans it.
       if (total > limit) return { skipped: "oversized" };
       chunks.push(buf.subarray(0, n));
+    }
+
+    // 10  KERNEL PATH AGAIN, after the last read and before a byte is returned.
+    // The same test on the same descriptor. A refusal here discards `chunks`:
+    // the function returns without them and nothing downstream ever sees them.
+    if (check.kernelPath === "unavailable") {
+      // Nothing to repeat: step 8 established there is no kernel path for this
+      // descriptor. Mirrored, not re-measured, and the bytes are returned under
+      // the remaining checks exactly as before.
+      check.kernelPathAfterRead = "unavailable";
+    } else {
+      const after = kernelPathOf(fd);
+      if ("path" in after) {
+        if (kernelPathInside(after.path, realRoot)) {
+          check.kernelPathAfterRead = "verified";
+        } else {
+          check.kernelPathAfterRead = "refused";
+          return { skipped: "outside" };
+        }
+      } else {
+        check.kernelPathAfterRead = after.outcome;
+        if (after.outcome === "failed") return { skipped: "unreadable" };
+      }
     }
     return { bytes: Buffer.concat(chunks, total) };
   } catch {

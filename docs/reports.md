@@ -48,7 +48,11 @@ illustrative, not a claim about which release carries these fields.
       "openedFileChecks": {
         "opened": 6,
         "identity":   { "verified": 6, "refused": 0, "unavailable": 0, "failed": 0, "notReached": 0 },
-        "kernelPath": { "verified": 0, "refused": 0, "unavailable": 6, "failed": 0, "notReached": 0 }
+        "kernelPath": { "verified": 0, "refused": 0, "unavailable": 6, "failed": 0, "notReached": 0 },
+        // Unreleased: the same test repeated after the last read; notReached for a
+        // descriptor whose reads did not complete (declined by a format probe,
+        // refused mid-read, or a read threw)
+        "kernelPathAfterRead": { "verified": 0, "refused": 0, "unavailable": 2, "failed": 0, "notReached": 4 }
       },
       "suppression": {
         "allowValuesCount": 0,
@@ -300,7 +304,9 @@ guard, an archive it could not finish enumerating, a container it could not
 open, or a run that was stopped. **Unreleased:** also a file whose opened
 descriptor was not the object just inspected (`replaced`), or whose
 kernel-recorded location was outside the root at the check before its first
-read (`outside`), or whose check evidence could not be obtained (`unreadable`).
+read or at the check after its last read (`outside`; in the second case the
+bytes already read are discarded), or whose check evidence could not be
+obtained (`unreadable`).
 These change what `incomplete` counts — a version-4 producer read such an object
 and said `false`; a version-5 producer says `true` for the same event — and that
 is the bump trigger the rule above names, so **`REPORT_SCHEMA_VERSION` is 5**. The
