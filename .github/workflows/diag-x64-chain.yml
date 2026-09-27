@@ -1,0 +1,105 @@
+# DISPOSABLE DIAGNOSTIC. One job, one attempt, never merged, never required.
+#
+# PR #102 run 36296432311 job 108556035066 refused `unsafe-parent` at 5,714 ms while planting on
+# lab D:\a\_temp\acl-lab. The #104 control passed 6 s earlier on the same image, code and lab
+# path. The failed job exited before its chain diagnostic; the control's diagnostic probes
+# C:\Users\… and never D:. So which D: component refuses, and what it grants, is unrecorded.
+#
+# This inspects only the fixture's own lab expression, Join-Path $env:RUNNER_TEMP "acl-lab",
+# with no accounts, no grants, no records and no verify. The ancestor rule short-circuits at the
+# first failing component, so if that is D:\, D:\a or D:\a\_temp the fixture's grants below are
+# irrelevant; if it is acl-lab, private or c1, this job does not reproduce the fixture's ACLs
+# there and reports that rather than a conclusion.
+name: diag x64 chain
+
+on:
+  push:
+    branches: [diag-x64-chain]
+
+permissions:
+  contents: read
+
+jobs:
+  chain:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+
+      - name: Identity of this runner
+        shell: pwsh
+        run: |
+          "image          : $env:ImageOS  $env:ImageVersion"
+          "runner arch    : $env:RUNNER_ARCH  PROCESSOR_ARCHITECTURE=$env:PROCESSOR_ARCHITECTURE"
+          "RUNNER_TEMP    : $env:RUNNER_TEMP"
+          "node           : $(node -p 'process.version') $(node -p 'process.arch')"
+          "commit         : $(git rev-parse HEAD)"
+          "whoami         : $(whoami)"
+          ""
+          "COMPARISON POINTS: #102 failed job 108556035066 and #104 control job 108556019954 both ran"
+          "win25-vs2026 20260922.246 with lab D:\a\_temp\acl-lab. #102 refused unsafe-parent at 5,714 ms;"
+          "#104 planted in 7,031 ms."
+
+      - name: Recreate the fixture's lab shape (no accounts, no grants, no records)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = Join-Path $env:RUNNER_TEMP "acl-lab"
+          if ($env:RUNNER_TEMP -ne "D:\a\_temp") {
+            "NOTE: RUNNER_TEMP is $env:RUNNER_TEMP, not D:\a\_temp. The chain under test is therefore"
+            "      not the one the failing job walked. Reported, not corrected."
+          }
+          New-Item -ItemType Directory -Force (Join-Path $LAB "private\c1") | Out-Null
+          "created: $LAB\private\c1"
+          "SL_LAB=$LAB" >> $env:GITHUB_ENV
+          "SL_STORE_FIXTURE=$LAB\private\.secretloop" >> $env:GITHUB_ENV
+          "SL_STORE_C1=$LAB\private\c1\.secretloop" >> $env:GITHUB_ENV
+
+      - name: icacls for every component of the chain, raw
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
+          $root = [System.IO.Path]::GetPathRoot($env:SL_LAB)
+          $parts = @($root)
+          $cur = $root.TrimEnd('\')
+          foreach ($seg in ($env:SL_LAB.Substring($root.Length) -split '\\')) { $cur = "$cur\$seg"; $parts += $cur }
+          $parts += (Join-Path $env:SL_LAB "private"), (Join-Path $env:SL_LAB "private\c1")
+          foreach ($p in $parts) { "===== $p ====="; icacls $p }
+
+      - name: The ancestor rule's own verdict, and the failing component
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node -e "
+            const path = require('path');
+            const acl = require('./out/consent-acl-win.js');
+            const me = acl.currentUserSid();
+            console.log('running as SID       :', me);
+            const synthetic = 'S-1-5-21-1111111111-2222222222-3333333333-1601';
+            for (const [label, store] of [['FIXTURE store (parent = private)', process.env.SL_STORE_FIXTURE],
+                                          ['c1 store (parent = private\\\\c1)', process.env.SL_STORE_C1]]) {
+              console.log('');
+              console.log('=====', label, ':', store);
+              const chain = acl.ancestorChainOf(path.dirname(path.resolve(store))) || [];
+              console.log('chain (' + chain.length + '):'); for (const c of chain) console.log('   ', c);
+              const r1 = acl.checkWindowsStore(store, [], me);
+              console.log('VERDICT as this account :', r1.ok ? 'chain-trusted' : r1.problem,
+                          JSON.stringify(acl.lastRefusalDetail() || {}));
+              const info = acl.inspectPaths(chain);
+              if (!info.ok) { console.log('inspectPaths failed:', info.problem); continue; }
+              const r2 = acl.evaluateInspected(chain, [], info.byPath, synthetic);
+              console.log('VERDICT as ordinary SID :', r2.ok ? 'chain-trusted' : r2.problem,
+                          JSON.stringify(acl.lastRefusalDetail() || {}));
+              console.log('PER-COMPONENT owner and SDDL:');
+              for (const c of chain) {
+                const e = info.byPath.get(path.resolve(c).toLowerCase());
+                console.log('   ', c); console.log('        owner', e && e.ownerSid); console.log('        sddl ', e && e.sddl);
+              }
+            }
+          "
