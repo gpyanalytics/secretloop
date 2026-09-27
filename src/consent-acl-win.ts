@@ -54,7 +54,15 @@
  *     ACCOUNT can perform it, because the rights that allow it are what these rules deny.
  */
 
-import { spawnSync } from "child_process";
+import { spawnSync, type SpawnSyncReturns } from "child_process";
+import {
+  BudgetExceededError,
+  checkBudgetDeadline,
+  remainingBytes,
+  remainingMs,
+  spendHelperBytes,
+  spendHelperCall,
+} from "./consent-budget";
 import { existsSync } from "fs";
 import * as nodePath from "path";
 
@@ -95,6 +103,14 @@ const SID_NETWORK_SERVICE = "S-1-5-20";
 const HELPER_TIMEOUT_MS = 60_000;
 const HELPER_MAX_OUTPUT = 1 << 20;
 const ENFORCE_TIMEOUT_MS = 30_000;
+/**
+ * The two small helpers had no output cap at all and so ran on node's 1 MiB default. whoami
+ * prints one CSV line and icacls prints a short summary, so these are generous by orders of
+ * magnitude and exist to make the bound explicit rather than inherited. Each is still further
+ * reduced to whatever the operation has left.
+ */
+const SID_MAX_OUTPUT = 64 * 1024;
+const ENFORCE_MAX_OUTPUT = 64 * 1024;
 
 /**
  * SDDL string-SID aliases, as the .NET SDDL form emits them. Closed on purpose: an alias
@@ -344,27 +360,58 @@ export function decideAncestorDacl(
  * and no execution-policy change is requested or needed. It reports exception TYPE names
  * only, never a message, so no operating-system text can reach a caller.
  */
+/**
+ * EVERY CMDLET HERE IS MODULE-QUALIFIED, and that is a performance requirement, not a style
+ * choice.
+ *
+ * An unqualified command name has to be RESOLVED before PowerShell can dispatch it, and on some
+ * machines that resolution is extraordinarily expensive. Measured on a GitHub `windows-11-arm`
+ * runner, whose `PSModulePath` lists the Azure PowerShell module set ahead of the system module
+ * directory:
+ *
+ *     powershell.exe -NoProfile -NonInteractive -Command "exit 0"            ~820 ms
+ *     ... -Command "Get-Item -LiteralPath 'C:\' -Force"                   ~41,800 ms
+ *     ... -Command "Microsoft.PowerShell.Management\Get-Item ... "            ~900 ms
+ *     ... -Command "ConvertTo-Json -InputObject 1"                        ~43,700 ms
+ *     ... -Command "Microsoft.PowerShell.Utility\ConvertTo-Json ... "        ~950 ms
+ *
+ * Resolving the .NET types this script uses costs nothing (~785 ms, i.e. the same as doing
+ * nothing), so the cost was never the security work: it is paid when a COMMAND NAME is resolved,
+ * and naming the module removes it. What PowerShell does internally during that resolution was
+ * not traced, so no claim is made about it beyond the timings above. The whole helper
+ * went from 22,361 ms to 341 ms on an empty path list, 22,416 to 442 ms on four real paths and
+ * 22,456 to 375 ms on a refusal, with BYTE-IDENTICAL output and the same exit status in each
+ * case.
+ *
+ * What this does NOT do: a qualified name still resolves through `PSModulePath`, so it does not
+ * by itself guarantee the module is the built-in one. The first entry on that path is inside the
+ * user's own profile and is user-writable — which is equally true of the unqualified form this
+ * replaces, and sits inside the documented trust boundary (the OS user account). Constraining
+ * `PSModulePath` is a separate hardening with its own evidence; it is not done here.
+ *
+ * If a cmdlet is ever added below, qualify it. `tests/consent-acl-win.test.ts` fails otherwise.
+ */
 const HELPER_SOURCE = [
   "$ErrorActionPreference='Stop'",
   "$ProgressPreference='SilentlyContinue'",
   "$raw=[Console]::In.ReadToEnd()",
-  "$paths=@($raw -split \"`r?`n\" | Where-Object { $_.Length -gt 0 })",
-  "$out=New-Object System.Collections.ArrayList",
+  "$paths=@($raw -split \"`r?`n\" | Microsoft.PowerShell.Core\\Where-Object { $_.Length -gt 0 })",
+  "$out=Microsoft.PowerShell.Utility\\New-Object System.Collections.ArrayList",
   "foreach($p in $paths){",
   "  $o=[ordered]@{path=[string]$p;ok=$false;exists=$false}",
   "  try{",
-  "    $item=Get-Item -LiteralPath $p -Force",
+  "    $item=Microsoft.PowerShell.Management\\Get-Item -LiteralPath $p -Force",
   "    $o.exists=$true",
   "    $o.isDirectory=[bool]$item.PSIsContainer",
   "    $o.isReparsePoint=[bool](($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)",
-  "    if($item.PSIsContainer){$sec=New-Object System.Security.AccessControl.DirectorySecurity($p,'Access,Owner')}",
-  "    else{$sec=New-Object System.Security.AccessControl.FileSecurity($p,'Access,Owner')}",
+  "    if($item.PSIsContainer){$sec=Microsoft.PowerShell.Utility\\New-Object System.Security.AccessControl.DirectorySecurity($p,'Access,Owner')}",
+  "    else{$sec=Microsoft.PowerShell.Utility\\New-Object System.Security.AccessControl.FileSecurity($p,'Access,Owner')}",
   "    $o.ownerSid=$sec.GetOwner([System.Security.Principal.SecurityIdentifier]).Value",
     // The SDDL form is kept because it is the only place a NULL access list is distinguishable
     // from an empty one. The DECISION uses the structured rules below, whose identities are
     // already security identifiers, so no alias table and no account name is ever involved.
   "    $o.sddl=$sec.GetSecurityDescriptorSddlForm([System.Security.AccessControl.AccessControlSections]::Access)",
-  "    $rules=New-Object System.Collections.ArrayList",
+  "    $rules=Microsoft.PowerShell.Utility\\New-Object System.Collections.ArrayList",
   "    foreach($r in $sec.GetAccessRules($true,$true,[System.Security.Principal.SecurityIdentifier])){",
   "      [void]$rules.Add([ordered]@{sid=[string]$r.IdentityReference.Value;allow=($r.AccessControlType -eq 'Allow');rights=[int]$r.FileSystemRights;inheritOnly=(($r.PropagationFlags -band [System.Security.AccessControl.PropagationFlags]::InheritOnly) -ne 0)})",
   "    }",
@@ -372,12 +419,12 @@ const HELPER_SOURCE = [
   "    $o.ok=$true",
     // The catch must still say whether the object is THERE. Leaving `exists` false would make a
     // failed inspection indistinguishable from an absent object, and an absent target is skipped.
-  "  }catch{ $o.errorType=$_.Exception.GetType().FullName; try{ $o.exists=[bool](Test-Path -LiteralPath $p) }catch{ $o.exists=$true } }",
-  "  [void]$out.Add((New-Object psobject -Property $o))",
+  "  }catch{ $o.errorType=$_.Exception.GetType().FullName; try{ $o.exists=[bool](Microsoft.PowerShell.Management\\Test-Path -LiteralPath $p) }catch{ $o.exists=$true } }",
+  "  [void]$out.Add((Microsoft.PowerShell.Utility\\New-Object psobject -Property $o))",
   "}",
   // One compact object per line: PowerShell 5.1 unwraps a single-element array, so an array
   // would change shape with the number of paths.
-  "foreach($r in $out){ ConvertTo-Json -InputObject $r -Depth 4 -Compress }",
+  "foreach($r in $out){ Microsoft.PowerShell.Utility\\ConvertTo-Json -InputObject $r -Depth 4 -Compress }",
 ].join("\n");
 
 export const HELPER_SCRIPT_FOR_TESTS = HELPER_SOURCE;
@@ -520,6 +567,105 @@ export function classifyHelperResult(result: HelperResult, paths: string[]): Ins
   return parseHelperOutput(stdout, paths);
 }
 
+/**
+ * Every Windows consent helper goes through here, so the operation allowance covers all three of
+ * them -- the PowerShell inspection, the SID lookup and the ACL enforcement -- rather than the
+ * inspection alone. Before this, none of them charged anything: measured in the packaged server,
+ * three PowerShell calls ran with `remainingCalls=512` untouched afterwards, and each child was
+ * handed a fixed 60,000 ms timeout while its operation had about 18,800 ms of its 20,000 ms
+ * allowance left. A single wedged child could therefore outlive the whole operation by forty
+ * seconds with nothing able to interrupt it.
+ *
+ * WHAT THE CHILD TIMEOUT IS AND IS NOT. It bounds the child process. It is not a wall-clock
+ * guarantee for the call as a whole: the synchronous filesystem work around the spawn -- reading
+ * a directory, stat-ing a chain -- is not interruptible by it, and the deadline is cooperative,
+ * observed at checkpoints rather than enforced by a timer. Bounding the child closes the largest
+ * unbounded gap on this path; it does not make the path hard-real-time.
+ *
+ * WHAT `maxBuffer` ACTUALLY DOES. Measured, and re-measured by
+ * `tests/consent-win-budget.test.ts` on every platform and Node version CI runs, so these are
+ * not claims about one machine:
+ *   - it bounds stdout and stderr TOGETHER, not each separately. 150 + 150 bytes passes a
+ *     300-byte cap; 200 + 200 does not, and 301 on stdout alone does not. That is why the
+ *     charge below counts both streams.
+ *   - it does NOT truncate what you receive, and the excess is not small. A child that keeps
+ *     writing is killed with ENOBUFS, but the parent still returns everything already read:
+ *     measured, up to ONE 64 KiB pipe chunk past the cap. A 100-byte cap returned 65,536 bytes;
+ *     a 1 MiB cap returned 1,114,112.
+ *
+ *     SO BE PRECISE ABOUT WHAT IS BOUNDED BY WHAT. The ACCOUNTING is exact: what arrived is
+ *     charged, and the operation refuses once the total no longer fits. The MEMORY is not
+ *     bounded by the allowance at all -- it is bounded per call, by `maxBuffer` plus one pipe
+ *     chunk. With ten bytes of allowance left a child may still hand back 64 KiB before
+ *     anything can refuse it. Charging afterwards keeps the books; it cannot un-allocate what
+ *     has already been read. The worst case per call is the per-call ceiling above plus
+ *     ~64 KiB, and the aggregate allowance is a BUDGET, not a memory limit.
+ *   - `maxBuffer: 0` means UNLIMITED, and `timeout: 0` means NO TIMEOUT. Neither is ever passed:
+ *     `remainingMs` and `remainingBytes` throw rather than return zero, so an exhausted
+ *     allowance refuses before the spawn instead of silently removing the bound.
+ */
+/**
+ * The spawn seam, the same idea as the macOS helper's `setLsRunnerForTests`. Without it the
+ * accounting could only be exercised on Windows, and a cap that is only tested on the platform
+ * it guards is a cap nobody checks on a pull request. The seam replaces the CHILD, never the
+ * accounting: everything charged, checked and bounded below happens either side of it.
+ */
+export interface HelperSpawn {
+  exe: string;
+  args: string[];
+  timeout: number;
+  maxBuffer: number;
+  input?: string;
+}
+export type HelperRunner = (call: HelperSpawn) => SpawnSyncReturns<string>;
+let helperRunner: HelperRunner | undefined;
+export function setHelperRunnerForTests(fn: HelperRunner | undefined): void {
+  helperRunner = fn;
+}
+
+function runHelper(
+  exe: string,
+  args: string[],
+  perCallTimeoutMs: number,
+  perCallMaxOutput: number,
+  input?: string
+): { started: false } | { started: true; result: SpawnSyncReturns<string> } {
+  // Charged BEFORE the child starts, and charged for the ATTEMPT, so a helper that fails to
+  // start still costs its invocation. A cap that only charged successes would not be a cap.
+  spendHelperCall();
+  // Read outside the try on purpose: see the catch below.
+  const timeout = remainingMs(perCallTimeoutMs);
+  const maxBuffer = remainingBytes(perCallMaxOutput);
+  let result;
+  try {
+    result = helperRunner
+      ? helperRunner({ exe, args, timeout, maxBuffer, ...(input === undefined ? {} : { input }) })
+      : spawnSync(exe, args, {
+          ...(input === undefined ? {} : { input }),
+          encoding: "utf8" as const,
+          timeout,
+          maxBuffer,
+          windowsHide: true,
+        });
+  } catch (err) {
+    // spawnSync itself can throw, and a catch-all here would turn a budget refusal into an
+    // "ACL tooling unavailable" answer -- sending someone to look at their Windows install
+    // because an allowance ran out. The same trap the macOS helper documents.
+    if (err instanceof BudgetExceededError) throw err;
+    return { started: false };
+  }
+  // Charged on SUCCESS AND FAILURE. A helper that times out or exits non-zero has still made
+  // the machine do the work and has still filled a buffer; not charging it would let a
+  // failing helper run free. stderr counts because `maxBuffer` counts it.
+  spendHelperBytes(
+    Buffer.byteLength(result.stdout ?? "", "utf8") + Buffer.byteLength(result.stderr ?? "", "utf8")
+  );
+  // The post-helper boundary: the time went somewhere, and the next thing this path does may be
+  // more filesystem work with no checkpoint of its own.
+  checkBudgetDeadline();
+  return { started: true, result };
+}
+
 /** Owner, DACL and reparse state for every path, in one bounded call. */
 export function inspectPaths(paths: string[]): InspectResult {
   if (paths.length === 0) return { ok: true, byPath: new Map() };
@@ -527,22 +673,15 @@ export function inspectPaths(paths: string[]): InspectResult {
   if (paths.some((p) => /[\r\n]/.test(p))) return { ok: false, problem: "acl-inspection-failed" };
   const exe = tools().powershell;
   if (!existsSync(exe)) return { ok: false, problem: "acl-tooling-unavailable" };
-  let result;
-  try {
-    result = spawnSync(
-      exe,
-      ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(HELPER_SOURCE, "utf16le").toString("base64")],
-      {
-        input: paths.join("\r\n") + "\r\n",
-        encoding: "utf8",
-        timeout: HELPER_TIMEOUT_MS,
-        maxBuffer: HELPER_MAX_OUTPUT,
-        windowsHide: true,
-      }
-    );
-  } catch {
-    return { ok: false, problem: "acl-tooling-unavailable" };
-  }
+  const run = runHelper(
+    exe,
+    ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(HELPER_SOURCE, "utf16le").toString("base64")],
+    HELPER_TIMEOUT_MS,
+    HELPER_MAX_OUTPUT,
+    paths.join("\r\n") + "\r\n"
+  );
+  if (!run.started) return { ok: false, problem: "acl-tooling-unavailable" };
+  const result = run.result;
   return classifyHelperResult(
     {
       error: result.error ? { code: (result.error as NodeJS.ErrnoException).code } : null,
@@ -559,11 +698,13 @@ export function currentUserSid(): string | null {
   const systemRoot = process.env.SystemRoot || "C:\\Windows";
   const whoami = path.join(systemRoot, "System32", "whoami.exe");
   if (!existsSync(whoami)) return null;
-  const result = spawnSync(whoami, ["/user", "/fo", "csv", "/nh"], {
-    encoding: "utf8",
-    timeout: ENFORCE_TIMEOUT_MS,
-    windowsHide: true,
-  });
+  // Charged and bounded like every other helper. A budget refusal raised in here is NOT an
+  // unreadable identity: it throws past this function rather than returning null, so the caller
+  // reports an exhausted operation instead of "SecretLoop could not determine which Windows
+  // account it is running as".
+  const run = runHelper(whoami, ["/user", "/fo", "csv", "/nh"], ENFORCE_TIMEOUT_MS, SID_MAX_OUTPUT);
+  if (!run.started) return null;
+  const result = run.result;
   if (result.error || result.status !== 0) return null;
   const match = /"(S-1-[0-9-]+)"/.exec(result.stdout ?? "");
   return match ? match[1] : null;
@@ -577,7 +718,7 @@ export function currentUserSid(): string | null {
 export function protectDirectory(dir: string, userSid: string): Decision {
   const exe = tools().icacls;
   if (!existsSync(exe)) return { ok: false, problem: "acl-tooling-unavailable" };
-  const result = spawnSync(
+  const run = runHelper(
     exe,
     [
       dir,
@@ -588,8 +729,11 @@ export function protectDirectory(dir: string, userSid: string): Decision {
       `*${SID_ADMINISTRATORS}:(OI)(CI)F`,
       "/q",
     ],
-    { encoding: "utf8", timeout: ENFORCE_TIMEOUT_MS, windowsHide: true }
+    ENFORCE_TIMEOUT_MS,
+    ENFORCE_MAX_OUTPUT
   );
+  if (!run.started) return { ok: false, problem: "acl-enforcement-failed" };
+  const result = run.result;
   if (result.error || result.status !== 0) return { ok: false, problem: "acl-enforcement-failed" };
   // A partially applied run reports its failures on standard output; any is a failure.
   const failed = /Failed processing (\d+) files/.exec(result.stdout ?? "");

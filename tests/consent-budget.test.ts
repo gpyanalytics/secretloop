@@ -307,7 +307,10 @@ test("a budget refusal before authorization transmits nothing and mints nothing"
     assert.strictEqual(wire, 0, "nothing may be transmitted");
     assert.strictEqual(readdirSync(f.pending).length, before, "and no record may be minted");
     if (!("payload" in out)) {
-      assert.match(out.error, /more work than SecretLoop allows/, out.error);
+      // Every exhaustion category says "one request" and "no consent record was written";
+      // the rest of the sentence now names WHICH allowance ran out, so it is not pinned here.
+      assert.match(out.error, /one request/, out.error);
+      assert.match(out.error, /no consent record was written/, out.error);
       assert.ok(!/\/(Users|tmp|private)\//.test(out.error), "no path may be echoed");
     }
   } finally {
@@ -483,7 +486,10 @@ test("the refusal names size and time, and asks for no permission change", () =>
   assert.doesNotMatch(sentence, /\/tmp|\/Users|[0-9a-f]{32}/, "no path or record id");
   assert.doesNotMatch(sentence, /ENOENT|EACCES|errno/, "no OS message");
   const guidance = consent.consentStoreGuidance("operation-too-large");
-  assert.match(guidance, /about size, not permissions/, guidance);
+  // With no category the guidance names no single cause, because naming the wrong one is worse
+  // than naming none. It still has to say this is not a permissions problem.
+  assert.match(guidance, /not permissions/, guidance);
+  assert.match(guidance, /size of the job or the time it took/, guidance);
   assert.doesNotMatch(guidance, /chmod|0700|access-control|ACL/i,
     "an ACL repair must not be suggested for a size problem");
 });

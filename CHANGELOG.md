@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+### Performance
+
+- **The Windows consent check is about fifty times faster.** Every cmdlet in the PowerShell
+  helper that reads owners, access lists and reparse state is now written module-qualified
+  (`Microsoft.PowerShell.Management\Get-Item` rather than `Get-Item`). An unqualified command
+  name must be resolved before PowerShell can dispatch it, and on a machine whose
+  `PSModulePath` lists a large module set that resolution dominates everything else. The cost
+  and its removal are measured; PowerShell's internal resolution was not traced, and nothing
+  here claims to describe it. Measured on a GitHub `windows-11-arm` runner: the whole helper went from
+  22,361 ms to **341 ms** on an empty path list, 22,416 ms to **442 ms** on four real paths, and
+  22,456 ms to **375 ms** on a refusal — with **byte-identical output and the same exit status**
+  in every case.
+- **No check was removed or relaxed to achieve it.** The same cmdlets run, from the same
+  modules, with the same arguments, in the same order. Owner, access-rule, reparse-point,
+  ancestor and record inspection are unchanged, nothing is cached, no result is reused between
+  operations, and every refusal still refuses for the same reason in the same fixed words.
+- **What it does not change.** A qualified name still resolves through `PSModulePath`, so it does
+  not by itself guarantee the module is the built-in one — equally true of the unqualified form
+  it replaces. The consent path is still synchronous: while it runs, an MCP server serves no
+  other request. And it does **not** address the separate defect that the Windows helpers do not
+  participate in the operation budget.
+
 ### Validation
 
 - **The Windows suite now runs natively on ARM64, on a Windows 11 client
@@ -19,11 +41,12 @@
   The suite passes on both Node versions and the **two-account job passes** —
   the product running as an ordinary local account against a second ordinary
   account, with the elevated builder being neither. The **packaged npm smoke
-  does not pass** on that runner: its MCP round trip allows 30 s per request and
-  `secretloop_verify` returns nothing in that time, while the same call takes
-  2.1 s on x64 and the equivalent library-level call takes 5.8 s in the same
-  ARM64 job. The cause is unresolved and is reported, not worked around; the
-  smoke's threshold was not raised. The VSIX smoke passes.
+  initially failed** on that runner: its MCP round trip allows 30 s per request
+  and `secretloop_verify` returned nothing in that time, while the same call
+  took 2.1 s on x64. The cause was the consent helper's cmdlet resolution,
+  fixed under *Performance* above; with the module-qualified helper the same
+  smoke passed on the ARM64 runner. The smoke's threshold was not raised. The
+  VSIX smoke passes.
 - **What that does not establish.** One hosted image is not universal client
   support. The ordinary suite jobs run **elevated**, so only the two-account
   jobs are evidence about ordinary-account behaviour, and the existing x64

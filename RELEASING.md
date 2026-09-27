@@ -166,6 +166,36 @@ stronger ones.
 - [ ] **Push `main` before `npm publish`.** A version on npm whose source is
       not yet public undercuts `SECURITY.md`'s own invitation to check an
       installed version against the public git tag.
+- [ ] **Native Windows consent green on the exact release candidate.**
+      `test-windows-two-user` and `packaging-windows` both green on the
+      release PR **and** on the push-to-`main` commit it produced. If either
+      is red, missing, or still running, **pause publication and investigate**
+      — do not rerun solely to obtain green.
+
+      This is a **manual release requirement, not a GitHub required status
+      check.** `main` requires only `self-scan`, `packaging`, `test (18)` and
+      `test (20)`, so nothing stops a merge or a publish on your behalf; this
+      checklist is the only thing that does.
+- [ ] **The clean-room runtime can run the publish tools.** In the clean-room
+      checkout: `node -v` reports **22 or newer**, and
+      `./node_modules/.bin/ovsx --version` prints the version `package-lock.json`
+      pins. If either fails, **stop before publishing anything.**
+
+      `ovsx` 1.2.0 raised its floor to Node `>=22.0.0`, and this repository pins
+      no Node version — no `.nvmrc`, no `.node-version`, no `volta` — so the
+      clean room runs whatever `node` happens to resolve to. Run the installed
+      binary directly, **not** `npx ovsx`, which may fetch a copy other than the
+      one `npm ci` put in `node_modules`.
+
+      Why here: §7 publishes to npm **before** Open VSX, so a runtime too old
+      for `ovsx` surfaces after the npm release is already public and
+      irreversible.
+
+      This checks that the tool **loads on this runtime**. It does not use
+      `OVSX_PAT`, does not contact Open VSX, and does not show that publishing
+      will succeed. `package.json`'s consumer-facing `engines.node` stays
+      `>=18.0.0` — this is about the release machine, not about who can install
+      SecretLoop.
 - [ ] `npm publish` from the clean-room checkout — completes 2FA in a browser
       and cannot be scripted — then `npm view secretloop version` confirms it.
 - [ ] **Open VSX:** publish with a fresh `OVSX_PAT`.

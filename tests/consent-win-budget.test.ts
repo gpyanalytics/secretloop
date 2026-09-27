@@ -1,0 +1,374 @@
+import { test, suite, finish, assert } from "./harness";
+import * as budget from "../src/consent-budget";
+import * as acl from "../src/consent-acl-win";
+import { spawnSync, type SpawnSyncReturns } from "child_process";
+
+/**
+ * THE WINDOWS HELPERS AGAINST THE OPERATION ALLOWANCE.
+ *
+ * Every one of these failed against main, where `src/consent-acl-win.ts` imported nothing from
+ * the budget: `spendHelperCall`, `spendHelperBytes`, `remainingMs` and `remainingBytes` each
+ * appeared zero times in it. Three PowerShell inspections ran with `remainingCalls=512` untouched
+ * afterwards, and each child was handed a fixed 60,000 ms timeout while its operation had about
+ * 18,800 ms left -- measured in the packaged server, not inferred.
+ *
+ * WHAT THESE CASES ARE. They drive the real accounting through a SPAWN SEAM that replaces the
+ * child process, so they run on every platform and are exact. They do not measure any real
+ * PowerShell, and they are not evidence that a real helper takes any particular time. The
+ * DEADLINE cases additionally use a CONTROLLED CLOCK and are SIMULATED in the same sense the
+ * existing budget suite means it: they show the allowance refuses when the clock says the time
+ * has gone, not that a real operation ever takes that long. Native behaviour is measured
+ * separately on Windows runners and recorded there.
+ */
+
+suite("windows consent helpers charge against the operation allowance");
+
+/**
+ * `inspectPaths` and `protectDirectory` both resolve their executables through the tools seam,
+ * so they can be driven anywhere. `currentUserSid` resolves whoami.exe from SystemRoot directly
+ * and returns before charging on a non-Windows host; it takes the same code path as these two
+ * and is covered by the native Windows evidence rather than by widening a seam for a test.
+ */
+const SOME_PATH = "C:\\Users\\someone\\.secretloop";
+const SOME_SID = "S-1-5-21-1-1-1-1003";
+
+/** A child that never ran: what the seam returns when a test does not care about the output. */
+function reply(stdout = "", stderr = "", status: number | null = 0): SpawnSyncReturns<string> {
+  return {
+    pid: 0, output: [null, stdout, stderr], stdout, stderr,
+    status, signal: null, error: undefined,
+  } as SpawnSyncReturns<string>;
+}
+
+/** Records what each spawn was ASKED for, which is where the propagated bounds show up. */
+function recorder(respond: () => SpawnSyncReturns<string> = () => reply()) {
+  const calls: acl.HelperSpawn[] = [];
+  acl.setHelperRunnerForTests((c) => { calls.push(c); return respond(); });
+  return calls;
+}
+
+function reset(): void {
+  acl.setHelperRunnerForTests(undefined);
+  acl.setWindowsAclToolsForTests(undefined);
+  budget.setClockForTests(undefined);
+}
+
+/** whoami and icacls are resolved through the tools override so no real path is touched. */
+function fakeTools(): void {
+  acl.setWindowsAclToolsForTests({
+    powershell: __filename, icacls: __filename, whoami: __filename,
+  } as never);
+}
+
+// ---------------------------------------------------------------------------------------------
+// invocation counting
+// ---------------------------------------------------------------------------------------------
+
+test("a Windows helper invocation is charged, so the inspection cap is reachable at all", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  try {
+    budget.withBudget(() => {
+      acl.inspectPaths([SOME_PATH]);
+      const spent = budget.currentSpend();
+      assert.strictEqual(spent?.helperCalls, 1, "the inspection charged nothing");
+    });
+  } finally { reset(); }
+  assert.strictEqual(calls.length, 1);
+});
+
+test("helper-count exhaustion refuses, and refuses BEFORE the child is spawned", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  let refused: budget.BudgetExceededError | undefined;
+  try {
+    budget.withBudget(() => {
+      for (let i = 0; i < budget.LIMITS.helperCalls; i++) budget.spendHelperCall();
+      try { acl.inspectPaths([SOME_PATH]); } catch (e) { refused = e as budget.BudgetExceededError; }
+    });
+  } finally { reset(); }
+  assert.strictEqual(refused?.name, "BudgetExceededError");
+  assert.strictEqual(refused?.what, "inspections");
+  assert.strictEqual(calls.length, 0, "the allowance was exhausted and a child still started");
+});
+
+test("a helper attempt that fails to start is still charged", () => {
+  reset(); fakeTools();
+  acl.setHelperRunnerForTests(() => { throw new Error("spawn EPERM"); });
+  try {
+    budget.withBudget(() => {
+      const verdict = acl.inspectPaths([SOME_PATH]);
+      assert.strictEqual(verdict.ok, false, "a child that could not start is not a verdict");
+      assert.strictEqual(budget.currentSpend()?.helperCalls, 1, "a failed attempt cost nothing");
+    });
+  } finally { reset(); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// remaining time
+// ---------------------------------------------------------------------------------------------
+
+test("the child is given what is LEFT of the operation, not a fresh fixed timeout", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  try {
+    const t0 = 1_000_000;
+    let reads = 0;
+    // SIMULATED CLOCK: the first read starts the operation, every later read is 19.5 s on.
+    budget.setClockForTests(() => (reads++ === 0 ? t0 : t0 + 19_500));
+    budget.withBudget(() => acl.inspectPaths([SOME_PATH]));
+  } finally { reset(); }
+  assert.strictEqual(calls.length, 1);
+  assert.strictEqual(calls[0].timeout, 500, "the child outlived the operation's remaining time");
+});
+
+test("the per-helper ceiling still applies when the operation has more time than it", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  try { budget.withBudget(() => acl.inspectPaths([SOME_PATH])); } finally { reset(); }
+  // 60,000 is HELPER_TIMEOUT_MS; the allowance is 20,000, so the smaller one binds. The point
+  // is that a bound is chosen rather than a fixed ceiling being passed through.
+  assert.ok(calls[0].timeout <= 20_000, `timeout ${calls[0].timeout} exceeds the whole allowance`);
+  assert.ok(calls[0].timeout > 0, "a zero timeout would mean NO timeout at all");
+});
+
+test("an expired deadline refuses before the spawn and never passes timeout 0", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  let refused: budget.BudgetExceededError | undefined;
+  try {
+    const t0 = 1_000_000;
+    let reads = 0;
+    budget.setClockForTests(() => (reads++ === 0 ? t0 : t0 + budget.LIMITS.deadlineMs + 1));
+    budget.withBudget(() => {
+      try { acl.inspectPaths([SOME_PATH]); } catch (e) { refused = e as budget.BudgetExceededError; }
+    });
+  } finally { reset(); }
+  assert.strictEqual(refused?.name, "BudgetExceededError");
+  assert.strictEqual(refused?.what, "time");
+  assert.strictEqual(calls.length, 0, "a child started after the deadline had passed");
+});
+
+test("expiry DURING the helper is caught at the post-helper boundary", () => {
+  reset(); fakeTools();
+  let refused: budget.BudgetExceededError | undefined;
+  try {
+    const t0 = 1_000_000;
+    let reads = 0;
+    // Reads: 0 starts the operation, 1 is spendHelperCall's own check, 2 is remainingMs before
+    // the spawn -- all inside the allowance. From read 3 the time is gone, which is the
+    // post-helper check.
+    budget.setClockForTests(() => (reads++ < 3 ? t0 : t0 + budget.LIMITS.deadlineMs + 1));
+    acl.setHelperRunnerForTests(() => reply('{}'));
+    budget.withBudget(() => {
+      try { acl.inspectPaths([SOME_PATH]); } catch (e) { refused = e as budget.BudgetExceededError; }
+    });
+  } finally { reset(); }
+  assert.strictEqual(refused?.what, "time", "the helper ran the clock out and nothing noticed");
+});
+
+test("a child killed by a 1 ms remainder is reclassified as exhaustion, not an ACL failure", () => {
+  // Found by attacking the change rather than confirming it. `remainingMs` floors at 1 rather
+  // than throwing, so with 1 ms left a child IS spawned, is killed almost at once, and comes back
+  // as ETIMEDOUT -- which classifies as `acl-inspection-failed`. Without the post-helper deadline
+  // check a user would be sent to look at their access control lists because an allowance ran out.
+  reset(); fakeTools();
+  const D = budget.LIMITS.deadlineMs;
+  const t0 = 1_000_000;
+  let reads = 0;
+  let handed = -1;
+  let refused: (Error & { what?: string }) | undefined;
+  let verdict: unknown;
+  try {
+    // read 1 is startedAt; reads 2-3 leave exactly 1 ms; from read 4 the time is gone.
+    budget.setClockForTests(() => {
+      reads += 1;
+      return reads === 1 ? t0 : reads <= 3 ? t0 + D - 1 : t0 + D + 5;
+    });
+    acl.setHelperRunnerForTests((c) => {
+      handed = c.timeout;
+      return {
+        pid: 0, output: [], stdout: "", stderr: "", status: null, signal: "SIGTERM",
+        error: Object.assign(new Error("timeout"), { code: "ETIMEDOUT" }),
+      } as unknown as SpawnSyncReturns<string>;
+    });
+    budget.withBudget(() => {
+      try { verdict = acl.inspectPaths([SOME_PATH]); }
+      catch (e) { refused = e as Error & { what?: string }; }
+    });
+  } finally { reset(); }
+  assert.strictEqual(handed, 1, "the remainder was not passed through to the child");
+  assert.notStrictEqual(handed, 0, "a zero timeout means NO timeout at all");
+  assert.strictEqual(refused?.name, "BudgetExceededError", `got a verdict instead: ${JSON.stringify(verdict)}`);
+  assert.strictEqual(refused?.what, "time");
+});
+
+// ---------------------------------------------------------------------------------------------
+// output
+// ---------------------------------------------------------------------------------------------
+
+test("captured output is charged, and stderr counts because maxBuffer counts it", () => {
+  reset(); fakeTools();
+  acl.setHelperRunnerForTests(() => reply("x".repeat(100), "y".repeat(50)));
+  try {
+    budget.withBudget(() => {
+      acl.inspectPaths([SOME_PATH]);
+      assert.strictEqual(budget.currentSpend()?.helperBytes, 150, "stdout+stderr not charged");
+    });
+  } finally { reset(); }
+});
+
+test("output from a FAILED helper is charged too", () => {
+  reset(); fakeTools();
+  acl.setHelperRunnerForTests(() => reply("noise".repeat(10), "", 1));
+  try {
+    budget.withBudget(() => {
+      assert.strictEqual(acl.inspectPaths([SOME_PATH]).ok, false, "a non-zero exit is not a verdict");
+      assert.strictEqual(budget.currentSpend()?.helperBytes, 50, "a failing helper ran free");
+    });
+  } finally { reset(); }
+});
+
+test("the child's buffer is bounded by what the operation has left, not only its own cap", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  try {
+    budget.withBudget(() => {
+      budget.spendHelperBytes(budget.LIMITS.helperBytes - 1024);
+      acl.inspectPaths([SOME_PATH]);
+    });
+  } finally { reset(); }
+  assert.strictEqual(calls[0].maxBuffer, 1024, "the child could buffer past the whole allowance");
+  assert.ok(calls[0].maxBuffer > 0, "a zero maxBuffer would mean UNLIMITED");
+});
+
+test("an exhausted output allowance refuses before the spawn", () => {
+  reset(); fakeTools();
+  const calls = recorder(() => reply('{}'));
+  let refused: budget.BudgetExceededError | undefined;
+  try {
+    budget.withBudget(() => {
+      budget.spendHelperBytes(budget.LIMITS.helperBytes);
+      try { acl.inspectPaths([SOME_PATH]); } catch (e) { refused = e as budget.BudgetExceededError; }
+    });
+  } finally { reset(); }
+  assert.strictEqual(refused?.what, "output");
+  assert.strictEqual(calls.length, 0);
+});
+
+// ---------------------------------------------------------------------------------------------
+// classification through the catch paths
+// ---------------------------------------------------------------------------------------------
+
+test("a budget refusal inside inspectPaths is NOT relabelled as an ACL tooling problem", () => {
+  reset(); fakeTools();
+  let refused: unknown;
+  try {
+    budget.withBudget(() => {
+      for (let i = 0; i < budget.LIMITS.helperCalls; i++) budget.spendHelperCall();
+      try { acl.inspectPaths([SOME_PATH]); } catch (e) { refused = e; }
+    });
+  } finally { reset(); }
+  assert.ok(refused instanceof budget.BudgetExceededError, "exhaustion became an ACL verdict");
+  assert.strictEqual((refused as budget.BudgetExceededError).what, "inspections");
+});
+
+test("a budget refusal inside protectDirectory is NOT relabelled as enforcement failure", () => {
+  reset(); fakeTools();
+  let refused: unknown;
+  try {
+    budget.withBudget(() => {
+      budget.spendHelperBytes(budget.LIMITS.helperBytes);
+      try { acl.protectDirectory(SOME_PATH, SOME_SID); } catch (e) { refused = e; }
+    });
+  } finally { reset(); }
+  assert.ok(refused instanceof budget.BudgetExceededError, "exhaustion became an ACL verdict");
+  assert.strictEqual((refused as budget.BudgetExceededError).what, "output");
+});
+
+// ---------------------------------------------------------------------------------------------
+// the shape of the allowance itself
+// ---------------------------------------------------------------------------------------------
+
+test("nested consent calls share ONE allowance rather than each getting a fresh one", () => {
+  reset(); fakeTools();
+  recorder(() => reply('{}'));
+  try {
+    budget.withBudget(() => {
+      acl.inspectPaths([SOME_PATH]);
+      budget.withBudget(() => acl.inspectPaths([SOME_PATH]));
+      assert.strictEqual(budget.currentSpend()?.helperCalls, 2, "the nested call reset the books");
+    });
+  } finally { reset(); }
+});
+
+test("the allowance is released after success, and after an exception", () => {
+  reset(); fakeTools();
+  recorder(() => reply('{}'));
+  try {
+    budget.withBudget(() => acl.inspectPaths([SOME_PATH]));
+    assert.strictEqual(budget.currentSpend(), undefined, "state survived a successful operation");
+    acl.setHelperRunnerForTests(() => { throw new budget.BudgetExceededError("time"); });
+    try { budget.withBudget(() => acl.inspectPaths([SOME_PATH])); } catch { /* expected */ }
+    assert.strictEqual(budget.currentSpend(), undefined, "state survived an exception");
+  } finally { reset(); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// the node semantics this correction RELIES on, re-measured wherever CI runs
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * runHelper's bounds are only as good as spawnSync's actual behaviour, and that behaviour was
+ * originally measured on one machine and one Node version. Asserting it here turns "measured
+ * once locally" into "checked on every platform and Node version CI runs" -- 18, 20 and 22 on
+ * x64, 20 and 22 on arm64, plus macOS and Linux. If a future runtime changes any of it, this
+ * fails instead of the bound quietly becoming wrong.
+ */
+test("spawnSync bounds stdout and stderr TOGETHER, which is why both are charged", () => {
+  const w = (o: number, e: number, cap: number) =>
+    spawnSync(process.execPath,
+      ["-e", `process.stdout.write("a".repeat(${o}));process.stderr.write("b".repeat(${e}))`],
+      { encoding: "utf8", maxBuffer: cap });
+  assert.strictEqual(w(200, 0, 300).error, undefined, "200 alone should fit a 300-byte cap");
+  assert.strictEqual(w(150, 150, 300).error, undefined, "150+150 should exactly fit");
+  assert.strictEqual((w(200, 200, 300).error as NodeJS.ErrnoException | undefined)?.code, "ENOBUFS",
+    "200+200 exceeded a 300-byte cap and was not refused: the cap may now be per-stream, and " +
+    "charging both streams against one allowance would then be wrong");
+});
+
+test("spawnSync does NOT truncate: the parent can hold a pipe chunk past the cap", () => {
+  // The claim this guards is the one worth getting right: the allowance is a BUDGET, not a
+  // memory limit. If a future runtime starts truncating, the comment in consent-acl-win.ts
+  // becomes pessimistic rather than wrong -- but if the overshoot GROWS, the worst case per
+  // call grows with it, and that should not pass silently.
+  const r = spawnSync(process.execPath, ["-e", 'process.stdout.write("a".repeat(1048576))'],
+    { encoding: "utf8", maxBuffer: 100 });
+  const got = (r.stdout ?? "").length;
+  assert.strictEqual((r.error as NodeJS.ErrnoException | undefined)?.code, "ENOBUFS");
+  assert.ok(got > 100, `the parent returned ${got} bytes against a 100-byte cap; if this is now ` +
+    "<= the cap, spawnSync truncates and the source comment is out of date");
+  assert.ok(got <= 100 + 128 * 1024, `the parent returned ${got} bytes against a 100-byte cap, ` +
+    "more than one 64 KiB chunk of overshoot; the documented worst case per call is too small");
+});
+
+test("a zero timeout or maxBuffer means UNLIMITED, which is why neither is ever passed", () => {
+  const r = spawnSync(process.execPath, ["-e", 'process.stdout.write("a".repeat(1000))'],
+    { encoding: "utf8", maxBuffer: 0 });
+  assert.strictEqual(r.error, undefined, "maxBuffer 0 refused something; it used to mean unlimited");
+  assert.strictEqual((r.stdout ?? "").length, 1000, "maxBuffer 0 no longer means unlimited");
+  // And the product never passes it: remainingBytes throws instead of returning zero.
+  budget.withBudget(() => {
+    budget.spendHelperBytes(budget.LIMITS.helperBytes);
+    assert.throws(() => budget.remainingBytes(1024), (e: Error) => e.name === "BudgetExceededError");
+  });
+  budget.withBudget(() => {
+    const t = Date.now() + budget.LIMITS.deadlineMs + 1;
+    budget.setClockForTests(() => t);
+    try {
+      assert.throws(() => budget.remainingMs(1000), (e: Error) => e.name === "BudgetExceededError");
+    } finally { budget.setClockForTests(undefined); }
+  });
+});
+
+finish();

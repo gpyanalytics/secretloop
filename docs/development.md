@@ -57,15 +57,16 @@ job passes: the product runs as an ordinary local account through
 `Start-Process -Credential` while a second ordinary account plays the attacker,
 and the elevated builder is neither.
 
-**The packaged npm smoke does not pass there**, and is reported rather than
-worked around. Its MCP round trip gives each request 30 s;
-`secretloop_verify` returns nothing within that. Measured in the same job, the
-equivalent library-level verify completes in **5.8 s** with 7 subprocesses
-(three `powershell.exe` inspections at 4,704 / 397 / 529 ms — the first is a
-cold start and dominates — two `whoami.exe`, one `icacls.exe`), and the x64
-packaged smoke completed the same call in **2.1 s**. So the consent path's own
-cost does not account for the ceiling and **the cause is unresolved**. The VSIX
-smoke passes on ARM64.
+**The packaged npm smoke initially failed there**, and was reported rather than
+worked around. Its MCP round trip gives each request 30 s, and
+`secretloop_verify` returned nothing within that. Measured in the same job at
+the time, the equivalent library-level verify completed in **5.8 s** with 7
+subprocesses (three `powershell.exe` inspections at 4,704 / 397 / 529 ms — the
+first a cold start — two `whoami.exe`, one `icacls.exe`), and the x64 packaged
+smoke completed the same call in **2.1 s**. The cause turned out to be cmdlet
+resolution inside the PowerShell helper (*Open items*, below): with every cmdlet
+module-qualified, the same `packaging-windows-arm` job passed on the ARM64 runner
+in run 35486716945. The threshold was not raised. The VSIX smoke passes on ARM64.
 
 These jobs are **not** required checks either. Run 35275794564 at `54787ebb`:
 **1,560 passed, 0 failed, 18 skipped** per Node major, identical on both,
@@ -153,12 +154,14 @@ that image's default workspace temporary directory is **refused**: `C:\a\_temp`
 carries `Authenticated Users:(M)`, so the directories above the store really are
 modifiable by any authenticated account, and the ancestor rule is right to
 refuse. That is a fact about this runner image, not about Windows generally nor
-about every x64 or ARM64 machine. And the Windows store check is **slow** there:
-one `checkWindowsStore()` measured 6.4 s and 12.3 s on separate runs, both cold,
-against a 20 s budget deadline for a whole operation, while a warm invocation in
-the same job took 0.55 s. `src/consent-acl-win.ts` does not consult the
-operation budget at all, so a Windows consent operation can run past that
-deadline without refusing; that gap is open and is tracked in *Open items*.
+about every x64 or ARM64 machine. And the Windows store check was **slow** there
+at the time: one `checkWindowsStore()` measured 6.4 s and 12.3 s on separate
+runs, both cold, against a 20 s budget deadline for a whole operation, while a
+warm invocation in the same job took 0.55 s. Both findings have since landed on
+`main`: the cost was cmdlet resolution and is gone (*Open items*, below), and
+`src/consent-acl-win.ts` now charges every helper invocation against the
+operation budget and gives the child only what is left of the 20 s deadline
+rather than a fixed timeout. The deadline itself is unchanged.
 
 ## Layout
 
@@ -326,21 +329,27 @@ and §7 records that the tag has drifted behind `main` more than once.
 
 ## Open items
 
-- **The Windows ACL helper is not covered by the operation budget.**
-  `src/consent-budget.ts` bounds helper calls, output bytes, directory entries
-  and a 20-second deadline across one consent operation, and
-  `src/consent-acl-macos.ts` consults it: it charges each invocation, passes
-  `remainingMs(...)` to the child and rethrows a budget error rather than
-  relabelling it. **`src/consent-acl-win.ts` imports none of that.** Its spawns
-  use fixed `HELPER_TIMEOUT_MS` and `ENFORCE_TIMEOUT_MS`, and it never charges
-  an invocation, so on Windows a consent operation can run past the deadline
-  without refusing. Found while validating ARM64, where the cost is visible: a
-  single `checkWindowsStore()` took **12.3 s** on `windows-11-arm`, and the same
-  end-to-end verify took **17.9 s** on x64 — both against a 20 s allowance for
-  the whole operation. Not a new weakness in the checks themselves; the refusals
-  and their reasons are unchanged. Closing it changes subprocess behaviour on
-  the authorization path and needs its own §5 review, so it is scoped
-  separately rather than folded into a validation change.
+- **The Windows consent helper was slow because of command discovery, and is not any more.**
+  Kept here because the shape of the problem is worth remembering, not because anything is
+  outstanding. Resolving an unqualified cmdlet name was the cost: on a runner whose
+  `PSModulePath` lists the Azure module set it took ~42 s per invocation against ~0.8 s for an
+  interpreter doing nothing, while .NET *type* resolution cost nothing at all. Module-qualifying
+  every cmdlet removed it, with byte-identical output. The lesson generalises: in a helper
+  script, a cmdlet can be far more expensive to *find* than to *run*. Why resolution is that
+  expensive on such a machine was not traced, and is not asserted here.
+- **The Windows ACL helper was not covered by the operation budget, and now is.**
+  Kept for the same reason as the entry above. `src/consent-budget.ts` bounds
+  helper calls, output bytes, directory entries and a 20-second deadline across
+  one consent operation, and `src/consent-acl-macos.ts` always consulted it.
+  `src/consent-acl-win.ts` did not: its spawns used fixed timeouts and it never
+  charged an invocation, so on Windows a consent operation could run past the
+  deadline without refusing. Found while validating ARM64, where the cost was
+  visible — a single `checkWindowsStore()` took **12.3 s** on `windows-11-arm`,
+  and an end-to-end verify took **17.9 s** on x64, both against the 20 s
+  allowance. Closed on `main`: the Windows helper now charges each invocation
+  before it is spawned and passes `remainingMs(...)` to the child, and a budget
+  refusal is not relabelled as an ACL problem (`tests/consent-win-budget.test.ts`).
+  The refusals, their reasons and the 20-second allowance are unchanged.
 
 Accurate as of the 0.6.0 release (published 2026-09-15), except where an entry
 names an earlier release:
