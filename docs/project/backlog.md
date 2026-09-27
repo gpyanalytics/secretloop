@@ -132,8 +132,10 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   with the binary header probe folded into the one checked descriptor. The
   Windows probes W1–W6 are RUN (native, elevated NTFS runner) and the
   identity check is validated there as risk reduction. **Concern A stays
-  open**: the checks prove location at the check, not at the open, and an
-  object moved in before the check or out after it is read by design;
+  open**: the checks prove location at the checks, not at the open, and an
+  object moved in before the pre-read check is read by design; an object moved
+  out after it is refused on Linux by the post-read repeat (`kernelPathAfterRead`,
+  Unreleased) unless it is back inside by then;
   see [development](../development.md#open-items). Not taken: a native
   `openat2` binding, a snapshot of content, or a broader filesystem policy.
 - **Comparator FIFO input** — **corrected in the Unreleased candidate.**

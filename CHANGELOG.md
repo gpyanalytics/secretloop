@@ -294,13 +294,37 @@
   throughout the read, or against every filesystem race — measured, not
   supposed: an outside object moved under the root after the open and before
   the check is accepted with its outside-origin bytes read; an inside object
-  moved out after the check is still read; the identity check alone cannot see
+  moved out after the check was still read (now refused on Linux by the
+  post-read check below; still read where there is no kernel path); the identity check alone cannot see
   a parent replaced between path resolution and the identity capture (on
   darwin and Windows there is no kernel path, so that case is read there and
   the block says `kernel path N unavailable`); and content can change in place.
   Windows and macOS therefore get **risk reduction**, not a Linux-equivalent
   check. **F-1 Concern A remains open.** No native dependency, `openat2`
   binding or broader filesystem policy was added.
+- **Post-read re-verification on Linux: `kernelPathAfterRead`.** After a reader's
+  bounded read completes and before a byte of it is used, the same kernel-path
+  test is repeated on the same descriptor. An inside object moved out of the
+  root after the pre-read check and still outside after the last read — the
+  measured MO1 case, previously "read by design" — is now refused with the
+  existing **`outside`** reason, its bytes discarded before anything classifies
+  or scans them, counted under a third block in `openedFileChecks`
+  (`kernelPathAfterRead`: `verified` / `refused` / `unavailable` / `failed` /
+  `notReached`), and the report is `incomplete`. The scope clause gains
+  `; kernel path after read …`. **Exactly what this adds:** for a descriptor
+  recorded `kernelPathAfterRead: verified`, its kernel-recorded location lay
+  inside the root at the check after its last read as well as at the check
+  before its first. **What it does not establish:** location *throughout* the
+  read — the two checks are points that bracket the reads, and an object outside
+  only between them is read and recorded `verified` (measured, T16c); location
+  at the open (MI1/MI2 unchanged); the format probes' first bytes (up to 16 reach
+  the acceptor before the post-read check; they classify and are discarded, and
+  a declined probe records `notReached`); anything on darwin or Windows, where
+  there is no kernel path and the block records `unavailable` beside the
+  pre-read `unavailable`, unchanged in behaviour. `schemaVersion` stays **5**:
+  a descriptive block was added and no existing meaning changed. **F-1 Concern
+  A remains open**; G1, G3 and G4 are untouched, and Windows G2 and the macOS
+  `lsof` route are not attempted here.
 - **`schemaVersion` is now `5`.** The refusals above **widen what `incomplete`
   counts**: a version-4 producer read a substituted object and said
   `incomplete: false`; a version-5 producer says `true` for the same event. That

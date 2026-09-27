@@ -422,7 +422,11 @@ names an earlier release:
   the descriptor was read without that check, and is disclosed as such. Measured and recorded (`f1-containment-design-review` and its timing
   addendum), the limits are: an outside object moved under the root after the
   open and before the check is accepted and read (MI1/MI2); an inside object
-  moved out after the check is still read (MO1); the identity check alone
+  moved out after the check and still outside after the last read is refused on
+  Linux by the post-read repeat of the kernel-path check (`kernelPathAfterRead`,
+  Unreleased) with its bytes discarded — MO1 as measured — but one outside only
+  between the two checks is read, so location throughout the read is still not
+  established; the identity check alone
   cannot see a parent replaced between path resolution and the capture, so on
   darwin and Windows — no kernel path — that case is read (A2, B1); content can
   change in place. Windows and macOS get risk reduction, not the Linux check.

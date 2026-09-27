@@ -148,7 +148,7 @@ function cli(args: string[], root: string): { status: number | null; stdout: str
 }
 
 function sums(o: OpenedFileChecks): void {
-  for (const c of [o.identity, o.kernelPath]) {
+  for (const c of [o.identity, o.kernelPath, o.kernelPathAfterRead]) {
     assert.strictEqual(c.verified + c.refused + c.unavailable + c.failed + c.notReached, o.opened, "every descriptor has one outcome per check");
   }
 }
@@ -180,6 +180,11 @@ test("a clean working-tree scan accounts for three descriptors per file, with th
     sums(o);
     assert.strictEqual(o.identity.verified, 6);
     assert.strictEqual(o.kernelPath[KP], 6, `kernel path on ${process.platform}: ${JSON.stringify(o.kernelPath)}`);
+    // The post-read repeat runs only on a descriptor whose bulk read completed:
+    // the text reader's. The two format probes decline each file at its header,
+    // so their bulk read -- and this check -- is not reached.
+    assert.strictEqual(o.kernelPathAfterRead[KP], 2, `kernel path after read on ${process.platform}: ${JSON.stringify(o.kernelPathAfterRead)}`);
+    assert.strictEqual(o.kernelPathAfterRead.notReached, 4);
     assert.deepStrictEqual(d.summary.coverage.limitations, []);
     assert.strictEqual(d.incomplete, false);
     assert.ok(!("openedFileChecks" in d), "descriptive only: never a top-level comparison field");
@@ -222,6 +227,7 @@ test("an empty tree says zero descriptors beside its zero-files sentence", () =>
       opened: 0,
       identity: { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
       kernelPath: { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
+      kernelPathAfterRead: { verified: 0, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
     });
     assert.strictEqual(d.summary.scope, "0 file(s) — nothing was scanned, so this is not a clean result; 0 descriptor(s) opened for content");
   } finally {
@@ -264,6 +270,7 @@ test("JSON: the probe's identity refusal refuses the file -- one `replaced` limi
     assert.strictEqual(o.identity.refused, 1);
     assert.strictEqual(o.identity.verified, 3);
     assert.strictEqual(o.kernelPath.notReached, 1, "the kernel-path check is not reached after an identity refusal");
+    assert.strictEqual(o.kernelPathAfterRead.notReached, 3, "the refused descriptor and ok.txt's two declined probes never complete a bulk read");
     assert.strictEqual(d.summary.scannedCount, 1);
     assert.deepStrictEqual(d.findings, []);
     assert.match(d.summary.scope, /1 file\(s\) not scanned — replaced between inspection and read; 4 descriptor\(s\) opened for content: identity 3 verified, 1 refused;/);
@@ -351,17 +358,45 @@ test("the realpath-to-identity gap at the text reader: refused by the kernel pat
     assert.strictEqual(o.identity.verified, 6, "the identity check cannot see this case: it captured the substitute");
     if (KERNEL_PATH) {
       assert.strictEqual(o.kernelPath.refused, 1, JSON.stringify(o.kernelPath));
+      assert.deepStrictEqual(o.kernelPathAfterRead, { verified: 1, refused: 0, unavailable: 0, failed: 0, notReached: 5 }, "refused before its reads, the text reader's descriptor never reaches the post-read check");
       assert.deepStrictEqual(d.summary.coverage.limitations, ["1 file(s) not scanned — resolved outside the scan root"]);
       assert.strictEqual(d.incomplete, true);
       assert.deepStrictEqual(d.findings, []);
       assert.ok(!(run.stdout + run.stderr).includes(lab.cred), "the kernel-path refusal must keep the outside credential out");
     } else {
       assert.strictEqual(o.kernelPath.unavailable, 6);
+      assert.deepStrictEqual(o.kernelPathAfterRead, { verified: 0, refused: 0, unavailable: 2, failed: 0, notReached: 4 });
       assert.deepStrictEqual(d.summary.coverage.limitations, [], "no check observed anything; the report is complete and wrong about this file");
       const files = d.findings.map((f: { file: string }) => f.file);
       assert.deepStrictEqual(files, [REL], `RESIDUAL on ${process.platform}: the outside credential is reported under the inside name`);
       console.log(`    RESIDUAL on ${process.platform}: a parent swap in the text reader's realpath-to-lstat gap was read (no kernel path); the block says "kernel path 6 unavailable"`);
     }
+  });
+});
+
+test("MO1 at scan level: a parent moved out after the text reader's pre-read check is refused by the post-read check, its content withheld and the report incomplete (Linux); no kernel path elsewhere", () => {
+  if (!KERNEL_PATH) return skip("no kernel path on this platform: the post-read check is recorded unavailable and MO1 is read by design (see the clean-scan block)");
+  // The swap lands after the THIRD /proc/self/fd link read that resolves to the
+  // target: the PKCS#12 probe's and the archive probe's pre-read checks, then the
+  // text reader's. The text reader then reads the INSIDE bytes -- which here
+  // carry a credential -- and its post-read check finds the descriptor outside.
+  withLab((lab) => {
+    fs.writeFileSync(lab.target, `token = "${token(9)}"\n`);
+    const inside = token(9);
+    const run = cliWithHook(lab, "readlinkSync", 3, ["scan", "--format", "json"]);
+    requireFired(run, "MO1-scan");
+    const d = JSON.parse(run.stdout);
+    const o: OpenedFileChecks = d.summary.coverage.openedFileChecks;
+    sums(o);
+    assert.strictEqual(o.opened, 6);
+    assert.strictEqual(o.identity.verified, 6, "the object was the inspected one throughout");
+    assert.strictEqual(o.kernelPath.verified, 6, "every pre-read check saw the object inside");
+    assert.deepStrictEqual(o.kernelPathAfterRead, { verified: 1, refused: 1, unavailable: 0, failed: 0, notReached: 4 }, JSON.stringify(o.kernelPathAfterRead));
+    assert.deepStrictEqual(d.summary.coverage.limitations, ["1 file(s) not scanned — resolved outside the scan root"]);
+    assert.strictEqual(d.incomplete, true);
+    assert.deepStrictEqual(d.findings, [], "the credential the reader had already read must not be reported");
+    assert.ok(!(run.stdout + run.stderr).includes(inside), "the discarded bytes must not appear anywhere in the output");
+    assert.match(d.summary.scope, /kernel path after read 1 verified, 1 refused, 4 not reached/);
   });
 });
 
@@ -426,7 +461,7 @@ test("scanFiles: a probe refusal is reported once through onSkipped as `replaced
     assert.strictEqual(w.state.fired, true, "the trigger did not fire");
     assert.deepStrictEqual(skipped, [["replaced", REL]]);
     assert.deepStrictEqual(scanned.map((s) => s.path), ["ok.txt"]);
-    assert.deepStrictEqual(checks.filter(([, p]) => p === REL).map(([c]) => c), [{ identity: "refused", kernelPath: "not-reached" }]);
+    assert.deepStrictEqual(checks.filter(([, p]) => p === REL).map(([c]) => c), [{ identity: "refused", kernelPath: "not-reached", kernelPathAfterRead: "not-reached" }]);
     assert.strictEqual(checks.filter(([, p]) => p === "ok.txt").length, 3);
   });
 });
@@ -472,12 +507,13 @@ test("the editor summary appends the clause when handed the accounting, and is b
     opened: 6,
     identity: { verified: 6, refused: 0, unavailable: 0, failed: 0, notReached: 0 },
     kernelPath: { verified: 0, refused: 0, unavailable: 6, failed: 0, notReached: 0 },
+    kernelPathAfterRead: { verified: 0, refused: 0, unavailable: 6, failed: 0, notReached: 0 },
   };
   assert.strictEqual(workspaceScanSummary([], 2), "SecretLoop: no secrets found across 2 file(s).");
   assert.strictEqual(workspaceScanSummary([], 2, 0, 0, 0, undefined, 0, 0, 0), "SecretLoop: no secrets found across 2 file(s).");
   assert.strictEqual(
     workspaceScanSummary([], 2, 0, 0, 0, undefined, 0, 0, 0, acc),
-    "SecretLoop: no secrets found across 2 file(s); 6 descriptor(s) opened for content: identity 6 verified; kernel path 6 unavailable."
+    "SecretLoop: no secrets found across 2 file(s); 6 descriptor(s) opened for content: identity 6 verified; kernel path 6 unavailable; kernel path after read 6 unavailable."
   );
 });
 
