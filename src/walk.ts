@@ -269,15 +269,17 @@ export type ReadResult = { text: string } | { skipped: SkipReason };
  *                the read continued under the remaining checks and says so
  *   failed       the attempt to obtain the evidence itself failed; the file was
  *                refused (`unreadable`) -- a failure is not an absence
- *   not-reached  the descriptor was refused, or declined by a format probe,
- *                before this check ran
+ *   not-reached  the descriptor was refused, declined by a format probe, or
+ *                its reads did not complete (a mid-read `oversized` refusal
+ *                or a thrown read), before this check ran
  *
  * `verified` is written only after the comparison or the link read actually
  * succeeded on the descriptor in hand. It is never inferred from the platform
  * name or from an earlier descriptor. The one inference made is the negative
  * one: a descriptor whose kernel path was `unavailable` before the reads has
  * nothing to repeat afterwards, and `kernelPathAfterRead` says `unavailable`
- * without asking again.
+ * without asking again. `unavailable` after the reads can also be MEASURED:
+ * the link read before the reads and the later lookup finds no procfs at all.
  */
 export type CheckOutcome = "verified" | "refused" | "unavailable" | "failed" | "not-reached";
 
@@ -291,9 +293,11 @@ export interface OpenedFileCheck {
    * its last read and before any byte it returned is used. `refused` means the
    * object was under the root at the check before the first read and outside it
    * at the check after the last one; the bytes already read were discarded and
-   * the file refused as `outside`. `unavailable` mirrors `kernelPath`.
-   * `not-reached` means the reads never completed on this descriptor: it was
-   * refused earlier, or a format probe declined it at the header.
+   * the file refused as `outside`. `unavailable` either mirrors a pre-read
+   * `unavailable` (nothing to repeat) or is measured, when the later lookup
+   * itself finds no procfs. `not-reached` means the reads never completed on
+   * this descriptor: it was refused earlier, a format probe declined it at the
+   * header, the bounded read refused it as `oversized`, or a read threw.
    */
   kernelPathAfterRead: CheckOutcome;
 }
@@ -489,9 +493,9 @@ interface ObjectIdentity {
  *  10  KERNEL PATH AGAIN (Linux), on the same descriptor, after the last read
  *      and before a byte of it is returned. Outside now: the bytes are
  *      discarded and the file is refused as `outside`. Nothing to repeat
- *      (step 8 was `unavailable`): `unavailable`, disclosed, the bytes are
- *      returned under the remaining checks. Link unreadable now: `failed`,
- *      refused.
+ *      (step 8 was `unavailable`), or procfs gone by now: `unavailable`,
+ *      disclosed, the bytes are returned under the remaining checks. Link
+ *      unreadable now with procfs present: `failed`, refused.
  *
  * WHAT THIS ESTABLISHES, EXACTLY -- PER DESCRIPTOR, AS RECORDED. For a
  * descriptor the record says `kernelPath: verified`: its kernel-recorded

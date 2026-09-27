@@ -50,7 +50,8 @@ illustrative, not a claim about which release carries these fields.
         "identity":   { "verified": 6, "refused": 0, "unavailable": 0, "failed": 0, "notReached": 0 },
         "kernelPath": { "verified": 0, "refused": 0, "unavailable": 6, "failed": 0, "notReached": 0 },
         // Unreleased: the same test repeated after the last read; notReached for a
-        // descriptor a format probe declined before its bulk read
+        // descriptor whose reads did not complete (declined by a format probe,
+        // refused mid-read, or a read threw)
         "kernelPathAfterRead": { "verified": 0, "refused": 0, "unavailable": 2, "failed": 0, "notReached": 4 }
       },
       "suppression": {

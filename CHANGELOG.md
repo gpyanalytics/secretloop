@@ -317,9 +317,11 @@
   before its first. **What it does not establish:** location *throughout* the
   read — the two checks are points that bracket the reads, and an object outside
   only between them is read and recorded `verified` (measured, T16c); location
-  at the open (MI1/MI2 unchanged); the format probes' first bytes (up to 16 reach
-  the acceptor before the post-read check; they classify and are discarded, and
-  a declined probe records `notReached`); anything on darwin or Windows, where
+  at the open (MI1/MI2 unchanged); the format probes' first bytes — up to
+  `header.bytes` of them, **6 for the PKCS#12 probe and 265 for the archive
+  probe**, reach the format acceptor before the post-read check; they classify
+  the object and are discarded, are never returned as scanned content before
+  that check, and a declined probe records `notReached`; anything on darwin or Windows, where
   there is no kernel path and the block records `unavailable` beside the
   pre-read `unavailable`, unchanged in behaviour. `schemaVersion` stays **5**:
   a descriptive block was added and no existing meaning changed. **F-1 Concern
