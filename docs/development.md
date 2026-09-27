@@ -31,7 +31,45 @@ Windows** (`test-windows (18)`, `test-windows (20)`, `packaging-windows`;
 `windows-latest`, which resolved to Windows Server 2025 10.0.26100, image
 `windows-2025-vs2026`, Node 18.20.8, 20.20.2 and 22.23.2, x64, Git for
 Windows 2.55.0). These jobs are **not** required checks; they add beside the
-Linux jobs and take nothing away. Run 35275794564 at `54787ebb`:
+Linux jobs and take nothing away.
+
+The same suite and the same packaging smokes also run on **native Windows
+ARM64, on a client edition** (`test-windows-arm (20)`, `test-windows-arm (22)`,
+`test-windows-arm-two-user`, `packaging-windows-arm`; `windows-11-arm`).
+Measured on that runner rather than assumed: **Microsoft Windows 11
+Enterprise**, version 10.0.26200 build 26200, `ProductType 1` (workstation, not
+Server), OS architecture ARM 64-bit, runner image `win11-arm64`
+20260914.169.1, `PROCESSOR_ARCHITECTURE=ARM64` with `PROCESSOR_ARCHITEW6432`
+unset, Node **20.20.2** and **22.23.2** from the arm64 tool cache, each
+reporting `process.arch=arm64`. The job asserts all of that and **fails**
+rather than warns, because an emulated x64 process presented as native ARM64
+evidence would be worse than none.
+
+**Node 18 is absent from that matrix and cannot be added.** nodejs.org
+publishes no `win-arm64` build for any of the 38 v18 releases — v18.20.8 lists
+only `win-x64-*` and `win-x86-*` files. `win-arm64-*` first appeared in
+v19.9.0 (2023-04-10) and is present for every v20 release. The x64 jobs still
+cover 18. `engines.node` stays `">=18.0.0"`: it states the
+lowest version the code supports, not a promise that every platform and
+architecture has a binary for it.
+
+On that runner the suite passes on **both** Node versions, and the two-account
+job passes: the product runs as an ordinary local account through
+`Start-Process -Credential` while a second ordinary account plays the attacker,
+and the elevated builder is neither.
+
+**The packaged npm smoke initially failed there**, and was reported rather than
+worked around. Its MCP round trip gives each request 30 s, and
+`secretloop_verify` returned nothing within that. Measured in the same job at
+the time, the equivalent library-level verify completed in **5.8 s** with 7
+subprocesses (three `powershell.exe` inspections at 4,704 / 397 / 529 ms — the
+first a cold start — two `whoami.exe`, one `icacls.exe`), and the x64 packaged
+smoke completed the same call in **2.1 s**. The cause turned out to be cmdlet
+resolution inside the PowerShell helper (*Open items*, below): with every cmdlet
+module-qualified, the same `packaging-windows-arm` job passed on the ARM64 runner
+in run 35486716945. The threshold was not raised. The VSIX smoke passes on ARM64.
+
+These jobs are **not** required checks either. Run 35275794564 at `54787ebb`:
 **1,560 passed, 0 failed, 18 skipped** per Node major, identical on both,
 from 57 files — the same 1,578 cases the suite runs on POSIX, where the 18
 skips run (1,578 passed, 0 failed on Linux in the same run and on darwin at
@@ -100,10 +138,31 @@ existed these checks describe the present, not its history; and inspection is by
 path while the work that follows is by path, so a replacement in between is not
 detected by any account that already has the rights to make it. Tested on one
 `windows-latest` image (Server 2025, NTFS, x64, Node 20, Windows PowerShell 5.1,
-`en-US`) as an ordinary account against a second ordinary account. Not exercised,
-and so not claimed: managed or relocated profiles, network and UNC locations
-(refused outright), non-NTFS volumes, non-English hosts, domain accounts, client
-Windows images and ARM64.
+`en-US`) as an ordinary account against a second ordinary account, and on one
+`windows-11-arm` image (Windows 11 Enterprise 10.0.26200, client, NTFS, arm64,
+Node 20 and 22, `en-US`).
+
+**One hosted image is not universal client support**, and the two results are
+different evidence: the ordinary `test-windows*` jobs run **elevated** — GitHub
+configures Windows runners as administrators with UAC disabled — so only the
+two-account jobs say anything about ordinary-account behaviour. **Local accounts
+do not establish domain-account coverage.** Not exercised, and so not claimed:
+managed or relocated profiles, network and UNC locations (refused outright),
+non-NTFS volumes, non-English hosts, and domain accounts.
+
+Two things the ARM64 run measured that are worth carrying. A consent store under
+that image's default workspace temporary directory is **refused**: `C:\a\_temp`
+carries `Authenticated Users:(M)`, so the directories above the store really are
+modifiable by any authenticated account, and the ancestor rule is right to
+refuse. That is a fact about this runner image, not about Windows generally nor
+about every x64 or ARM64 machine. And the Windows store check was **slow** there
+at the time: one `checkWindowsStore()` measured 6.4 s and 12.3 s on separate
+runs, both cold, against a 20 s budget deadline for a whole operation, while a
+warm invocation in the same job took 0.55 s. Both findings have since landed on
+`main`: the cost was cmdlet resolution and is gone (*Open items*, below), and
+`src/consent-acl-win.ts` now charges every helper invocation against the
+operation budget and gives the child only what is left of the 20 s deadline
+rather than a fixed timeout. The deadline itself is unchanged.
 
 ## Layout
 
@@ -279,6 +338,19 @@ and §7 records that the tag has drifted behind `main` more than once.
   every cmdlet removed it, with byte-identical output. The lesson generalises: in a helper
   script, a cmdlet can be far more expensive to *find* than to *run*. Why resolution is that
   expensive on such a machine was not traced, and is not asserted here.
+- **The Windows ACL helper was not covered by the operation budget, and now is.**
+  Kept for the same reason as the entry above. `src/consent-budget.ts` bounds
+  helper calls, output bytes, directory entries and a 20-second deadline across
+  one consent operation, and `src/consent-acl-macos.ts` always consulted it.
+  `src/consent-acl-win.ts` did not: its spawns used fixed timeouts and it never
+  charged an invocation, so on Windows a consent operation could run past the
+  deadline without refusing. Found while validating ARM64, where the cost was
+  visible — a single `checkWindowsStore()` took **12.3 s** on `windows-11-arm`,
+  and an end-to-end verify took **17.9 s** on x64, both against the 20 s
+  allowance. Closed on `main`: the Windows helper now charges each invocation
+  before it is spawned and passes `remainingMs(...)` to the child, and a budget
+  refusal is not relabelled as an ACL problem (`tests/consent-win-budget.test.ts`).
+  The refusals, their reasons and the 20-second allowance are unchanged.
 
 Accurate as of the 0.6.0 release (published 2026-09-15), except where an entry
 names an earlier release:
