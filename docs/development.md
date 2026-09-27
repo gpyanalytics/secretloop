@@ -46,9 +46,10 @@ rather than warns, because an emulated x64 process presented as native ARM64
 evidence would be worse than none.
 
 **Node 18 is absent from that matrix and cannot be added.** nodejs.org
-publishes no `win-arm64` build for any v18 release — v18.20.8 lists only
-`win-x64-*` and `win-x86-*` files, and `win-arm64-*` first appears at v20. The
-x64 jobs still cover 18. `engines.node` stays `">=18.0.0"`: it states the
+publishes no `win-arm64` build for any of the 38 v18 releases — v18.20.8 lists
+only `win-x64-*` and `win-x86-*` files. `win-arm64-*` first appeared in
+v19.9.0 (2023-04-10) and is present for every v20 release. The x64 jobs still
+cover 18. `engines.node` stays `">=18.0.0"`: it states the
 lowest version the code supports, not a promise that every platform and
 architecture has a binary for it.
 

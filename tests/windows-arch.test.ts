@@ -29,18 +29,23 @@ import * as acl from "../src/consent-acl-win";
  * The ARM64 claim is asserted by the CI job that runs on the ARM64 runner, where it is a
  * property of the environment rather than of the product.
  *
- * Nothing here touches a real consent store. The one end-to-end case builds a disposable
- * directory and asks the product's own checker about it.
+ * Four cases, all Windows-only; off Windows each skips with its own reason and none is counted
+ * as a pass. Nothing here touches a real consent store. The one end-to-end case builds a
+ * disposable directory and asks the product's own checker about it.
  */
 
 const WINDOWS = process.platform === "win32";
 
-/** PE COFF machine types, from the PE format the loader itself reads. */
+/**
+ * PE COFF machine types, from the PE format the loader itself reads, labelled with the names
+ * Node uses for `process.arch` (`ia32`, `x64`, `arm64`, `arm`) so the comparison below is
+ * between like and like.
+ */
 const MACHINE: Record<number, string> = {
-  0x014c: "i386",
+  0x014c: "ia32",
   0x8664: "x64",
   0xaa64: "arm64",
-  0x01c4: "armv7",
+  0x01c4: "arm",
 };
 
 /**
@@ -85,34 +90,27 @@ function helperPaths(): { name: string; file: string }[] {
 
 suite("Windows helper architecture");
 
-test("the environment is recorded, so a later reader knows what these results describe", () => {
-  // Never a pass/fail on the values: this case exists so the log carries the environment the
-  // other cases were measured in. A result with no environment is not evidence.
-  const lines = [
-    `platform=${process.platform}`,
-    `process.arch=${process.arch}`,
-    `os.arch=${os.arch()}`,
-    `os.release=${os.release()}`,
-    `node=${process.version}`,
-    `execPath=${process.execPath}`,
-    `SystemRoot=${process.env.SystemRoot ?? "(unset)"}`,
-    `PROCESSOR_ARCHITECTURE=${process.env.PROCESSOR_ARCHITECTURE ?? "(unset)"}`,
-    `PROCESSOR_ARCHITEW6432=${process.env.PROCESSOR_ARCHITEW6432 ?? "(unset)"}`,
-  ];
-  for (const l of lines) console.log(`      env: ${l}`);
-  assert.strictEqual(process.arch, os.arch(), "the process and the OS must agree about the architecture");
-});
-
-test("PROCESSOR_ARCHITEW6432 is the emulation tell, and it is reported rather than trusted", () => {
-  if (!WINDOWS) return skip("Windows-only. The WOW layer does not exist elsewhere.");
-  // Windows sets PROCESSOR_ARCHITEW6432 only for a process running under emulation, where
-  // PROCESSOR_ARCHITECTURE reports the EMULATED architecture and ARCHITEW6432 the real machine.
-  // It is recorded because it is the cheapest signal, and it is NOT the basis of the decision:
-  // the PE header check below does not depend on any environment variable.
-  const emulated = Boolean(process.env.PROCESSOR_ARCHITEW6432);
-  console.log(`      emulation indicated by PROCESSOR_ARCHITEW6432: ${emulated ? "YES" : "no"}`);
-  assert.ok(true, "recorded, not asserted");
-});
+// THE ENVIRONMENT, RECORDED AND NOT COUNTED. A result with no environment is not evidence, so
+// the log carries what the cases below were measured in -- but logging is not a test, so this
+// is not one. (`os.arch()` is omitted: in Node it returns `process.arch`, so comparing the two
+// checks nothing.) PROCESSOR_ARCHITEW6432 is set only for a process running under emulation,
+// where PROCESSOR_ARCHITECTURE reports the emulated architecture and ARCHITEW6432 the real
+// machine; it is the cheapest signal and is recorded, not trusted -- the PE header check below
+// does not depend on any environment variable.
+for (const l of [
+  `platform=${process.platform}`,
+  `process.arch=${process.arch}`,
+  `os.release=${os.release()}`,
+  `node=${process.version}`,
+  `execPath=${process.execPath}`,
+  `SystemRoot=${process.env.SystemRoot ?? "(unset)"}`,
+  `PROCESSOR_ARCHITECTURE=${process.env.PROCESSOR_ARCHITECTURE ?? "(unset)"}`,
+  `PROCESSOR_ARCHITEW6432=${process.env.PROCESSOR_ARCHITEW6432 ?? "(unset)"}${
+    process.env.PROCESSOR_ARCHITEW6432 ? "  <- set: this process is running under emulation" : ""
+  }`,
+]) {
+  console.log(`      env: ${l}`);
+}
 
 test("every helper the product will spawn exists at the absolute path the product computes", () => {
   if (!WINDOWS) return skip("Windows-only. These paths exist on no other platform.");

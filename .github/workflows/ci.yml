@@ -289,8 +289,9 @@ jobs:
     # The same two packaging smokes as `packaging`, on a native Windows runner.
     # Both scripts are bash; on windows-latest `shell: bash` is Git for
     # Windows' bash, which is the only shell a Windows maintainer would run them
-    # from. Node 22 for the same reason the Linux job pins it: @vscode/vsce
-    # requires node >= 20, and the test matrix, not this job, covers 18.
+    # from. Node 22 for the same reason the Linux job pins it: the publish tools
+    # need it -- @vscode/vsce 4.0.0 declares engines.node ">= 22" and ovsx 1.2.0
+    # ">=22.0.0" -- and the test matrix, not this job, covers 18 and 20.
     # Not a required check; it adds beside the Linux job and takes nothing away.
     runs-on: windows-latest
     timeout-minutes: 30
@@ -758,7 +759,8 @@ jobs:
     # The same two packaging smokes as `packaging-windows`, on native arm64. The npm tarball
     # smoke includes the MCP stdio round trip, so this covers the packaged CLI and MCP entry
     # points on this architecture as well as the archive contents.
-    # Node 22 for the same reason the x64 job pins it: @vscode/vsce requires node >= 20.
+    # Node 22 for the same reason the x64 job pins it: @vscode/vsce 4.0.0 declares engines.node
+    # ">= 22" (ovsx 1.2.0 ">=22.0.0"), and the test matrix, not this job, covers 20.
     # Not a required check; it adds beside the existing jobs and takes nothing away.
     runs-on: windows-11-arm
     timeout-minutes: 30
