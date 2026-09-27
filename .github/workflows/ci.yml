@@ -151,8 +151,37 @@ jobs:
           New-Item -ItemType Directory -Force $LAB | Out-Null
           icacls $LAB /grant "*${sid1}:(OI)(CI)RX" "*${sid2}:(OI)(CI)RX" /q | Out-Null
           # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
-          New-Item -ItemType Directory -Force (Join-Path $LAB "private") | Out-Null
-          icacls (Join-Path $LAB "private") /inheritance:r /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
+          #
+          # This directory is the store's IMMEDIATE parent, and the product forbids any other
+          # principal holding FILE_ADD_FILE or FILE_ADD_SUBDIRECTORY there. A plain New-Item under
+          # RUNNER_TEMP inherits exactly those bits for BUILTIN\Users from D:\ (measured, run
+          # 36298986207, a different VM), so if the strip below silently fails the product refuses
+          # `unsafe-parent` and the job reports a product refusal that is really a harness fault.
+          # PR #102's run 36296432311 refused with that same text; its private ACL was never
+          # captured, so whether this was its cause is NOT established. Every icacls here therefore
+          # checks its exit code, the result is printed, and a fixture-level precondition is
+          # asserted -- with icacls only, so nothing here spawns powershell.exe and pre-warms the
+          # cold first verify that PLANT-TIMING measures.
+          $private = Join-Path $LAB "private"
+          New-Item -ItemType Directory -Force $private | Out-Null
+          icacls $private /inheritance:r /q
+          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not remove inherited ACEs from $private (icacls exit $LASTEXITCODE)" }
+          icacls $private /grant:r "*${sid1}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
+          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not set the private parent's access list (icacls exit $LASTEXITCODE)" }
+          "--- private, as the product's immediate parent will see it"
+          $privateAcl = (icacls $private | Out-String)
+          $privateAcl
+          # A fixture-level check, not the product's verdict. It asserts three things: no inherited
+          # entry survives; none of three NAMED principals -- BUILTIN\Users, Authenticated Users,
+          # Everyone -- appears, each of which would carry add-file / add-subdirectory rights the
+          # ancestor rule forbids on a store's parent; and the three required grants are present.
+          # It does not enumerate every explicit ACE (an unexpected fourth SID would pass it), and
+          # the product's ancestor rule remains the authority on what this parent may grant.
+          if ($privateAcl -match '\(I\)') { throw "FIXTURE: private still carries an INHERITED entry after /inheritance:r; the strip did not take effect:`n$privateAcl" }
+          if ($privateAcl -match 'BUILTIN\\Users:|Authenticated Users:|Everyone:') { throw "FIXTURE: private grants a principal the product forbids on a store's parent (BUILTIN\Users / Authenticated Users / Everyone):`n$privateAcl" }
+          foreach ($must in @('slprobe:', 'NT AUTHORITY\SYSTEM:', 'BUILTIN\Administrators:')) {
+            if ($privateAcl -notmatch [regex]::Escape($must)) { throw "FIXTURE: private is missing the required grant for $must :`n$privateAcl" }
+          }
           # A parent the second account can write: the shape the policy must refuse.
           New-Item -ItemType Directory -Force (Join-Path $LAB "permissive") | Out-Null
           icacls (Join-Path $LAB "permissive") /grant "*${sid1}:(OI)(CI)F" "*${sid2}:(OI)(CI)F" /q | Out-Null
