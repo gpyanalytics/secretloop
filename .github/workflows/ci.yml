@@ -155,12 +155,13 @@ jobs:
           # This directory is the store's IMMEDIATE parent, and the product forbids any other
           # principal holding FILE_ADD_FILE or FILE_ADD_SUBDIRECTORY there. A plain New-Item under
           # RUNNER_TEMP inherits exactly those bits for BUILTIN\Users from D:\ (measured, run
-          # 36298986207), so if the strip below silently fails the product refuses `unsafe-parent`
-          # and the job reports a product refusal that is really a harness fault. That is what
-          # PR #102's run 36296432311 looked like. Every icacls here therefore checks its exit
-          # code, the result is printed, and the precondition is asserted -- with icacls only, so
-          # nothing here spawns powershell.exe and pre-warms the cold first verify that
-          # PLANT-TIMING measures.
+          # 36298986207, a different VM), so if the strip below silently fails the product refuses
+          # `unsafe-parent` and the job reports a product refusal that is really a harness fault.
+          # PR #102's run 36296432311 refused with that same text; its private ACL was never
+          # captured, so whether this was its cause is NOT established. Every icacls here therefore
+          # checks its exit code, the result is printed, and a fixture-level precondition is
+          # asserted -- with icacls only, so nothing here spawns powershell.exe and pre-warms the
+          # cold first verify that PLANT-TIMING measures.
           $private = Join-Path $LAB "private"
           New-Item -ItemType Directory -Force $private | Out-Null
           icacls $private /inheritance:r /q
@@ -170,10 +171,12 @@ jobs:
           "--- private, as the product's immediate parent will see it"
           $privateAcl = (icacls $private | Out-String)
           $privateAcl
-          # The exact precondition the product needs of a store's immediate parent: no inherited
-          # entry survives, and no principal beyond the owner, SYSTEM and Administrators appears.
-          # BUILTIN\Users, Authenticated Users and Everyone would each carry add-file /
-          # add-subdirectory rights the ancestor rule forbids on this component.
+          # A fixture-level check, not the product's verdict. It asserts three things: no inherited
+          # entry survives; none of three NAMED principals -- BUILTIN\Users, Authenticated Users,
+          # Everyone -- appears, each of which would carry add-file / add-subdirectory rights the
+          # ancestor rule forbids on a store's parent; and the three required grants are present.
+          # It does not enumerate every explicit ACE (an unexpected fourth SID would pass it), and
+          # the product's ancestor rule remains the authority on what this parent may grant.
           if ($privateAcl -match '\(I\)') { throw "FIXTURE: private still carries an INHERITED entry after /inheritance:r; the strip did not take effect:`n$privateAcl" }
           if ($privateAcl -match 'BUILTIN\\Users:|Authenticated Users:|Everyone:') { throw "FIXTURE: private grants a principal the product forbids on a store's parent (BUILTIN\Users / Authenticated Users / Everyone):`n$privateAcl" }
           foreach ($must in @('slprobe:', 'NT AUTHORITY\SYSTEM:', 'BUILTIN\Administrators:')) {
