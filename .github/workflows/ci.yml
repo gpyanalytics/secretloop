@@ -946,7 +946,14 @@ jobs:
           $after = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name })
           $new = @($after | Where-Object { $before -notcontains $_ })
           "volumes after : $($after -join ' ') ; new: $($new -join ' ')"
-          if (($new | Sort-Object) -join "," -ne (@($X, $Y) | Sort-Object) -join ",") { throw "FIXTURE: the set of new volumes is not exactly the two this job created" }
+          # Compared as two explicit strings. The third run of this job printed "new: Y Z" -- exactly
+          # the two letters it created -- and still threw here, so the single-expression comparison
+          # was evaluating something other than those two strings; each side is now built first and
+          # both are printed, so the check stays exact and its verdict is legible.
+          $newSet = ((@($new) | Sort-Object) -join ",")
+          $wantSet = ((@($X, $Y) | Sort-Object) -join ",")
+          "new-volume set : [$newSet] ; created : [$wantSet]"
+          if ($newSet -ne $wantSet) { throw "FIXTURE: the set of new volumes [$newSet] is not exactly the two this job created [$wantSet]" }
           # The NTFS control's root: owner / SYSTEM / Administrators only, on the disposable volume.
           $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
           $yRoot = "$($Y):\\"
@@ -968,7 +975,7 @@ jobs:
             const acl = require('./out/consent-acl-win.js');
             const sid = acl.currentUserSid();
             console.log('runner sid:', sid);
-            const paths = ['$env:SLN2_X:\\', '$env:SLN2_X:\\sl-n2', '$env:SLN2_Y:\\', '$env:SLN2_Y:\\sl-n2'];
+            const paths = ['$($env:SLN2_X):\\', '$($env:SLN2_X):\\sl-n2', '$($env:SLN2_Y):\\', '$($env:SLN2_Y):\\sl-n2'];
             const info = acl.inspectPaths(paths);
             if (!info.ok) { console.log('inspect failed:', info.problem); process.exit(0); }
             for (const p of paths) {
@@ -977,6 +984,7 @@ jobs:
               console.log('   sddl', e && e.sddl);
             }
           "
+          if ($LASTEXITCODE -ne 0) { throw "the product-view inspection did not run (node exit $LASTEXITCODE); that is a non-measurement" }
       - name: exFAT — the real first verify must refuse, closed, with the ancestor rule's code
         shell: pwsh
         run: |
