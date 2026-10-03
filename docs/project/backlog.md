@@ -143,17 +143,29 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   writer indefinitely; the report-file open is now non-blocking where the
   platform defines the flag and the existing not-a-regular-file refusal
   applies. darwin and Linux validated; win32 unchanged (flag undefined).
-- **Native Windows validation** — **CI jobs added (PR #84, draft).** The
-  suite and both packaging smokes run on `windows-latest` for Node 18, 20 and
-  22 beside the Linux jobs, not as required checks. At head `54787ebb`: 1,560
-  passed, 0 failed, 18 skipped per Node major, with every skip naming the
-  platform limit it hit; the four corrections were harness faults, not
-  product defects (see [development](../development.md#build-and-test)).
-  Still open, and not measured by any Windows run: F-1 Concern A and the
-  FIFO stat-to-open window; whether a non-elevated Windows user can run the
-  symlink fixtures at all; the consent record's owner-only mode, which does
-  not exist on Windows; and anything a second Windows configuration would
-  show that one hosted runner does not.
+- **Native Windows validation** — **CI jobs merged and permanent, on two
+  architectures.** On x64 `windows-latest` (the jobs PR #84 introduced, since
+  merged): the suite on Node 18 and 20, the two-account consent fixture and
+  both packaging smokes. On native ARM64, a Windows 11 client edition
+  (`windows-11-arm`; PR #95, merged 2026-09-27 at `1920ec66`, push-to-main
+  run 36313311914 green on all 15 jobs): the suite on Node 20 and 22 — Node 18
+  publishes no Windows ARM64 build — the two-account fixture and both
+  packaging smokes, each job asserting edition and architecture before it
+  measures (see [development](../development.md#build-and-test)). None of
+  these is a required check; the manual release gate in `RELEASING.md` §7
+  names the x64 two-account and packaging jobs. Landed in the same cycle: the
+  module-qualified consent helper (#96), the helper's participation in the
+  operation allowance (#99), per-category refusal wording (#106), the x64
+  fixture's self-checked private parent (#109), and a per-helper timing line
+  on the first consented verify (#115). **Still open, stated as such:** the
+  first consented verify on x64 `windows-latest` has twice refused on the
+  20-second allowance (main runs 35488134886 and 36333773664), cause
+  unresolved — #115 records where the time goes and does not explain it; F-1
+  Concern A (the entry above; the Linux post-read check is a narrow two-point
+  guarantee, not containment); whether a non-elevated Windows user can run the
+  symlink fixtures at all; the consent record's owner-only mode, which does not
+  exist on Windows; and non-NTFS volumes, domain or managed profiles and
+  non-English hosts, which no hosted run exercises.
 - **`RELEASING.md`** — committed; it is the release checklist in force. Its
   conditional adversarial review ran for the current `main` range (see
   [development](../development.md#security-critical-surface)).
