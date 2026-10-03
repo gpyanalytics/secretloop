@@ -127,6 +127,16 @@ and against each other under this comparator. The boolean fields
 still type-check under every version, so nothing but the version number stops
 reports written against different meanings from comparing as though they agreed.
 
+**Comparing across the upgrade means scanning both sides again.** `secretloop
+compare` reads two saved reports and nothing else: it does not rescan, and it
+does not convert a version-4 report into a version-5 one — there is no
+conversion path, because the version marks a change in what the fields mean,
+not in how they are spelled. To compare a tree across the upgrade, produce both
+reports with the new version — the same tree, configuration and suppression
+settings on each side — and compare those two version-5 reports. A saved 0.6.0
+report remains a faithful record of what that scan found; it is ineligible only
+as a comparison input.
+
 ### `root` is a shared-ancestry marker, not a repository identity
 
 It is a digest of the repository's **root commit**, prefixed `git:`.
@@ -383,7 +393,7 @@ everything else. Before comparing two reports it MUST check, for each of
 
 | field | valid when | and |
 |---|---|---|
-| `schemaVersion` | an integer, and **exactly `4`** | equal in both |
+| `schemaVersion` | an integer, and **exactly `5`** | equal in both |
 | `toolVersion` | a non-empty string | equal in both |
 | `root` | a non-empty string matching `git:<16 hex>` | equal in both |
 | `configDigest` | a non-empty string of 16 hex characters | equal in both |

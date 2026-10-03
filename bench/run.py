@@ -30,18 +30,27 @@ def run_cli(args, out):
     return json.load(open(out))
 
 
-def scan(root, dest, named_only):
+def scan(root, dest, entropy_on):
+    """One arm of corpus A. `entropy_on` passes `--include-entropy` to BOTH the tree and
+    the history scan: the flag is raise-only in the CLI, so the tier runs whatever a
+    project file says. The other arm switches the tier off through an explicit project
+    file rather than relying on the default (which has been off since 0.4.0 -- when it
+    flipped, an arm that merely omitted the flag silently became a second entropy-off
+    arm, and the two labels measured one configuration). Each report's `configDigest`
+    is returned so the caller can check that the two arms really differ."""
     cfg = os.path.join(root, ".secretloop.json")
-    if named_only:
+    flags = ["--include-entropy"] if entropy_on else []
+    wrote_cfg = not entropy_on
+    if wrote_cfg:
         open(cfg, "w").write('{"entropyPassEnabled": false}\n')
     try:
-        tree = run_cli(["scan", "--path", root], os.path.join(dest, "t.json"))
-        hist = run_cli(["history", "--path", root], os.path.join(dest, "h.json"))
+        tree = run_cli(["scan", "--path", root, *flags], os.path.join(dest, "t.json"))
+        hist = run_cli(["history", "--path", root, *flags], os.path.join(dest, "h.json"))
     finally:
-        if named_only and os.path.exists(cfg):
+        if wrote_cfg and os.path.exists(cfg):
             os.remove(cfg)
     rows = lambda d: [(f["file"], f["line"], f["ruleId"]) for f in d["findings"]]
-    return rows(tree), rows(hist)
+    return rows(tree), rows(hist), tree.get("configDigest")
 
 
 def corpus_b(path):
@@ -110,12 +119,21 @@ def main():
         tree_sec, tree_dec, hist_sec = scoring.label_index(labels)
 
         result = {"corpus_a": {}}
-        for tier, named in (("entropy-on", False), ("named-only", True)):
-            t, h = scan(root, dest, named)
+        digests = {}
+        for tier, entropy_on in (("entropy-on", True), ("named-only", False)):
+            t, h, digests[tier] = scan(root, dest, entropy_on)
             result["corpus_a"][tier] = {
                 "tree": scoring.score(t, tree_sec, tree_dec),
                 "history": scoring.score(h, hist_sec, tree_dec),
             }
+        # Identical totals cannot show the flag took effect -- corpus A's decoys are
+        # high-entropy by design and the tier reports none of them, so both arms score
+        # the same either way. The configuration identity can: it must differ.
+        if digests["entropy-on"] == digests["named-only"]:
+            sys.exit("bench: the entropy-on and named-only arms resolved to the same "
+                     "configuration identity -- the tier was not enabled; refusing to "
+                     "report two arms that measured one configuration.")
+        result["corpus_a"]["config_digests"] = digests
         if a.corpus_b:
             result["corpus_b"] = corpus_b(a.corpus_b)
     finally:

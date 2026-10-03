@@ -62,6 +62,19 @@
   two-account results stay x64 results. Local accounts say nothing about domain
   accounts. Non-English hosts, managed or relocated profiles, and non-NTFS
   volumes are still unexercised.
+- **The benchmark's `entropy-on` arm now enables the entropy tier.** Since
+  0.4.0 made the tier opt-in, `bench/run.py`'s arm of that name had run with the
+  tier **off**: it never passed `--include-entropy`, so both arms measured one
+  configuration, and any `entropy-on` row produced after 8 September 2026 was an
+  entropy-off measurement. The tables in `bench/BASELINE.md` predate the flip and
+  stand; the file now says which runs the mislabel affected. The arm passes
+  `--include-entropy` to both the tree and the history scan, the `named-only` arm
+  switches the tier off through an explicit project file, and the run stops if
+  the two arms resolve to the same configuration identity. Corpus A scores the
+  same under the corrected arm — its decoys are high-entropy by design and the
+  tier reports none of them — so the flag's effect was shown on a separate
+  control, not inferred from equal totals. Scoring, labels and rules are
+  unchanged.
 
 ### Consent
 
