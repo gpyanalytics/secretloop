@@ -1,6 +1,55 @@
 # Baseline
 
-## Current baseline — generator scratch moved out of the corpus, 29 August 2026
+## Note on the `entropy-on` arm — 4 October 2026
+
+`bench/run.py` has two corpus A arms, `entropy-on` and `named-only`. Until the
+correction recorded here, the `entropy-on` arm did not pass `--include-entropy`;
+it simply omitted the project file the `named-only` arm writes. That was a real
+distinction while the entropy tier was on by default, so **every table below,
+all recorded on 29 August 2026, is a genuine two-arm measurement.** On
+8 September 2026 (0.4.0, commit `fd01370`) the tier became opt-in, and from that
+day the `entropy-on` arm measured the tier **off**: both arms ran one
+configuration (same `configDigest`, `3071344b11905ec5`), and any `entropy-on` row
+produced between 8 September and this correction — including the release-validation
+benchmark runs of 3 October 2026 — is an entropy-off measurement under an
+entropy-on label. The arm now passes `--include-entropy` to both the tree and the
+history scan, the `named-only` arm switches the tier off through an explicit
+project file, and the run refuses to report if the two arms resolve to the same
+configuration identity.
+
+### Corpus A — corrected `entropy-on` measurement, 4 October 2026
+
+Provenance: `bench/run.py` as corrected here, run on the `main` build at
+`98847c26fb69e826a491d6e25223d0efae30ddf8` (`out/cli.js` sha256
+`229475b76a93149ea9114d3733b3aa6dd7e818e4db11ecd12ac7de77c0b3c94d`, node
+v26.8.1, darwin arm64); corpus A regenerated from seed 20260829 with the labels
+matching `bench/labels.json`; `entropy-on` = `--include-entropy` on both scans
+(`configDigest 7565a70d15c1b1b6`), `named-only` = `{"entropyPassEnabled": false}`
+in the corpus root (`configDigest 3071344b11905ec5`).
+
+| tier / scan | found | TP | FP decoy | FP other | detected | precision | recall | F1 |
+|---|---|---|---|---|---|---|---|---|
+| entropy-on tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
+| entropy-on history | 60 | 60 | 0 | 0 | 60/60 | 1.000 | 1.000 | 1.000 |
+| named-only tree | 50 | 50 | 0 | 0 | 50/50 | 1.000 | 1.000 | 1.000 |
+| named-only history | 60 | 60 | 0 | 0 | 60/60 | 1.000 | 1.000 | 1.000 |
+
+The rows equal the entropy-off rows, and that is a property of the corpus, not
+proof that the flag did nothing: corpus A's 120 decoys are high-entropy or
+credential-shaped by design and the tier reports none of them, so its arms score
+the same with the tier on or off. The flag's effect was shown separately, on a
+disposable one-commit repository holding two random 48-character tokens (a
+quoted assignment value and a bare `name: value`): 0 findings with the tier off,
+2 `generic-high-entropy` findings with it on, with the same two fingerprints
+from the 0.6.0 build and from this one. Scoring, labels and rules were not
+changed to obtain any number above.
+
+**Corpus B is not re-measured here, and its limitation stays open.** The
+real-noise repository in the tables below is unnamed and its commit unrecorded,
+so its rows cannot be re-run; a corrected `entropy-on` figure for it does not
+exist. Naming and pinning a corpus B is still the smallest next step.
+
+## Current baseline — generator scratch moved out of the corpus, 29 August 2026 (both arms genuine; the tier was on by default then)
 
 Recorded by running `python3 bench/run.py --corpus-b /path/to/real-noise-repo`
 against the build at this commit. Corpus A regenerated from seed 20260829; the
