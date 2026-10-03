@@ -954,17 +954,42 @@ jobs:
           $wantSet = ((@($X, $Y) | Sort-Object) -join ",")
           "new-volume set : [$newSet] ; created : [$wantSet]"
           if ($newSet -ne $wantSet) { throw "FIXTURE: the set of new volumes [$newSet] is not exactly the two this job created [$wantSet]" }
-          # The NTFS control's root: owner / SYSTEM / Administrators only, on the disposable volume.
+          # THE NTFS CONTROL'S SHAPE: a stock volume root above a PRIVATE immediate parent -- the same
+          # shape as a real profile (C:\ above %USERPROFILE%), and the same shape the two-account
+          # fixture builds. Run 37129717425 measured why the root itself must be left alone: a volume
+          # root's BUILTIN\Users, Everyone and CREATOR OWNER entries are EXPLICIT (there is no parent
+          # to inherit from), so /inheritance:r removed nothing and /grant:r only replaced the three
+          # named grants; the root then passed the product's non-immediate-ancestor rule exactly as a
+          # stock C:\ does, while sl-n2 inherited Users:(CI)(AD) -- add-subdirectory, 0x4 -- and was
+          # refused as the store's IMMEDIATE parent (detail: Y:\sl-n2, S-1-5-32-545, 0x4). That was the
+          # product being right about the harness. So the immediate parent is made private the way
+          # the two-account fixture's "private" directory is (checked icacls, the ACL printed, the
+          # precondition asserted), and the root is only printed.
           $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
           $yRoot = "$($Y):\\"
-          "--- $($Y):\ as formatted"; icacls $yRoot
-          icacls $yRoot /inheritance:r /q
-          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not remove inherited entries from $($Y):\ (icacls exit $LASTEXITCODE)" }
-          icacls $yRoot /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
-          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not set the NTFS control root's access list (icacls exit $LASTEXITCODE)" }
-          "--- $($Y):\ as the control will use it"; icacls $yRoot
+          "--- $($Y):\ as formatted (left as the stock non-immediate ancestor it is)"; icacls $yRoot
           New-Item -ItemType Directory -Force "$($X):\sl-n2" | Out-Null
-          New-Item -ItemType Directory -Force "$($Y):\sl-n2" | Out-Null
+          $private = "$($Y):\sl-n2"
+          New-Item -ItemType Directory -Force $private | Out-Null
+          icacls $private /inheritance:r /q
+          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not remove inherited ACEs from $private (icacls exit $LASTEXITCODE)" }
+          icacls $private /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
+          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not set the private parent's access list (icacls exit $LASTEXITCODE)" }
+          "--- $private, as the product's immediate parent will see it"
+          $privateAcl = (icacls $private | Out-String)
+          $privateAcl
+          $ownerSid = (Get-Acl -LiteralPath $private).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+          "owner of $private : $ownerSid (runner $sid)"
+          if (@($sid, "S-1-5-32-544", "S-1-5-18") -notcontains $ownerSid) { throw "FIXTURE: $private is owned by $ownerSid, which the store rule does not accept as a parent's owner" }
+          # Fixture-level NAMED-PRINCIPAL checks, so a failed strip is a fixture failure with the ACL in
+          # the log rather than a product refusal. Not an exhaustive validation of the access list: an
+          # unexpected further SID would pass them, and the product's ancestor rule stays the authority
+          # on what this parent may grant.
+          if ($privateAcl -match '\(I\)') { throw "FIXTURE: $private still carries an INHERITED entry after /inheritance:r:`n$privateAcl" }
+          if ($privateAcl -match 'BUILTIN\\Users:|Authenticated Users:|Everyone:|CREATOR OWNER:') { throw "FIXTURE: $private grants a principal the product forbids on a store's parent:`n$privateAcl" }
+          foreach ($must in @('NT AUTHORITY\SYSTEM:', 'BUILTIN\Administrators:')) {
+            if ($privateAcl -notmatch [regex]::Escape($must)) { throw "FIXTURE: $private is missing the required grant for $must :`n$privateAcl" }
+          }
           "--- $($X):\ (exFAT) as icacls reports it, informational -- the product's own view follows in the next step"
           icacls "$($X):\\" 2>&1 | Out-String
       - name: Filesystem evidence, as the product sees it (owner SID and SDDL of the disposable roots)
