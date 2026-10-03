@@ -47,6 +47,15 @@
   fixed under *Performance* above; with the module-qualified helper the same
   smoke passed on the ARM64 runner. The smoke's threshold was not raised. The
   VSIX smoke passes.
+- **The consent store is now checked on an exFAT volume in CI.** A job on the
+  x64 runner creates two disposable virtual disks, formats one exFAT and one
+  NTFS, verifies both filesystem types with `fsutil` and `Get-Volume`, and runs
+  the real scan-then-verify path against each: on exFAT the first consent
+  operation is **refused before creating anything** (the volume reports
+  Everyone as owner and no access list; refusal code `unsafe-parent`), with no
+  record and no provider request; on NTFS the same call asks for consent. One
+  exFAT volume on one image, in-job; not a statement about FAT32, ReFS, network
+  or other filesystems. Not a required check.
 - **What that does not establish.** One hosted image is not universal client
   support. The ordinary suite jobs run **elevated**, so only the two-account
   jobs are evidence about ordinary-account behaviour, and the existing x64

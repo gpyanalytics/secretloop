@@ -138,9 +138,15 @@ and the architecture and fails rather than warns if either is untrue (PR #95; th
 same suites, two-account fixture and packaging smokes now run on every change on
 `windows-11-arm`, at Node 20 and 22 because Node 18 publishes no Windows ARM64
 build). Those are two environments, not a statement that Windows is supported
-everywhere. Domain accounts and domain groups, profiles that are roamed,
-redirected or otherwise managed, non-NTFS volumes and non-English hosts have not
-been exercised, so nothing is claimed about them.
+everywhere. A consent store on an **exFAT** volume was exercised once, on the
+x64 image, through a volume created in the job itself: the product refused
+before creating anything — the volume reports Everyone as its owner and no
+access list, which the path check does not accept — with nothing written and no
+provider request, while the same call on an NTFS volume created beside it asked
+for consent. That is one exFAT volume on one machine; FAT32, ReFS, network
+filesystems and other non-NTFS layouts were not exercised. Domain accounts and
+domain groups, profiles that are roamed, redirected or otherwise managed, and
+non-English hosts have not been exercised, so nothing is claimed about them.
 
 Eighteen of the rules have a verifier, covering fifteen providers. A credential
 matched by any other rule is never transmitted, whatever the flag says. One of
