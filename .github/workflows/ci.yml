@@ -781,6 +781,306 @@ jobs:
         run: npm run smoke:vsix
 
 
+  test-windows-exfat:
+    # W3 FROM THE 0.7.0 RECONCILIATION: THE CONSENT STORE ON A VOLUME WITHOUT SECURITY DESCRIPTORS.
+    #
+    # exFAT keeps no owner and no access list, so the Windows store rules cannot be satisfied there
+    # and the product must REFUSE, closed, before creating anything -- a store that merely "works"
+    # on such a volume would be a store any account can rewrite. This job builds two DISPOSABLE
+    # virtual disks inside RUNNER_TEMP with in-box tooling (diskpart; the Hyper-V New-VHD cmdlet is
+    # probed and reported but not relied on), formats one exFAT and one NTFS, verifies both
+    # filesystem types with fsutil BEFORE the product is invoked, runs the real scan-then-verify
+    # path once against each, and asserts:
+    #
+    #   exFAT  -> refused with the ancestor rule's own code, `unsafe-parent` (src/consent-acl-win.ts,
+    #             decideAncestorRules / evaluateInspected: a volume root that grants Everyone, or whose
+    #             owner is no trusted principal, is exactly that case), no store directory created,
+    #             no record written, zero provider requests
+    #   NTFS   -> CONSENT_REQUIRED, one pending record, zero provider requests (the positive control:
+    #             the same harness, the same call, a filesystem with descriptors)
+    #
+    # The NTFS control's volume root is re-permissioned to owner/SYSTEM/Administrators because a
+    # FRESHLY FORMATTED NTFS root grants Authenticated Users modify, which the ancestor rule refuses
+    # for a reason of its own -- the control must fail only if the product fails, not the harness.
+    # That icacls call touches the disposable volume only. Nothing here formats, mounts over or
+    # inspects an existing runner volume, and the runner's real profile store is never used: the
+    # consent root is a directory on the disposable volume, set through the product's own test seam.
+    #
+    # What this establishes is one exFAT volume on one hosted x64 image refusing as the source
+    # says it must. It is not a statement about every non-NTFS filesystem, about FAT32, ReFS or
+    # network filesystems, or about any other machine. Not a required check.
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - name: Runner storage capabilities, measured before anything is chosen
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          "elevated : $(([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator))"
+          foreach ($c in @("diskpart", "fsutil", "icacls", "New-VHD", "Format-Volume", "Get-Volume")) {
+            $cmd = Get-Command $c -ErrorAction SilentlyContinue
+            "$c : " + $(if ($cmd) { "present (" + $cmd.Source + ")" } else { "absent" })
+          }
+          "Hyper-V module : " + $(if (Get-Module -ListAvailable -Name Hyper-V) { "present" } else { "absent" })
+          "Storage module : " + $(if (Get-Module -ListAvailable -Name Storage) { "present" } else { "absent" })
+          if (-not (Get-Command diskpart -ErrorAction SilentlyContinue)) { throw "CAPABILITY: diskpart is not available; no in-box way to create a disposable volume on this runner" }
+          "mechanism chosen : diskpart (create/attach/format/assign a VDISK under RUNNER_TEMP); fsutil verifies the filesystem type"
+          "volumes before   : " + ((Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }) -join " ")
+      - name: Provision two disposable volumes (exFAT, NTFS) and verify their filesystem types
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $lab = Join-Path $env:RUNNER_TEMP "sl-n2"
+          New-Item -ItemType Directory -Force $lab | Out-Null
+          $marker = Join-Path $lab "vdisks.txt"
+          "" | Set-Content -Path $marker -Encoding ASCII
+          $before = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name })
+          # Two free letters, high end first, that no existing volume uses.
+          $free = @()
+          foreach ($code in (90..81)) { $l = [char]$code; if ($before -notcontains "$l" -and -not (Test-Path "$($l):\")) { $free += "$l" } }
+          if ($free.Count -lt 2) { throw "FIXTURE: fewer than two free drive letters on this runner" }
+          $X = $free[0]; $Y = $free[1]
+          "letters chosen : exFAT=$X NTFS=$Y (free before: $($free -join ' '))"
+          function New-DisposableVolume($file, $letter, $fs) {
+            # Every operation names the VDISK FILE this job just created, never an existing disk.
+            $script = @(
+              "create vdisk file=`"$file`" maximum=64 type=fixed",
+              "select vdisk file=`"$file`"",
+              "attach vdisk",
+              "create partition primary",
+              "format fs=$fs quick label=SLN2$fs",
+              "assign letter=$letter",
+              "exit"
+            )
+            $scriptPath = "$file.diskpart.txt"
+            Set-Content -Path $scriptPath -Value $script -Encoding ASCII
+            # Recorded in the manifest BEFORE diskpart runs, so a disk that attached and then failed a
+            # later command is still detached by the failure path and by the always-cleanup step.
+            Add-Content -Path $marker -Value $file -Encoding ASCII
+            "--- diskpart script for $fs"; Get-Content $scriptPath
+            $outText = & diskpart /s $scriptPath 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            $outText
+            if ($code -ne 0) { throw "FIXTURE: diskpart exited $code creating the $fs volume" }
+            if (-not (Test-Path "$($letter):\")) { throw "FIXTURE: $($letter): is not present after diskpart reported success" }
+          }
+          $exfatVhd = Join-Path $lab "exfat.vhd"
+          $ntfsVhd = Join-Path $lab "ntfs.vhd"
+          # Recorded for the cleanup step BEFORE anything that can fail: the marker lives at a fixed
+          # path under RUNNER_TEMP, so cleanup does not depend on this step reaching its last line.
+          "SLN2_LAB=$lab" >> $env:GITHUB_ENV
+          "SLN2_X=$X" >> $env:GITHUB_ENV
+          "SLN2_Y=$Y" >> $env:GITHUB_ENV
+          # Idempotent detach of ONE recorded VHD: its attached state is read from the disk image
+          # itself (Get-DiskImage) before and after, so an already-detached disk is reported as such
+          # on evidence, and a detach that diskpart accepted but did not take effect is a failure.
+          # Returns $true when the file ends detached (or never existed), $false on a genuine failure.
+          function Detach-Recorded($f, $tag) {
+            if (-not (Test-Path $f)) { Write-Host "$tag $f was never created; nothing to detach"; return $true }
+            $img = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+            if ($null -eq $img) { Write-Host "$tag $f : Get-DiskImage could not read it; attempting detach anyway" }
+            elseif (-not $img.Attached) { Write-Host "$tag already detached (confirmed by Get-DiskImage) $f"; return $true }
+            "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
+            $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
+            $dc = $LASTEXITCODE
+            $after = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+            if ($null -ne $after -and -not $after.Attached) { Write-Host "$tag detached (confirmed) $f (diskpart exit $dc)"; return $true }
+            Write-Host "$tag detach FAILED for $f (diskpart exit $dc; attached=$($after.Attached))"; Write-Host $dt; return $false
+          }
+          function Detach-All {
+            # Every recorded VHD is attempted; each outcome is reported; nothing unrecorded is touched.
+            $problems = 0
+            foreach ($f in (Get-Content $marker | Where-Object { $_ })) { if (-not (Detach-Recorded $f "cleanup (on failure):")) { $problems++ } }
+            Write-Host "cleanup (on failure): $problems detach failure(s)"
+          }
+          # THE FILESYSTEM TYPES, MEASURED, before the product sees either volume. Two independent
+          # witnesses: fsutil (in-box) and Get-Volume (Storage module). The first run of this job
+          # failed at the fsutil read with a non-zero exit and no output captured, so WHY it failed is
+          # not known. This form removes two things that could hide a cause without asserting either
+          # was it: the volume is named as "Z:" (no trailing backslash before a closing quote), and
+          # the exit code and output of every attempt are captured immediately and printed. A
+          # bounded retry (5 x 1 s, provisioning only) covers a letter that is assigned before it is
+          # mounted; nothing about the product is ever retried.
+          # Diagnostics go to Write-Host: a PowerShell function returns EVERY uncaptured expression,
+          # and the second run of this job failed exactly there -- the comparison saw the attempt
+          # lines and fsutil's whole output concatenated with the name (the thrown message shows it).
+          function Get-FsName($letter) {
+            $info = ""; $code = -1
+            foreach ($attempt in 1..5) {
+              $info = & fsutil fsinfo volumeinfo "$($letter):" 2>&1 | Out-String
+              $code = $LASTEXITCODE
+              Write-Host "fsutil attempt $attempt for $($letter): exit $code"
+              if ($code -eq 0) { break }
+              Start-Sleep -Seconds 1
+            }
+            Write-Host "--- fsutil output for $($letter): (exit $code)"; Write-Host $info
+            if ($code -ne 0) { throw "FIXTURE: fsutil could not read $($letter): (exit $code after 5 attempts)" }
+            $m = [regex]::Match($info, "File System Name\s*:\s*(\S+)")
+            if (-not $m.Success) { throw "FIXTURE: fsutil output for $($letter): names no file system" }
+            return [string]$m.Groups[1].Value
+          }
+          try {
+            New-DisposableVolume $exfatVhd $X "exfat"
+            New-DisposableVolume $ntfsVhd $Y "ntfs"
+            $fsX = Get-FsName $X; $fsY = Get-FsName $Y
+            "fsutil : $($X): = $fsX ; $($Y): = $fsY"
+            if (-not (Get-Command Get-Volume -ErrorAction SilentlyContinue)) { throw "FIXTURE: Get-Volume is not available, so the filesystem types cannot be confirmed by a second witness" }
+            $volX = Get-Volume -DriveLetter $X -ErrorAction Stop; $volY = Get-Volume -DriveLetter $Y -ErrorAction Stop
+            "Get-Volume : $($X): = $($volX.FileSystemType) label $($volX.FileSystemLabel) size $($volX.Size) ; $($Y): = $($volY.FileSystemType) label $($volY.FileSystemLabel) size $($volY.Size)"
+            if ("$($volX.DriveLetter)" -ne "$X" -or "$($volY.DriveLetter)" -ne "$Y") { throw "FIXTURE: Get-Volume does not report the assigned letters" }
+            if ("$($volX.FileSystemType)" -ne "exFAT" -or "$($volY.FileSystemType)" -ne "NTFS") { throw "FIXTURE: Get-Volume disagrees with the intended types ($($volX.FileSystemType) / $($volY.FileSystemType))" }
+            if ($fsX -ne "exFAT") { throw "FIXTURE: $($X): is $fsX, not exFAT; the negative case would measure the wrong thing" }
+            if ($fsY -ne "NTFS") { throw "FIXTURE: $($Y): is $fsY, not NTFS; the positive control would measure the wrong thing" }
+          } catch {
+            # Detach whatever did attach, then fail the step: a half-built fixture is not evidence.
+            Detach-All
+            throw
+          }
+          $after = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name })
+          $new = @($after | Where-Object { $before -notcontains $_ })
+          "volumes after : $($after -join ' ') ; new: $($new -join ' ')"
+          # Compared as two explicit strings. The third run of this job printed "new: Y Z" -- exactly
+          # the two letters it created -- and still threw here, so the single-expression comparison
+          # was evaluating something other than those two strings; each side is now built first and
+          # both are printed, so the check stays exact and its verdict is legible.
+          $newSet = ((@($new) | Sort-Object) -join ",")
+          $wantSet = ((@($X, $Y) | Sort-Object) -join ",")
+          "new-volume set : [$newSet] ; created : [$wantSet]"
+          if ($newSet -ne $wantSet) { throw "FIXTURE: the set of new volumes [$newSet] is not exactly the two this job created [$wantSet]" }
+          # THE NTFS CONTROL'S SHAPE: a stock volume root above a PRIVATE immediate parent -- the same
+          # shape as a real profile (C:\ above %USERPROFILE%), and the same shape the two-account
+          # fixture builds. Run 37129717425 measured why the root itself must be left alone: a volume
+          # root's BUILTIN\Users, Everyone and CREATOR OWNER entries are EXPLICIT (there is no parent
+          # to inherit from), so /inheritance:r removed nothing and /grant:r only replaced the three
+          # named grants; the root then passed the product's non-immediate-ancestor rule exactly as a
+          # stock C:\ does, while sl-n2 inherited Users:(CI)(AD) -- add-subdirectory, 0x4 -- and was
+          # refused as the store's IMMEDIATE parent (detail: Y:\sl-n2, S-1-5-32-545, 0x4). That was the
+          # product being right about the harness. So the immediate parent is made private the way
+          # the two-account fixture's "private" directory is (checked icacls, the ACL printed, the
+          # precondition asserted), and the root is only printed.
+          $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+          $yRoot = "$($Y):\\"
+          "--- $($Y):\ as formatted (left as the stock non-immediate ancestor it is)"; icacls $yRoot
+          New-Item -ItemType Directory -Force "$($X):\sl-n2" | Out-Null
+          $private = "$($Y):\sl-n2"
+          New-Item -ItemType Directory -Force $private | Out-Null
+          icacls $private /inheritance:r /q
+          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not remove inherited ACEs from $private (icacls exit $LASTEXITCODE)" }
+          icacls $private /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
+          if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not set the private parent's access list (icacls exit $LASTEXITCODE)" }
+          "--- $private, as the product's immediate parent will see it"
+          $privateAcl = (icacls $private | Out-String)
+          $privateAcl
+          $ownerSid = (Get-Acl -LiteralPath $private).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
+          "owner of $private : $ownerSid (runner $sid)"
+          if (@($sid, "S-1-5-32-544", "S-1-5-18") -notcontains $ownerSid) { throw "FIXTURE: $private is owned by $ownerSid, which the store rule does not accept as a parent's owner" }
+          # Fixture-level NAMED-PRINCIPAL checks, so a failed strip is a fixture failure with the ACL in
+          # the log rather than a product refusal. Not an exhaustive validation of the access list: an
+          # unexpected further SID would pass them, and the product's ancestor rule stays the authority
+          # on what this parent may grant.
+          if ($privateAcl -match '\(I\)') { throw "FIXTURE: $private still carries an INHERITED entry after /inheritance:r:`n$privateAcl" }
+          if ($privateAcl -match 'BUILTIN\\Users:|Authenticated Users:|Everyone:|CREATOR OWNER:') { throw "FIXTURE: $private grants a principal the product forbids on a store's parent:`n$privateAcl" }
+          foreach ($must in @('NT AUTHORITY\SYSTEM:', 'BUILTIN\Administrators:')) {
+            if ($privateAcl -notmatch [regex]::Escape($must)) { throw "FIXTURE: $private is missing the required grant for $must :`n$privateAcl" }
+          }
+          "--- $($X):\ (exFAT) as icacls reports it, informational -- the product's own view follows in the next step"
+          icacls "$($X):\\" 2>&1 | Out-String
+      - name: Filesystem evidence, as the product sees it (owner SID and SDDL of the disposable roots)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          node -e "
+            const acl = require('./out/consent-acl-win.js');
+            const sid = acl.currentUserSid();
+            console.log('runner sid:', sid);
+            const paths = ['$($env:SLN2_X):\\', '$($env:SLN2_X):\\sl-n2', '$($env:SLN2_Y):\\', '$($env:SLN2_Y):\\sl-n2'];
+            const info = acl.inspectPaths(paths);
+            if (!info.ok) { console.log('inspect failed:', info.problem); process.exit(0); }
+            for (const p of paths) {
+              const e = info.byPath.get(require('path').win32.resolve(p).toLowerCase());
+              console.log(p, '-> exists', e && e.exists, 'dir', e && e.isDirectory, 'owner', e && e.ownerSid, 'unreadable', e && e.unreadable);
+              console.log('   sddl', e && e.sddl);
+            }
+          "
+          if ($LASTEXITCODE -ne 0) { throw "the product-view inspection did not run (node exit $LASTEXITCODE); that is a non-measurement" }
+      - name: exFAT — the real first verify must refuse, closed, with the ancestor rule's code
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $store = "$($env:SLN2_X):\sl-n2\consent"; $repo = "$($env:SLN2_X):\sl-n2\repo"
+          $out = & node (Join-Path $PWD "tests\fixtures\win-volume-consent.js") --out (Join-Path $PWD "out") --store $store --repo $repo 2>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "the fixture did not complete (exit $LASTEXITCODE); that is a non-measurement, not a refusal" }
+          $line = ($out -split "`n" | Where-Object { $_ -match '^VOLUME-RESULT ' } | Select-Object -First 1)
+          if (-not $line) { throw "no VOLUME-RESULT line" }
+          $r = ($line -replace '^VOLUME-RESULT ', '') | ConvertFrom-Json
+          if ($r.ok -ne $false) { throw "exFAT: the product ACCEPTED a consent store on a volume without security descriptors (state $($r.state)); that is the finding this job exists to catch" }
+          if ($r.refusal -ne "unsafe-parent") { throw "exFAT: refused, but with '$($r.refusal)' rather than the ancestor rule's 'unsafe-parent'; the refusal is closed either way, and this difference needs review, not a widened assertion" }
+          if ($r.outbound -ne 0) { throw "exFAT: a provider request was attempted ($($r.outbound))" }
+          if ($r.storeExists -ne $false) { throw "exFAT: a store directory was created before the refusal" }
+          if ($r.pendingRecords -ne 0) { throw "exFAT: a record was written ($($r.pendingRecords))" }
+          "exFAT: refused as unsafe-parent before creation, nothing written, zero provider requests, $($r.elapsedMs) ms; detail: $($r.detail | ConvertTo-Json -Compress)"
+      - name: NTFS control — the same call on a volume with descriptors must ask for consent
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $store = "$($env:SLN2_Y):\sl-n2\consent"; $repo = "$($env:SLN2_Y):\sl-n2\repo"
+          $out = & node (Join-Path $PWD "tests\fixtures\win-volume-consent.js") --out (Join-Path $PWD "out") --store $store --repo $repo 2>&1 | Out-String
+          $out
+          if ($LASTEXITCODE -ne 0) { throw "the control fixture did not complete (exit $LASTEXITCODE)" }
+          $line = ($out -split "`n" | Where-Object { $_ -match '^VOLUME-RESULT ' } | Select-Object -First 1)
+          if (-not $line) { throw "no VOLUME-RESULT line" }
+          $r = ($line -replace '^VOLUME-RESULT ', '') | ConvertFrom-Json
+          if ($r.ok -ne $true) { throw "NTFS control: refused ('$($r.refusal)'), so the harness, not the filesystem, would explain the exFAT result; detail: $($r.detail | ConvertTo-Json -Compress)" }
+          if ($r.state -ne "CONSENT_REQUIRED") { throw "NTFS control: state $($r.state), not CONSENT_REQUIRED" }
+          if ($r.outbound -ne 0) { throw "NTFS control: a provider request was attempted ($($r.outbound))" }
+          if ($r.pendingRecords -ne 1) { throw "NTFS control: expected one pending record, found $($r.pendingRecords)" }
+          "--- the control store as created"; icacls $store; icacls (Join-Path $store "pending")
+          "NTFS control: CONSENT_REQUIRED, one pending record, zero provider requests, $($r.elapsedMs) ms"
+      - name: Detach and delete the disposable volumes
+        if: always()
+        shell: pwsh
+        run: |
+          # Cleanup only touches the VDISK files this job recorded; nothing else is detached. The
+          # marker path is fixed, so this runs even when provisioning failed before exporting anything.
+          $marker = Join-Path (Join-Path $env:RUNNER_TEMP "sl-n2") "vdisks.txt"
+          if (-not (Test-Path $marker)) { "nothing recorded; nothing to clean"; exit 0 }
+          $failed = 0; $left = @()
+          foreach ($f in (Get-Content $marker | Where-Object { $_ })) {
+            if (-not (Test-Path $f)) { "$f was never created; nothing to detach"; continue }
+            $img = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+            if ($null -ne $img -and -not $img.Attached) {
+              "already detached (confirmed by Get-DiskImage) $f"
+            } else {
+              "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
+              $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
+              $dc = $LASTEXITCODE
+              $after = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+              if ($null -ne $after -and -not $after.Attached) { "detached (confirmed) $f (diskpart exit $dc)" }
+              else { "detach FAILED for $f (diskpart exit $dc; attached=$($after.Attached))"; $dt; $failed++; $left += $f; continue }
+            }
+            Remove-Item -Force -ErrorAction SilentlyContinue $f, "$f.diskpart.txt", "$f.detach.txt"
+            "removed : $(-not (Test-Path $f))  $f"
+            if (Test-Path $f) { $left += $f }
+          }
+          "volumes now : " + ((Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }) -join " ")
+          # Everything this job created must be gone: its two letters, its VHD files, its lab.
+          foreach ($l in @($env:SLN2_X, $env:SLN2_Y)) { if ($l -and (Test-Path "$($l):\")) { "letter $($l): is still present"; $left += "$($l):" } }
+          $lab = Join-Path $env:RUNNER_TEMP "sl-n2"
+          if ($failed -eq 0) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $lab }
+          "lab removed : $(-not (Test-Path $lab))"
+          if (Test-Path $lab) { $left += $lab }
+          if ($failed -ne 0 -or $left.Count -ne 0) { throw "cleanup: $failed genuine detach failure(s); still present: $($left -join ', ')" }
+          "cleanup verified: no job-created volume, VHD or lab directory remains"
+
+
   self-scan:
     # A secret scanner that leaks a secret is the worst possible headline, so
     # the tool runs against its own repo on every PR.
