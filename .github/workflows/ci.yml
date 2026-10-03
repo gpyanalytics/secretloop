@@ -329,10 +329,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           # Read from the resolved install rather than the declared range:
-          # package.json asks for "^3.0.0", which settles nothing about what
-          # is installed. @vscode/vsce 3.9.2 requires node ">= 20" -- agreed by
-          # the installed package, package-lock.json and the registry entry for
-          # that immutable version (checked 2026-09-04).
+          # package.json asks for "^4.0.0", which settles nothing about what
+          # is installed. @vscode/vsce 4.0.0 declares engines.node ">= 22", and
+          # ovsx 1.2.0 ">=22.0.0" -- read from the installed packages and
+          # package-lock.json (checked 2026-10-03). So 22 is a hard floor for
+          # the publish tools, not only the supported line chosen below.
           #
           # Not 20, because Node 20 reached end-of-life on 2026-04-30 per the
           # Node release schedule and is no longer a supported release line.

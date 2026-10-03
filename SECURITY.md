@@ -71,9 +71,19 @@ is mounted on can arrange what appears there. A world-writable directory on the
 path is accepted only when it is sticky AND owned by you or root; measured, a
 second ordinary account cannot then rename or delete your store, though it can
 still create the name before you do, which the ownership rule answers separately.
-This refuses some working setups, and the ones it refuses are listed in
-`docs/mcp.md`. It closes no window against a process already running as you, and
-a directory re-permissioned after it was inspected is not seen.
+This refuses some working setups: a group-writable home directory, even if the
+group contains only you, because there is no portable way to ask who else belongs
+to a group; a home under a directory owned by another ordinary account; a
+world-writable directory anywhere on the path unless it is sticky and owned by
+you or root, which is why `/tmp` still works; a path that needs more than 64
+directories inspected in the walk, or 40 on macOS where each also costs one
+`ls` — counted as inspected directories, not levels, so a symbolic link on the
+path roughly halves the depth that fits; and, on macOS, an ancestor carrying an
+`allow` access-control entry, even one naming only you — a support restriction,
+not a judgement about your access list. The full list, with the measurements
+behind it, is in `docs/mcp.md`. It closes no window against a process already
+running as you, and a directory re-permissioned after it was inspected is not
+seen.
 
 **Access-control lists differ by platform, and the difference is measured.** On
 **Linux** the POSIX ACL mask and the group bits of the mode move together, so
@@ -120,12 +130,17 @@ code already running as you. A store under a folder that grants other accounts i
 now refused and will not be created, and a store on a network or UNC path is
 refused because these checks have not been established for that kind of location.
 
-Where this was exercised: local accounts on one hosted Windows Server 2025 image
-with an NTFS volume, in English, with the checks driven by an ordinary account
-against a second ordinary account. That is one environment, not a statement that
-Windows is supported everywhere. Domain accounts and domain groups, profiles that
-are roamed, redirected or otherwise managed, non-NTFS volumes, non-English hosts
-and ARM64 have not been exercised, so nothing is claimed about them.
+Where this was exercised: local accounts on two hosted images, each with an NTFS
+volume, in English, with the checks driven by an ordinary account against a
+second ordinary account — Windows Server 2025 on x64, and Windows 11 Enterprise
+10.0.26200 on native ARM64, a client edition, where the job asserts the edition
+and the architecture and fails rather than warns if either is untrue (PR #95; the
+same suites, two-account fixture and packaging smokes now run on every change on
+`windows-11-arm`, at Node 20 and 22 because Node 18 publishes no Windows ARM64
+build). Those are two environments, not a statement that Windows is supported
+everywhere. Domain accounts and domain groups, profiles that are roamed,
+redirected or otherwise managed, non-NTFS volumes and non-English hosts have not
+been exercised, so nothing is claimed about them.
 
 Eighteen of the rules have a verifier, covering fifteen providers. A credential
 matched by any other rule is never transmitted, whatever the flag says. One of
