@@ -878,17 +878,27 @@ jobs:
           "SLN2_LAB=$lab" >> $env:GITHUB_ENV
           "SLN2_X=$X" >> $env:GITHUB_ENV
           "SLN2_Y=$Y" >> $env:GITHUB_ENV
+          # Idempotent detach of ONE recorded VHD: its attached state is read from the disk image
+          # itself (Get-DiskImage) before and after, so an already-detached disk is reported as such
+          # on evidence, and a detach that diskpart accepted but did not take effect is a failure.
+          # Returns $true when the file ends detached (or never existed), $false on a genuine failure.
+          function Detach-Recorded($f, $tag) {
+            if (-not (Test-Path $f)) { Write-Host "$tag $f was never created; nothing to detach"; return $true }
+            $img = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+            if ($null -eq $img) { Write-Host "$tag $f : Get-DiskImage could not read it; attempting detach anyway" }
+            elseif (-not $img.Attached) { Write-Host "$tag already detached (confirmed by Get-DiskImage) $f"; return $true }
+            "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
+            $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
+            $dc = $LASTEXITCODE
+            $after = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+            if ($null -ne $after -and -not $after.Attached) { Write-Host "$tag detached (confirmed) $f (diskpart exit $dc)"; return $true }
+            Write-Host "$tag detach FAILED for $f (diskpart exit $dc; attached=$($after.Attached))"; Write-Host $dt; return $false
+          }
           function Detach-All {
             # Every recorded VHD is attempted; each outcome is reported; nothing unrecorded is touched.
             $problems = 0
-            foreach ($f in (Get-Content $marker | Where-Object { $_ })) {
-              if (-not (Test-Path $f)) { "cleanup (on failure): $f was never created"; continue }
-              "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
-              $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
-              $dc = $LASTEXITCODE
-              if ($dc -eq 0) { "cleanup (on failure): detached $f" } else { $problems++; "cleanup (on failure): detach FAILED for $f (diskpart exit $dc)"; $dt }
-            }
-            "cleanup (on failure): $problems detach failure(s)"
+            foreach ($f in (Get-Content $marker | Where-Object { $_ })) { if (-not (Detach-Recorded $f "cleanup (on failure):")) { $problems++ } }
+            Write-Host "cleanup (on failure): $problems detach failure(s)"
           }
           # THE FILESYSTEM TYPES, MEASURED, before the product sees either volume. Two independent
           # witnesses: fsutil (in-box) and Get-Volume (Storage module). The first run of this job
@@ -898,20 +908,23 @@ jobs:
           # the exit code and output of every attempt are captured immediately and printed. A
           # bounded retry (5 x 1 s, provisioning only) covers a letter that is assigned before it is
           # mounted; nothing about the product is ever retried.
+          # Diagnostics go to Write-Host: a PowerShell function returns EVERY uncaptured expression,
+          # and the second run of this job failed exactly there -- the comparison saw the attempt
+          # lines and fsutil's whole output concatenated with the name (the thrown message shows it).
           function Get-FsName($letter) {
             $info = ""; $code = -1
             foreach ($attempt in 1..5) {
               $info = & fsutil fsinfo volumeinfo "$($letter):" 2>&1 | Out-String
               $code = $LASTEXITCODE
-              "fsutil attempt $attempt for $($letter): exit $code"
+              Write-Host "fsutil attempt $attempt for $($letter): exit $code"
               if ($code -eq 0) { break }
               Start-Sleep -Seconds 1
             }
-            "--- fsutil output for $($letter): (exit $code)"; $info
+            Write-Host "--- fsutil output for $($letter): (exit $code)"; Write-Host $info
             if ($code -ne 0) { throw "FIXTURE: fsutil could not read $($letter): (exit $code after 5 attempts)" }
             $m = [regex]::Match($info, "File System Name\s*:\s*(\S+)")
             if (-not $m.Success) { throw "FIXTURE: fsutil output for $($letter): names no file system" }
-            return $m.Groups[1].Value
+            return [string]$m.Groups[1].Value
           }
           try {
             New-DisposableVolume $exfatVhd $X "exfat"
@@ -1006,21 +1019,33 @@ jobs:
           # marker path is fixed, so this runs even when provisioning failed before exporting anything.
           $marker = Join-Path (Join-Path $env:RUNNER_TEMP "sl-n2") "vdisks.txt"
           if (-not (Test-Path $marker)) { "nothing recorded; nothing to clean"; exit 0 }
-          $failed = 0
+          $failed = 0; $left = @()
           foreach ($f in (Get-Content $marker | Where-Object { $_ })) {
             if (-not (Test-Path $f)) { "$f was never created; nothing to detach"; continue }
-            "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
-            $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
-            $dc = $LASTEXITCODE
-            if ($dc -ne 0) { "detach FAILED for $f (diskpart exit $dc)"; $dt; $failed++ } else { "detached $f" }
+            $img = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+            if ($null -ne $img -and -not $img.Attached) {
+              "already detached (confirmed by Get-DiskImage) $f"
+            } else {
+              "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
+              $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
+              $dc = $LASTEXITCODE
+              $after = Get-DiskImage -ImagePath $f -ErrorAction SilentlyContinue
+              if ($null -ne $after -and -not $after.Attached) { "detached (confirmed) $f (diskpart exit $dc)" }
+              else { "detach FAILED for $f (diskpart exit $dc; attached=$($after.Attached))"; $dt; $failed++; $left += $f; continue }
+            }
             Remove-Item -Force -ErrorAction SilentlyContinue $f, "$f.diskpart.txt", "$f.detach.txt"
             "removed : $(-not (Test-Path $f))  $f"
+            if (Test-Path $f) { $left += $f }
           }
           "volumes now : " + ((Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }) -join " ")
+          # Everything this job created must be gone: its two letters, its VHD files, its lab.
+          foreach ($l in @($env:SLN2_X, $env:SLN2_Y)) { if ($l -and (Test-Path "$($l):\")) { "letter $($l): is still present"; $left += "$($l):" } }
           $lab = Join-Path $env:RUNNER_TEMP "sl-n2"
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $lab
+          if ($failed -eq 0) { Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $lab }
           "lab removed : $(-not (Test-Path $lab))"
-          if ($failed -ne 0) { throw "cleanup: $failed vdisk(s) could not be detached" }
+          if (Test-Path $lab) { $left += $lab }
+          if ($failed -ne 0 -or $left.Count -ne 0) { throw "cleanup: $failed genuine detach failure(s); still present: $($left -join ', ')" }
+          "cleanup verified: no job-created volume, VHD or lab directory remains"
 
 
   self-scan:
