@@ -861,58 +861,92 @@ jobs:
             )
             $scriptPath = "$file.diskpart.txt"
             Set-Content -Path $scriptPath -Value $script -Encoding ASCII
+            # Recorded in the manifest BEFORE diskpart runs, so a disk that attached and then failed a
+            # later command is still detached by the failure path and by the always-cleanup step.
+            Add-Content -Path $marker -Value $file -Encoding ASCII
             "--- diskpart script for $fs"; Get-Content $scriptPath
             $outText = & diskpart /s $scriptPath 2>&1 | Out-String
+            $code = $LASTEXITCODE
             $outText
-            if ($LASTEXITCODE -ne 0) { throw "FIXTURE: diskpart exited $LASTEXITCODE creating the $fs volume" }
-            Add-Content -Path $marker -Value $file -Encoding ASCII
+            if ($code -ne 0) { throw "FIXTURE: diskpart exited $code creating the $fs volume" }
             if (-not (Test-Path "$($letter):\")) { throw "FIXTURE: $($letter): is not present after diskpart reported success" }
           }
           $exfatVhd = Join-Path $lab "exfat.vhd"
           $ntfsVhd = Join-Path $lab "ntfs.vhd"
-          try {
-            New-DisposableVolume $exfatVhd $X "exfat"
-            New-DisposableVolume $ntfsVhd $Y "ntfs"
-          } catch {
-            # Detach whatever did attach, then fail the step: a half-built fixture is not evidence.
-            foreach ($f in (Get-Content $marker | Where-Object { $_ })) { "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII; & diskpart /s "$f.detach.txt" | Out-Null }
-            throw
+          # Recorded for the cleanup step BEFORE anything that can fail: the marker lives at a fixed
+          # path under RUNNER_TEMP, so cleanup does not depend on this step reaching its last line.
+          "SLN2_LAB=$lab" >> $env:GITHUB_ENV
+          "SLN2_X=$X" >> $env:GITHUB_ENV
+          "SLN2_Y=$Y" >> $env:GITHUB_ENV
+          function Detach-All {
+            # Every recorded VHD is attempted; each outcome is reported; nothing unrecorded is touched.
+            $problems = 0
+            foreach ($f in (Get-Content $marker | Where-Object { $_ })) {
+              if (-not (Test-Path $f)) { "cleanup (on failure): $f was never created"; continue }
+              "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
+              $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
+              $dc = $LASTEXITCODE
+              if ($dc -eq 0) { "cleanup (on failure): detached $f" } else { $problems++; "cleanup (on failure): detach FAILED for $f (diskpart exit $dc)"; $dt }
+            }
+            "cleanup (on failure): $problems detach failure(s)"
           }
-          # THE FILESYSTEM TYPES, MEASURED, before the product sees either volume.
+          # THE FILESYSTEM TYPES, MEASURED, before the product sees either volume. Two independent
+          # witnesses: fsutil (in-box) and Get-Volume (Storage module). The first run of this job
+          # failed at the fsutil read with a non-zero exit and no output captured, so WHY it failed is
+          # not known. This form removes two things that could hide a cause without asserting either
+          # was it: the volume is named as "Z:" (no trailing backslash before a closing quote), and
+          # the exit code and output of every attempt are captured immediately and printed. A
+          # bounded retry (5 x 1 s, provisioning only) covers a letter that is assigned before it is
+          # mounted; nothing about the product is ever retried.
           function Get-FsName($letter) {
-            $info = & fsutil fsinfo volumeinfo "$($letter):\" 2>&1 | Out-String
-            if ($LASTEXITCODE -ne 0) { throw "FIXTURE: fsutil could not read $($letter):" }
+            $info = ""; $code = -1
+            foreach ($attempt in 1..5) {
+              $info = & fsutil fsinfo volumeinfo "$($letter):" 2>&1 | Out-String
+              $code = $LASTEXITCODE
+              "fsutil attempt $attempt for $($letter): exit $code"
+              if ($code -eq 0) { break }
+              Start-Sleep -Seconds 1
+            }
+            "--- fsutil output for $($letter): (exit $code)"; $info
+            if ($code -ne 0) { throw "FIXTURE: fsutil could not read $($letter): (exit $code after 5 attempts)" }
             $m = [regex]::Match($info, "File System Name\s*:\s*(\S+)")
             if (-not $m.Success) { throw "FIXTURE: fsutil output for $($letter): names no file system" }
             return $m.Groups[1].Value
           }
-          $fsX = Get-FsName $X; $fsY = Get-FsName $Y
-          "fsutil : $($X): = $fsX ; $($Y): = $fsY"
-          if (Get-Command Get-Volume -ErrorAction SilentlyContinue) {
-            "Get-Volume : $($X): = $((Get-Volume -DriveLetter $X).FileSystemType) ; $($Y): = $((Get-Volume -DriveLetter $Y).FileSystemType)"
+          try {
+            New-DisposableVolume $exfatVhd $X "exfat"
+            New-DisposableVolume $ntfsVhd $Y "ntfs"
+            $fsX = Get-FsName $X; $fsY = Get-FsName $Y
+            "fsutil : $($X): = $fsX ; $($Y): = $fsY"
+            if (-not (Get-Command Get-Volume -ErrorAction SilentlyContinue)) { throw "FIXTURE: Get-Volume is not available, so the filesystem types cannot be confirmed by a second witness" }
+            $volX = Get-Volume -DriveLetter $X -ErrorAction Stop; $volY = Get-Volume -DriveLetter $Y -ErrorAction Stop
+            "Get-Volume : $($X): = $($volX.FileSystemType) label $($volX.FileSystemLabel) size $($volX.Size) ; $($Y): = $($volY.FileSystemType) label $($volY.FileSystemLabel) size $($volY.Size)"
+            if ("$($volX.DriveLetter)" -ne "$X" -or "$($volY.DriveLetter)" -ne "$Y") { throw "FIXTURE: Get-Volume does not report the assigned letters" }
+            if ("$($volX.FileSystemType)" -ne "exFAT" -or "$($volY.FileSystemType)" -ne "NTFS") { throw "FIXTURE: Get-Volume disagrees with the intended types ($($volX.FileSystemType) / $($volY.FileSystemType))" }
+            if ($fsX -ne "exFAT") { throw "FIXTURE: $($X): is $fsX, not exFAT; the negative case would measure the wrong thing" }
+            if ($fsY -ne "NTFS") { throw "FIXTURE: $($Y): is $fsY, not NTFS; the positive control would measure the wrong thing" }
+          } catch {
+            # Detach whatever did attach, then fail the step: a half-built fixture is not evidence.
+            Detach-All
+            throw
           }
-          if ($fsX -ne "exFAT") { throw "FIXTURE: $($X): is $fsX, not exFAT; the negative case would measure the wrong thing" }
-          if ($fsY -ne "NTFS") { throw "FIXTURE: $($Y): is $fsY, not NTFS; the positive control would measure the wrong thing" }
           $after = @(Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name })
           $new = @($after | Where-Object { $before -notcontains $_ })
           "volumes after : $($after -join ' ') ; new: $($new -join ' ')"
           if (($new | Sort-Object) -join "," -ne (@($X, $Y) | Sort-Object) -join ",") { throw "FIXTURE: the set of new volumes is not exactly the two this job created" }
           # The NTFS control's root: owner / SYSTEM / Administrators only, on the disposable volume.
           $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
-          "--- $($Y):\ as formatted"; icacls "$($Y):\"
-          icacls "$($Y):\" /inheritance:r /q
+          $yRoot = "$($Y):\\"
+          "--- $($Y):\ as formatted"; icacls $yRoot
+          icacls $yRoot /inheritance:r /q
           if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not remove inherited entries from $($Y):\ (icacls exit $LASTEXITCODE)" }
-          icacls "$($Y):\" /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
+          icacls $yRoot /grant:r "*${sid}:(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q
           if ($LASTEXITCODE -ne 0) { throw "FIXTURE: could not set the NTFS control root's access list (icacls exit $LASTEXITCODE)" }
-          "--- $($Y):\ as the control will use it"; icacls "$($Y):\"
+          "--- $($Y):\ as the control will use it"; icacls $yRoot
           New-Item -ItemType Directory -Force "$($X):\sl-n2" | Out-Null
           New-Item -ItemType Directory -Force "$($Y):\sl-n2" | Out-Null
           "--- $($X):\ (exFAT) as icacls reports it, informational -- the product's own view follows in the next step"
-          icacls "$($X):\" 2>&1 | Out-String
-          "SLN2_LAB=$lab" >> $env:GITHUB_ENV
-          "SLN2_MARKER=$marker" >> $env:GITHUB_ENV
-          "SLN2_X=$X" >> $env:GITHUB_ENV
-          "SLN2_Y=$Y" >> $env:GITHUB_ENV
+          icacls "$($X):\\" 2>&1 | Out-String
       - name: Filesystem evidence, as the product sees it (owner SID and SDDL of the disposable roots)
         shell: pwsh
         run: |
@@ -968,18 +1002,24 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          # Cleanup only touches the VDISK files this job recorded; nothing else is detached.
-          if (-not $env:SLN2_MARKER -or -not (Test-Path $env:SLN2_MARKER)) { "nothing recorded; nothing to clean"; exit 0 }
+          # Cleanup only touches the VDISK files this job recorded; nothing else is detached. The
+          # marker path is fixed, so this runs even when provisioning failed before exporting anything.
+          $marker = Join-Path (Join-Path $env:RUNNER_TEMP "sl-n2") "vdisks.txt"
+          if (-not (Test-Path $marker)) { "nothing recorded; nothing to clean"; exit 0 }
           $failed = 0
-          foreach ($f in (Get-Content $env:SLN2_MARKER | Where-Object { $_ })) {
+          foreach ($f in (Get-Content $marker | Where-Object { $_ })) {
+            if (-not (Test-Path $f)) { "$f was never created; nothing to detach"; continue }
             "select vdisk file=`"$f`"`ndetach vdisk`nexit" | Set-Content "$f.detach.txt" -Encoding ASCII
-            & diskpart /s "$f.detach.txt" | Out-String | Out-Null
-            if ($LASTEXITCODE -ne 0) { "detach FAILED for $f (diskpart exit $LASTEXITCODE)"; $failed++ } else { "detached $f" }
+            $dt = & diskpart /s "$f.detach.txt" 2>&1 | Out-String
+            $dc = $LASTEXITCODE
+            if ($dc -ne 0) { "detach FAILED for $f (diskpart exit $dc)"; $dt; $failed++ } else { "detached $f" }
             Remove-Item -Force -ErrorAction SilentlyContinue $f, "$f.diskpart.txt", "$f.detach.txt"
+            "removed : $(-not (Test-Path $f))  $f"
           }
           "volumes now : " + ((Get-PSDrive -PSProvider FileSystem | ForEach-Object { $_.Name }) -join " ")
-          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $env:SLN2_LAB
-          "lab removed : $(-not (Test-Path $env:SLN2_LAB))"
+          $lab = Join-Path $env:RUNNER_TEMP "sl-n2"
+          Remove-Item -Recurse -Force -ErrorAction SilentlyContinue $lab
+          "lab removed : $(-not (Test-Path $lab))"
           if ($failed -ne 0) { throw "cleanup: $failed vdisk(s) could not be detached" }
 
 
