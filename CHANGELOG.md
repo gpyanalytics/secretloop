@@ -1,5 +1,59 @@
 # Changelog
 
+## 0.7.1 — 2026-10-05
+
+*Date provisional: the intended publication day, 5 October 2026 in Asia/Kolkata (IST, UTC+05:30). It is confirmed
+or corrected at publication; if publication slips, the heading moves with it.*
+
+### Maintenance
+
+SecretLoop 0.7.1 is a dependency and security maintenance release. **No change to detection, rules, fingerprints,
+severities, the report schema (still `5`) or SecretLoop's own behaviour is intended**: `src/` is byte-identical to 0.7.0,
+the same tree reports the same findings, and baselines and consent records written under 0.7.0 still match (measured on
+the release corpus). What changed is the versions of bundled and development dependencies; the bundled ones are listed
+below with what they touch. A statement that the dependencies themselves behave identically is not made — their own
+release notes are linked and their effect was exercised by the suites and smokes named here.
+
+- **Regenerate both reports before comparing across this upgrade.** The comparator requires equal `toolVersion`, so a
+  0.7.0 report and a 0.7.1 report are refused with `identity-mismatch (toolVersion)` even though their findings are
+  identical. Scan both sides again with 0.7.1.
+- **fast-uri 3.1.6 → 3.1.8, bundled into the MCP server (`out/mcp.js`)** through the MCP SDK's JSON-schema validator.
+  Fixes GHSA-qw65-cvwx-89v3 and GHSA-58mr-gqgx-xq4g (high) and GHSA-hrr3-gc8f-f4qj (medium). The published 0.7.0 package
+  carried 3.1.6; SecretLoop's server hands fast-uri only its own schema identifiers, never client input, so no untrusted
+  path existed. (#114)
+- **@modelcontextprotocol/sdk 1.30.0 → 1.31.0**, bundled into `out/mcp.js`. The stdio server surface SecretLoop uses is
+  unchanged; the SDK's HTTP body bounds and OAuth issuer binding are in paths SecretLoop does not load. The packaged
+  server's stdio round trip is exercised by the packaging smoke. (#113)
+- **@aws-sdk/client-iam and client-sts 3.1139.0 → 3.1144.0**, bundled for AWS access-key deactivation and STS
+  verification. Regenerated clients, same calls; the rotation and verification suites run against them without live
+  requests. (#111, #112)
+- **hono 4.13.5 → 4.13.13 and ip-address 10.5.0 → 10.7.3**: transitive development dependencies of the SDK's HTTP
+  transport, not present in any shipped bundle (bundles were byte-identical before and after). Closes Dependabot alerts
+  #5, #6, #9 and #11. (#124)
+
+### Security status, stated separately
+
+- **Dependabot: zero open alerts** on the repository at release time.
+- **`npm audit`: six high entries remain**, all tracing to **one** advisory — braces ≤ 3.0.3, GHSA-vfj7-8cjw-p6xm — for
+  which **no patched version exists**. The chain (ovsx → nested @vscode/vsce 3.9.2 → secretlint → globby → fast-glob →
+  micromatch → braces) is development and publishing tooling: it is absent from `out/cli.js`, `out/mcp.js` and
+  `out/extension.js`, and it does not execute when a pre-built VSIX is published. The audit is **not** clean, and this
+  release does not claim it is.
+
+### Tests and documentation
+
+- The consent-record FIFO test now fails on its real cause — `out/consent.js missing — run npm run compile first` —
+  when the compiled module is absent, instead of reporting a reader defect. (#122)
+- `RELEASING.md` §1 spells the clean-room sequence as compile, then bundle, then the suite; `docs/mcp.md` documents
+  `secretloop_get_finding`'s optional `path` and `contextLines`; the quickstart gains a "Remove it" section; the
+  documentation status page records the 0.7.0 publication. (#121)
+
+### Still open, unchanged in this release
+
+The intermittent Windows cold first-verify refusal (third occurrence 2026-10-04: the first PowerShell start took 18.5 s
+of the 20 s allowance), the one macOS Node 18 job timeout of 2026-09-27, macOS containment via `lsof` (N4), the
+`node:wasi` evaluation (N5), the unnamed benchmark corpus B, and PR #88.
+
 ## 0.7.0 — 2026-10-04
 
 ### What you can do in 0.7.0
