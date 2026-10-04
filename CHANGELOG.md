@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Diagnostics
+
+- **Windows consent helper: four timing markers on standard error.** The PowerShell inspection helper now writes
+  `secretloop-helper <start|input|cmdlet|end> <epoch-ms>` to stderr at those stages — a fixed word and a number, never a
+  path, identity, argument or exception text. The product does not read them: stdout, decisions, exit status, helper
+  order and the 20-second consent allowance are unchanged, and the ~155 bytes per call are charged to the existing output
+  allowance like any helper output. `tests/verify-consent.test.ts` parses them so the first-verify timeline can split a
+  slow cold PowerShell start into host start, input, module import, inspection and teardown. This records; it does not
+  resolve the intermittent cold first-verify refusal on hosted x64 Windows runners, which stays open.
+
 ## 0.7.1 — 2026-10-05
 
 *Date provisional: the intended publication day, 5 October 2026 in Asia/Kolkata (IST, UTC+05:30). It is confirmed
