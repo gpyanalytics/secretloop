@@ -348,6 +348,12 @@ test("a record that is not there is still simply absent", () => {
 
 test("a named pipe at a record path is refused instead of hanging the reader", () => {
   if (!POSIX) return skip("NOT RUN on win32: a FIFO cannot exist at an NTFS path");
+  // The child below requires the tsc output, which only `npm run compile` writes -- `npm run
+  // bundle` produces three bundles and nothing else. Without this check a missing build made
+  // the child's require throw before any output, and the assertion read as a reader defect
+  // ("expected refused:not-a-regular-file, got ''"). Fail on the real cause, before spawning.
+  const consentModule = path.join(process.cwd(), "out", "consent.js");
+  assert.ok(existsSync(consentModule), "out/consent.js missing — run npm run compile first");
   const f = fixture();
   try {
     try {
@@ -358,7 +364,7 @@ test("a named pipe at a record path is refused instead of hanging the reader", (
     // The risky call runs in a child the parent can kill, because before this change it never
     // returned. The parent owns the fixture and removes it below whatever the child does.
     const child =
-      `const c=require(${JSON.stringify(path.join(process.cwd(), "out", "consent.js"))});` +
+      `const c=require(${JSON.stringify(consentModule)});` +
       `c.setConsentRootForTests(${JSON.stringify(f.store)});` +
       `try{const r=c.readRecord(${JSON.stringify(ID_OK)});process.stdout.write("returned:"+(r?"record":"null"));}` +
       `catch(e){process.stdout.write("refused:"+e.problem);}`;
