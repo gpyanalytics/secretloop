@@ -403,7 +403,10 @@ test("absent stderr yields no markers and zero counts", () => {
   for (const v of [undefined, null, "", Buffer.alloc(0)]) {
     const p = parseHelperMarkers(v as any);
     assert.deepStrictEqual(p, { at: {}, markerLines: 0, malformed: 0, duplicates: 0, otherLines: 0 });
-    assert.strictEqual(describeMarkers(p, 1_000, 2_000), "no start marker (0 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))");
+    assert.strictEqual(
+      describeMarkers(p, 1_000, 2_000),
+      "hostStart(parent↔child) unavailable (start marker absent) input unavailable (start marker absent, input marker absent) import+firstCmdlet unavailable (input marker absent, cmdlet marker absent) body unavailable (cmdlet marker absent, end marker absent) teardown(parent↔child) unavailable (end marker absent) (0 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
+    );
   }
 });
 
@@ -416,7 +419,7 @@ test("four well-formed markers, CRLF or LF, string or Buffer, parse to the same 
     assert.strictEqual(p.markerLines, 4);
     assert.strictEqual(
       describeMarkers(p, 1759600000000, 1759600001300),
-      "hostStart 100ms input 50ms import+firstCmdlet 1000ms body 100ms teardown 50ms (4 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
+      "hostStart(parent↔child) 100ms input 50ms import+firstCmdlet 1000ms body 100ms teardown(parent↔child) 50ms (4 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
     );
   }
 });
@@ -433,19 +436,47 @@ test("malformed, duplicate and foreign stderr lines are counted and never kept",
     "secretloop-helper end 1759600001250",
   ].join("\n");
   const p = parseHelperMarkers(text);
-  assert.deepStrictEqual(p.at, { start: 1759600000100, end: 1759600001250 });
+  // The duplicated start is AMBIGUOUS and therefore unavailable: neither value is kept.
+  assert.deepStrictEqual(p.at, { end: 1759600001250 });
   assert.strictEqual(p.markerLines, 3);
   assert.strictEqual(p.malformed, 4);
   assert.strictEqual(p.duplicates, 1);
   assert.strictEqual(p.otherLines, 1);
   const phrase = describeMarkers(p, 1759600000000, 1759600001300);
-  assert.strictEqual(phrase, "hostStart 100ms input marker absent cmdlet marker absent body 1150ms teardown 50ms (3 marker line(s), 4 malformed, 1 duplicate, 1 other stderr line(s))");
+  assert.strictEqual(
+    phrase,
+    "hostStart(parent↔child) unavailable (start marker absent) input unavailable (start marker absent, input marker absent) import+firstCmdlet unavailable (input marker absent, cmdlet marker absent) body unavailable (cmdlet marker absent) teardown(parent↔child) 50ms (3 marker line(s), 4 malformed, 1 duplicate, 1 other stderr line(s))"
+  );
   assert.doesNotMatch(phrase, /Users|secret|denied/, "no stderr text reaches the phrase");
+  assert.doesNotMatch(phrase, /body \d/, "a body interval is never computed from a borrowed anchor");
 });
 
-test("a start-only stderr still describes host start and names what is missing", () => {
+test("a start-only stderr describes host start and reports every other interval as unavailable, never as zero", () => {
   const p = parseHelperMarkers("secretloop-helper start 1759600000100\n");
-  assert.strictEqual(describeMarkers(p, 1759600000000, 1759600000500), "hostStart 100ms input marker absent cmdlet marker absent end marker absent (1 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))");
+  const phrase = describeMarkers(p, 1759600000000, 1759600000500);
+  assert.strictEqual(
+    phrase,
+    "hostStart(parent↔child) 100ms input unavailable (input marker absent) import+firstCmdlet unavailable (input marker absent, cmdlet marker absent) body unavailable (cmdlet marker absent, end marker absent) teardown(parent↔child) unavailable (end marker absent) (1 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
+  );
+  assert.doesNotMatch(phrase, / 0ms/, "a missing stage is never reported as zero elapsed time");
+});
+
+test("a missing cmdlet marker makes import AND body unavailable; body never widens to cover the import", () => {
+  const p = parseHelperMarkers("secretloop-helper start 1759600000100\nsecretloop-helper input 1759600000150\nsecretloop-helper end 1759600001250\n");
+  assert.strictEqual(
+    describeMarkers(p, 1759600000000, 1759600001300),
+    "hostStart(parent↔child) 100ms input 50ms import+firstCmdlet unavailable (cmdlet marker absent) body unavailable (cmdlet marker absent) teardown(parent↔child) 50ms (3 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
+  );
+});
+
+test("a clock that moves backwards is reported as such, not as a duration", () => {
+  const p = parseHelperMarkers("secretloop-helper start 1759600000100\nsecretloop-helper input 1759600000090\nsecretloop-helper cmdlet 1759600000200\nsecretloop-helper end 1759600000300\n");
+  const phrase = describeMarkers(p, 1759600000400, 1759600000250);
+  assert.strictEqual(
+    phrase,
+    "hostStart(parent↔child) unavailable (clock moved backwards) input unavailable (clock moved backwards) import+firstCmdlet 110ms body 100ms teardown(parent↔child) unavailable (clock moved backwards) (4 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
+  );
+  assert.doesNotMatch(phrase, /-\d/, "no negative duration is ever printed");
 });
 
 suite("helper markers against the real PowerShell helper (Windows only)");

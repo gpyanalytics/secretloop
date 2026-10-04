@@ -23,6 +23,7 @@ const LINE = new RegExp("^" + HELPER_MARKER_PREFIX + " (" + HELPER_MARKER_STAGES
 
 export function parseHelperMarkers(stderr: string | Buffer | null | undefined): MarkerParse {
   const out: MarkerParse = { at: {}, markerLines: 0, malformed: 0, duplicates: 0, otherLines: 0 };
+  const seen = new Set<Stage>();
   if (stderr === null || stderr === undefined) return out;
   const text = Buffer.isBuffer(stderr) ? stderr.toString("utf8") : String(stderr);
   for (const raw of text.split(/\r?\n/)) {
@@ -39,31 +40,46 @@ export function parseHelperMarkers(stderr: string | Buffer | null | undefined): 
     }
     out.markerLines++;
     const stage = m[1] as Stage;
-    if (stage in out.at) {
-      out.duplicates++; // first occurrence kept
+    if (seen.has(stage)) {
+      // A stage reported twice is AMBIGUOUS: neither value is trusted, the stage is unavailable.
+      out.duplicates++;
+      delete out.at[stage];
       continue;
     }
+    seen.add(stage);
     out.at[stage] = Number(m[2]);
   }
   return out;
 }
 
 /**
- * One fixed-format phrase for a log line. `spawnWallStartMs`/`spawnWallEndMs` are the parent's
- * Date.now() immediately before and after the synchronous spawn, on the same system clock as the
- * child's UtcNow; the in-child deltas do not depend on that comparison at all.
+ * One fixed-format phrase for a log line. Every interval is reported ONLY when both of its
+ * endpoints arrived unambiguously and the later one is not earlier than the first; otherwise the
+ * interval is "unavailable" with the reason. No interval ever borrows a neighbouring marker as a
+ * stand-in, so a missing `cmdlet` makes both `import` and `body` unavailable rather than silently
+ * widening `body`. A negative difference is reported as clock movement, not as a duration.
+ *
+ * Resolution: every value is a whole millisecond from a 1 ms clock, so each interval is ±1 ms
+ * when both ends come from the same process. `hostStart` and `teardown` compare the child's
+ * `UtcNow` with the parent's `Date.now()`: the same system clock read by two processes, so they
+ * carry the ±1 ms of each read plus whatever the clock did between them -- they are coarser
+ * than the in-child intervals and are labelled "parent↔child" to say so.
  */
 export function describeMarkers(p: MarkerParse, spawnWallStartMs: number, spawnWallEndMs: number): string {
   const counts = `${p.markerLines} marker line(s), ${p.malformed} malformed, ${p.duplicates} duplicate, ${p.otherLines} other stderr line(s)`;
   const a = p.at;
-  if (a.start === undefined) return `no start marker (${counts})`;
-  const parts: string[] = [`hostStart ${a.start - spawnWallStartMs}ms`];
-  parts.push(a.input !== undefined ? `input ${a.input - a.start}ms` : "input marker absent");
-  if (a.cmdlet !== undefined && a.input !== undefined) parts.push(`import+firstCmdlet ${a.cmdlet - a.input}ms`);
-  else parts.push("cmdlet marker absent");
-  if (a.end !== undefined) {
-    const from = a.cmdlet ?? a.input ?? a.start;
-    parts.push(`body ${a.end - from}ms`, `teardown ${spawnWallEndMs - a.end}ms`);
-  } else parts.push("end marker absent");
+  const interval = (name: string, from: number | undefined, to: number | undefined, missing: string): string => {
+    if (from === undefined || to === undefined) return `${name} unavailable (${missing})`;
+    if (to < from) return `${name} unavailable (clock moved backwards)`;
+    return `${name} ${to - from}ms`;
+  };
+  const absent = (...stages: Stage[]): string => stages.filter((st) => a[st] === undefined).map((st) => `${st} marker absent`).join(", ");
+  const parts = [
+    interval("hostStart(parent↔child)", spawnWallStartMs, a.start, absent("start")),
+    interval("input", a.start, a.input, absent("start", "input")),
+    interval("import+firstCmdlet", a.input, a.cmdlet, absent("input", "cmdlet")),
+    interval("body", a.cmdlet, a.end, absent("cmdlet", "end")),
+    interval("teardown(parent↔child)", a.end, spawnWallEndMs, absent("end")),
+  ];
   return `${parts.join(" ")} (${counts})`;
 }
