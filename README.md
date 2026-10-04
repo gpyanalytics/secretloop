@@ -1,224 +1,172 @@
 # SecretLoop
 
-**Find exposed secrets, verify supported credentials, and take action.**
+**Find exposed secrets, check whether supported credentials are live, and fix them where you found them.**
 
-Secret scanning for VS Code, the command line, and MCP workflows.
+SecretLoop is a secret scanner with three interfaces on one engine: a **command-line tool** for
+repositories, pre-commit hooks and CI; a **VS Code extension** that turns findings into diagnostics with
+quick-fixes; and an **MCP server** that lets an AI assistant work with findings without ever seeing a raw
+value. Scans run on your machine. The only network request SecretLoop ever makes is a verification of one
+supported credential against that credential's own provider, and only after you ask for it.
 A GPY Analytics product.
 
-This README describes SecretLoop 0.6.0.
+This README describes SecretLoop **0.7.0**. The [changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md)
+lists what each version changed, and the [documentation hub](https://github.com/gpyanalytics/secretloop/blob/main/docs/README.md)
+records which version each distribution channel currently serves.
 
-SecretLoop scans your working tree, your staged changes or your full git
-history on your machine and reports each **finding** with its value masked.
-Only when you ask, and only for the credential types it supports, does it make
-a read-only call to the provider to say whether that credential is **live**,
-**dead** or **unknown**. The same finding carries its own fix in the editor,
-and an AI agent can read findings over MCP without ever seeing a raw value.
+## Install
 
-![SecretLoop scanning a working tree: three findings, each with its severity, rule, masked value, remediation line and fingerprint](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-scan-hero.gif)
-
-## Getting started
-
-**Command line** — needs Node 18 or newer.
+**Command line** — Node 18 or newer.
 
 ```bash
-npx secretloop scan            # the working tree
-npx secretloop staged          # what you are about to commit
-npx secretloop history         # every commit, for secrets already pushed
-npm install -g secretloop      # install it for CI and hooks
+npx secretloop scan            # run it once, installing nothing
+npm install -g secretloop      # install it for hooks and CI
 ```
 
-**VS Code** — install **SecretLoop** from the Marketplace, or from a `.vsix`
-with `code --install-extension secretloop-0.7.0.vsix`. Findings become
-diagnostics as you type, and the lightbulb carries *redact*, *extract to
-`.env`* and, where the provider offers an API for it, *rotate*. Verification
-stays off until you turn it on.
+**VS Code** — install **SecretLoop** from the
+[Visual Studio Marketplace](https://marketplace.visualstudio.com/items?itemName=gpyanalytics.secretloop)
+or [Open VSX](https://open-vsx.org/extension/gpyanalytics/secretloop), or from a downloaded file:
 
-**MCP** — add the server to your client, for example
-`claude_desktop_config.json` or `.cursor/mcp.json`:
-
-```json
-{
-  "mcpServers": {
-    "secretloop": {
-      "command": "npx",
-      "args": ["-y", "--package=secretloop", "secretloop-mcp"]
-    }
-  }
-}
+```bash
+code --install-extension secretloop-0.7.0.vsix
 ```
 
-`--package=secretloop` is required: `secretloop-mcp` is a command inside the
-`secretloop` package, not a package of its own. For Claude Code, the same
-thing on one line:
+**MCP** — register the server with your client. For Claude Code:
 
 ```bash
 claude mcp add secretloop -- npx -y --package=secretloop secretloop-mcp
 ```
 
-## One example: gate a build
+`--package=secretloop` is required: `secretloop-mcp` is a command inside the `secretloop` package, not a
+package of its own. JSON configuration for other clients is in the
+[MCP guide](https://github.com/gpyanalytics/secretloop/blob/main/docs/mcp.md).
+
+**Upgrading to 0.7.0.** Detection is unchanged: the same tree reports the same findings it did under 0.6.0,
+and a baseline or consent record made under 0.6.0 still matches. What changed is what a scan refuses and
+discloses: the consent store is checked before it is trusted and refused when it is not private, the
+scanner checks the file it actually opened before and, on Linux, after reading it, and the JSON report's
+`schemaVersion` is now `5`. **A 0.6.0 report cannot be compared with a 0.7.0 report, and two 0.6.0 reports
+cannot be compared under this version.** Scan both sides again with 0.7.0; nothing converts a saved
+report.
+
+## Quick start: a safe local scan
 
 ```bash
-npx secretloop scan --format sarif -o results.sarif --fail-on high
+cd your-repository
+npx secretloop scan
 ```
 
-Exit `0` means nothing met the gate; exit `1` means something did, and stderr
-names how many findings met which threshold. The SARIF file uploads to GitHub
-code scanning. [More CI, pre-commit and client recipes](https://github.com/gpyanalytics/secretloop/blob/main/docs/integrations.md).
+This reads the working tree, contacts nothing, and prints a report like this one (recorded on macOS on a
+two-file repository holding one synthetic token):
 
-**Upgrading.** 0.7.0 changes no detection: rules, fingerprints, thresholds and
-severities are untouched, so the same tree reports the same findings it did under
-0.6.0, and a consent record or baseline minted under 0.6.0 still matches. What
-changed is what a scan refuses and discloses. The consent store is checked before
-it is trusted and refused when it is not private (a shared or group-writable home,
-an exFAT volume, a store owned by another account), the scanner checks the file it
-actually opened before and, on Linux, after reading it, and the JSON report's
-`schemaVersion` is now `5` because `incomplete` counts those refusals. **A 0.6.0
-report cannot be compared with a 0.7.0 report, and two 0.6.0 reports cannot be
-compared under this version:** scan both sides again with 0.7.0. Coming from a
-version before 0.5.0, note that 0.5.0 began scanning inside archives and decoding
-encoded values by default, and the generic entropy tier no longer runs over API
-description documents unless you ask. The [changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md) lists every behaviour change.
+```
+Scanned 2 file(s); 6 descriptor(s) opened for content: identity 6 verified; kernel path 6 unavailable; kernel path after read 2 unavailable, 4 not reached. 1 finding(s): 0 confirmed live, 0 needing a look, 1 unverified, 0 dead.
 
-## What it does
+UNVERIFIED (1) — matched a known format or entropy heuristic; no liveness check was run.
+  [critical] GitHub Personal Access Token (github-token)
+    app.js:1
+    value: ghp_********************F8KT
+```
 
-- **Detect.** 110 named rules with a keyword prescreen, plus an **optional
-  generic entropy tier** that is off by default because it is noisy. Beyond
-  plain text it decodes base64, hex and percent-encoded values one layer and
-  runs the same rules over the result, and it opens ZIP, tar and gzip
-  containers in memory to scan each **archive member** — nothing is extracted
-  to disk.
-- **Verify.** 18 rules have a verifier covering 15 providers, and 17 of those
-  can put a credential on the wire. A verification is an **explicit
-  verification workflow**: the `--verify` flag on the command line, a setting
-  in the editor, or a terminal approval for an MCP request.
-- **Remediate.** The finding that failed CI is the one you fix in the editor:
-  redact it, move it to `.env` with a `process.env` reference, or open the
-  provider's rotation path.
-- **Work with agents.** Five MCP tools expose findings with values masked, and
-  the one tool that can transmit a credential needs a human approval typed in a
-  terminal that the assistant cannot reach.
+How to read it:
 
-## Before you paste logs into an AI
+- **The first sentence is the scope.** It says what was read, what was skipped and why, and what the
+  per-file checks did. A clean report is a statement about exactly that scope, not about the repository.
+- **Every finding is masked.** You see the rule, severity, file and line, and the first and last
+  characters of the value. The full value never appears in output, logs or MCP responses.
+- **`unverified` means no liveness check ran**, not "safe". Verification is a separate, explicit step
+  (`--verify`) that sends the credential to its provider; see
+  [verification](https://github.com/gpyanalytics/secretloop/blob/main/docs/verification.md) before using it.
+- **Exit codes gate a build.** `0` means nothing met the `--fail-on` threshold (default: any finding);
+  `1` means something did; any other code is a failure to run.
 
 ```bash
-cat deploy.log | npx secretloop mask | pbcopy
+npx secretloop scan --format sarif -o results.sarif --fail-on high   # for GitHub code scanning
+npx secretloop scan --format json -o before.json --fail-on never     # a report to compare later
 ```
 
-`mask` rewrites a stream with every recognised credential replaced by
-`[REDACTED:<rule-id>]`, so a deploy log keeps the structure an assistant needs
-and loses the secrets it does not.
+## Commands
 
-## What it does not claim
+Every top-level command, verified against the CLI's own help text. Flags, defaults and exit codes are in the
+[CLI reference](https://github.com/gpyanalytics/secretloop/blob/main/docs/cli.md).
 
-- **A clean report is not proof of a clean repository.** Every scan prints what
-  it read and what it skipped — files, archive members, refusals by reason, and
-  any **incomplete scan coverage** such as a container it could not fully
-  enumerate. Read that sentence before trusting a zero.
-- **Not every finding is live.** A finding is a format match until a
-  verification runs. `unknown` means no verdict was reached, never "safe".
-- **Not every credential has a verifier.** A finding matched by a rule without
-  one is never transmitted, and neither is an archive member or a value
-  recovered by decoding: they are refused before any provider lookup.
-- **Rotation is not automatic.** For most providers SecretLoop opens the
-  console; only Slack revocation and AWS key deactivation are API calls, and
-  the AWS one needs admin credentials you store yourself.
-- **The entropy tier costs precision for coverage.** It is off by default, and
-  turning it on finds unnamed secrets at the price of substantial noise.
-
-Details: [coverage](https://github.com/gpyanalytics/secretloop/blob/main/docs/coverage.md) · [verification](https://github.com/gpyanalytics/secretloop/blob/main/docs/verification.md).
-
-## How it compares
-
-Measured once, on one frozen benchmark: six pinned open-source repositories,
-working tree only, verification off for every tool, one triage policy applied
-to all three.
-
-| metric | Gitleaks | TruffleHog | SecretLoop (entropy tier on) |
+| command | what it does | writes | network |
 |---|---|---|---|
-| Static precision | 41.5% | 57.25–64.86%\* | 37.7% |
-| Files with a validated true positive | 145/145 | 119/145 | 142/145 |
+| `scan` | Scan the working tree (the default when no command is given). | a report only with `-o`; a baseline only with `--write-baseline` | none, unless you pass `--verify` |
+| `staged` | Scan the staged changes only; this is what the pre-commit hook runs. | as `scan` | none, unless you pass `--verify` |
+| `history` | Scan git history for secrets committed at any point, including ones deleted later. | as `scan` | none, unless you pass `--verify` |
+| `mask` | Read stdin and write it back with every recognised secret replaced by `[REDACTED:<rule-id>]`. | stdout only | none |
+| `approve <fingerprint>` | Authorise **one** credential verification that an MCP client requested: one credential, one file, one provider, one use, five minutes. Interactive terminal only; it cannot be piped or scripted. | a consent record under `~/.secretloop` | none itself; the MCP server makes the single provider request after your approval |
+| `compare <before.json> <after.json>` | Compare two saved JSON reports and list what is new, persisting and no longer observed. Refuses pairs the report contract does not admit (different versions, settings or incomplete coverage). | nothing | none; it never rescans |
+| `help` | Print the help text. The version is a flag: `secretloop --version`. | nothing | none |
 
-\* A range: 21 TruffleHog findings could not be resolved to a verdict.
+```bash
+cat deploy.log | npx secretloop mask | pbcopy        # redact a log before pasting it into an assistant
+npx secretloop compare before.json after.json        # exit 0 nothing new, 1 new findings, 3 not comparable
+```
 
-That column is the **entropy tier on**, which is not the default. With the
-default settings the same corpus gives 167 true positives and 20 false
-positives, 89.3% precision, across 137 of the 145 files — higher precision,
-lower coverage. This is not a general claim that SecretLoop beats another
-scanner: it is one corpus, at one time, and it measures precision and file
-coverage, not recall. Nothing was planted, so a credential every tool missed is
-counted by none of them. Method, populations, competitor sources and
-limitations: [benchmarks](https://github.com/gpyanalytics/secretloop/blob/main/docs/benchmarks.md).
+## What it detects
 
-What SecretLoop adds is the loop the name refers to: the finding that failed CI
-is the one you fix in the editor, and the one an agent sees over MCP.
+110 named rules with a keyword prescreen, over plain text, one layer of base64, hex and percent-encoded
+values, and the members of ZIP, tar and gzip containers opened in memory. An optional generic high-entropy
+tier (`--include-entropy`) is off by default because it is noisy. 18 rules have a verifier covering 15
+providers; 17 of them can put a credential on the wire, and one is refused because its format is issued by
+more than one company. Details: [coverage](https://github.com/gpyanalytics/secretloop/blob/main/docs/coverage.md).
 
-<details>
-<summary>More demos</summary>
+## VS Code
 
-### MCP
+Findings appear as diagnostics as you type. The lightbulb offers **redact**, **extract to `.env`** with a
+`process.env` reference, and **rotate**, which opens the provider's console; only Slack revocation and AWS
+access-key deactivation are API calls, and the AWS one uses admin credentials you store yourself. Live
+verification is a setting that is off until you turn it on. Commands, settings and the pre-commit hook:
+[VS Code guide](https://github.com/gpyanalytics/secretloop/blob/main/docs/vscode.md).
 
-![An AI agent scans over MCP, asks to verify a GitHub token, and receives CONSENT_REQUIRED with network null; the human approves in a separate terminal; a replay of the same approval returns UNKNOWN](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mcp-terminal.gif)
+## MCP
 
-![Claude running the SecretLoop MCP tools: masked finding, consent-required verify, human terminal approval, then a single-use verification](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mcp-claude.gif)
+Five tools — `secretloop_scan`, `secretloop_list_findings`, `secretloop_get_finding`,
+`secretloop_history_scan`, `secretloop_verify` — expose findings with every value masked, over stdio. The
+one tool that can transmit a credential answers `CONSENT_REQUIRED` until a human runs `secretloop approve`
+in a terminal the assistant cannot reach. Setup for Claude Code, Claude Desktop, Cursor, Copilot and others:
+[MCP guide](https://github.com/gpyanalytics/secretloop/blob/main/docs/mcp.md) ·
+[integrations](https://github.com/gpyanalytics/secretloop/blob/main/docs/integrations.md).
 
-![GitHub Copilot Chat running the SecretLoop MCP tools: masked finding, consent-required verify, human terminal approval, then a single-use verification](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mcp-copilot.gif)
+## Security and limitations
 
-Every product string in these recordings is cited to source in
-[docs/demos/FACTS-mcp-demo.md](https://github.com/gpyanalytics/secretloop/blob/main/docs/demos/FACTS-mcp-demo.md). The credential
-is synthetic and the provider response is simulated — no request is made.
+- **What leaves the machine.** Only a credential you chose to verify, only to its own provider, only for
+  the 18 rules with a verifier. No telemetry, and the published package declares no runtime dependencies.
+- **Consent is a file, checked before it is trusted.** The consent store under `~/.secretloop` must be
+  private; a store that is shared, group-writable, owned by another account or on a filesystem without
+  ownership (exFAT) is refused, never repaired.
+- **Containment is stated narrowly.** Every content read checks that the opened descriptor is the object
+  that was inspected; on Linux the kernel-recorded location is also checked before the first read and after
+  the last. Those are two points, not a guarantee about the whole read, and macOS and Windows have the
+  identity check only.
+- **A clean report is not proof of a clean repository.** Read the scope sentence. Findings are format
+  matches until verified; `unknown` is not "safe"; archive members and decoded values are never
+  transmitted; rotation is not automatic.
 
-### Command line
-
-![The secretloop CLI help output listing every command and flag](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-help.gif)
-
-![A working-tree scan reporting findings grouped by value](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-scan.gif)
-
-![A git history scan walking commits for credentials](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-history.gif)
-
-![Scanning only the staged changes, as the pre-commit hook does](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-staged.gif)
-
-![Accepting current findings as a baseline so only new secrets report](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-baseline.gif)
-
-![Masking credentials in a log stream before sharing it](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mask.gif)
-
-![A deploy log masked with secretloop mask, then passed to an AI CLI for debugging](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mask-to-copilot-cli.gif)
-
-![Copying a secret to the clipboard and redacting it from the file in one step](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-clipboard-story.gif)
-
-### Illustrative mockups
-
-These two are rendered pictures of the editor, not recordings of it.
-
-![Mockup: a hardcoded key, the SecretLoop quick-fix menu, and the value relocated to .env](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-move-to-env.gif)
-
-![Mockup: a deploy log masked at the terminal, then pasted into an editor chat panel](https://raw.githubusercontent.com/gpyanalytics/secretloop/main/docs/demos/secretloop-mask-to-copilot.gif)
-
-</details>
+Policy, reporting a vulnerability, and the full statement of what is and is not validated:
+[SECURITY.md](https://github.com/gpyanalytics/secretloop/blob/main/SECURITY.md).
 
 ## Documentation
 
 | | |
 |---|---|
 | Start here | [Quickstart](https://github.com/gpyanalytics/secretloop/blob/main/docs/quickstart.md) · [Troubleshooting](https://github.com/gpyanalytics/secretloop/blob/main/docs/troubleshooting.md) |
-| Use it | [CLI](https://github.com/gpyanalytics/secretloop/blob/main/docs/cli.md) · [VS Code](https://github.com/gpyanalytics/secretloop/blob/main/docs/vscode.md) · [MCP server](https://github.com/gpyanalytics/secretloop/blob/main/docs/mcp.md) · [CI, hooks and clients](https://github.com/gpyanalytics/secretloop/blob/main/docs/integrations.md) · [Configuration](https://github.com/gpyanalytics/secretloop/blob/main/docs/configuration.md) |
-| Understand results | [Coverage](https://github.com/gpyanalytics/secretloop/blob/main/docs/coverage.md) · [Verification](https://github.com/gpyanalytics/secretloop/blob/main/docs/verification.md) · [Benchmarks](https://github.com/gpyanalytics/secretloop/blob/main/docs/benchmarks.md) |
-| Project | [Changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md) · [Roadmap](https://github.com/gpyanalytics/secretloop/blob/main/docs/project/roadmap.md) · [Decision records](https://github.com/gpyanalytics/secretloop/blob/main/docs/decisions/README.md) |
+| Use it | [CLI](https://github.com/gpyanalytics/secretloop/blob/main/docs/cli.md) · [VS Code](https://github.com/gpyanalytics/secretloop/blob/main/docs/vscode.md) · [MCP server](https://github.com/gpyanalytics/secretloop/blob/main/docs/mcp.md) · [Integrations](https://github.com/gpyanalytics/secretloop/blob/main/docs/integrations.md) · [Configuration](https://github.com/gpyanalytics/secretloop/blob/main/docs/configuration.md) |
+| Understand results | [Coverage](https://github.com/gpyanalytics/secretloop/blob/main/docs/coverage.md) · [Verification](https://github.com/gpyanalytics/secretloop/blob/main/docs/verification.md) · [The JSON report](https://github.com/gpyanalytics/secretloop/blob/main/docs/reports.md) · [Benchmarks](https://github.com/gpyanalytics/secretloop/blob/main/docs/benchmarks.md) |
+| Project | [Changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md) · [Roadmap](https://github.com/gpyanalytics/secretloop/blob/main/docs/project/roadmap.md) · [Decision records](https://github.com/gpyanalytics/secretloop/blob/main/docs/decisions/README.md) · [Development](https://github.com/gpyanalytics/secretloop/blob/main/docs/development.md) |
 
-The [documentation hub](https://github.com/gpyanalytics/secretloop/blob/main/docs/README.md) indexes every page.
+Recordings of the CLI and MCP flows are in
+[docs/demos](https://github.com/gpyanalytics/secretloop/tree/main/docs/demos); every product string in the
+MCP recordings is cited to source in
+[FACTS-mcp-demo.md](https://github.com/gpyanalytics/secretloop/blob/main/docs/demos/FACTS-mcp-demo.md),
+and the recordings predate 0.7.0's longer scope sentence.
 
-## Security and contributing
-
-Verification sends a credential only to that credential's own provider, only
-for the 18 rules that have a verifier, and only after you turn the relevant
-switch on. Nothing else is transmitted, there is no telemetry, and the
-published package declares no runtime dependencies. Report a vulnerability
-through the process in [SECURITY.md](https://github.com/gpyanalytics/secretloop/blob/main/SECURITY.md), not a public issue.
+## Contributing and license
 
 Contributions are welcome, especially a rule you personally needed:
 [CONTRIBUTING.md](https://github.com/gpyanalytics/secretloop/blob/main/CONTRIBUTING.md) and
 [development](https://github.com/gpyanalytics/secretloop/blob/main/docs/development.md).
+SecretLoop is released under the [MIT License](https://github.com/gpyanalytics/secretloop/blob/main/LICENSE).
 
----
-
-SecretLoop — **From leaked to fixed.**
-A GPY Analytics product.
+SecretLoop — **From leaked to fixed.** A GPY Analytics product.
