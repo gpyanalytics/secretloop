@@ -1,6 +1,6 @@
 # SecretLoop documentation
 
-One authoritative page per topic. **Published 0.6.0** is the current release on
+One authoritative page per topic. **Published 0.7.1** is the current release on
 npm and the extension channels, and it is what these pages describe. Where a
 capability is new in 0.6.0 the page says so, so a reader still on 0.5.1 can tell
 what they do not have.
@@ -72,9 +72,9 @@ status that would go stale inside a published artifact.
 all serve **0.7.1** (published 5 October 2026, Asia/Kolkata), released from the
 commit tagged `v0.7.1` (`0f2cd0db`), and `main` carries the same. Each channel's
 package was downloaded after publication and compared byte for byte with the
-artifacts built in the release clean room. 0.7.1 is a dependency and
-documentation maintenance release with no intended change to detection or
-behaviour; the [changelog](../CHANGELOG.md#071--2026-10-05) lists what moved.
+artifacts built in the release clean room. 0.7.1 is a dependency and security
+maintenance release with no intended change to detection or behaviour; the
+[changelog](../CHANGELOG.md#071--2026-10-05) lists what moved.
 The previous release was 0.7.0 (2026-10-04); before that, 0.6.0 (2026-09-15).
 
 0.7.0 changes no detection: rules, fingerprints, thresholds and severities are
