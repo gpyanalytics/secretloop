@@ -14,6 +14,7 @@ import {
 } from "../src/mcp-core";
 import * as consent from "../src/consent";
 import * as acl from "../src/consent-acl-win";
+import { parseHelperMarkers, describeMarkers } from "./helper-markers";
 
 /**
  * THE WINDOWS CONSENT-STORE POLICY.
@@ -368,6 +369,143 @@ test("every cmdlet in the inspection script is module-qualified", () => {
     assert.strictEqual(mod, MODULES[cmd], `${cmd} must come from ${MODULES[cmd]}, not ${mod}`);
   }
   assert.ok(qualified.length >= CMDLETS.length, "every cmdlet is accounted for");
+});
+
+test("the inspection script's timing markers are four fixed stderr lines that use no cmdlet and can never fail the inspection", () => {
+  const source = acl.HELPER_SCRIPT_FOR_TESTS;
+  const lines = source.split("\n");
+  const markerLines = lines.filter((l) => l.includes(acl.HELPER_MARKER_PREFIX));
+  assert.strictEqual(markerLines.length, 4, "exactly four marker lines");
+  const shape = new RegExp(
+    "^\\s*(if\\(-not \\$marked\\)\\{\\$marked=\\$true;)?try\\{\\[Console\\]::Error\\.WriteLine\\('" +
+      acl.HELPER_MARKER_PREFIX + " (start|input|cmdlet|end) ' \\+ \\[DateTimeOffset\\]::UtcNow\\.ToUnixTimeMilliseconds\\(\\)\\)\\}catch\\{\\}\\}?$"
+  );
+  const seen: string[] = [];
+  for (const l of markerLines) {
+    const m = shape.exec(l);
+    assert.ok(m, "a marker line is exactly a guarded .NET Console.Error write of a fixed word and a timestamp");
+    assert.doesNotMatch(l, /\\[A-Z]|Write-|Out-/, "a marker uses no cmdlet, qualified or not");
+    assert.doesNotMatch(l, /\$p\b|\$raw|\$item|\$sec|\$o\b|\$_/, "a marker interpolates no path, input, object or exception");
+    seen.push((m as RegExpExecArray)[2]);
+  }
+  assert.deepStrictEqual(seen, [...acl.HELPER_MARKER_STAGES], "stages appear once each, in order start, input, cmdlet, end");
+  assert.strictEqual(lines[0], markerLines[0], "start is the first statement");
+  assert.strictEqual(lines[lines.length - 1], markerLines[3], "end is the last statement");
+  const gi = lines.findIndex((l) => l.includes("Get-Item -LiteralPath"));
+  assert.ok(gi > 0 && lines[gi + 1] === markerLines[2], "cmdlet fires once, immediately after the first successful Get-Item");
+  assert.ok(lines.indexOf("$marked=$false") < lines.findIndex((l) => l.startsWith("foreach")), "the once-only flag is set before the loop");
+  assert.ok(lines.indexOf(markerLines[1]) > lines.findIndex((l) => l.includes("ReadToEnd")), "input follows the stdin read");
+});
+
+suite("helper marker parser — numbers and counts only");
+
+test("absent stderr yields no markers and zero counts", () => {
+  for (const v of [undefined, null, "", Buffer.alloc(0)]) {
+    const p = parseHelperMarkers(v as any);
+    assert.deepStrictEqual(p, { at: {}, markerLines: 0, malformed: 0, duplicates: 0, otherLines: 0 });
+    assert.strictEqual(describeMarkers(p, 1_000, 2_000), "no start marker (0 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))");
+  }
+});
+
+test("four well-formed markers, CRLF or LF, string or Buffer, parse to the same deltas", () => {
+  const lf = "secretloop-helper start 1759600000100\nsecretloop-helper input 1759600000150\nsecretloop-helper cmdlet 1759600001150\nsecretloop-helper end 1759600001250\n";
+  const crlf = lf.replace(/\n/g, "\r\n");
+  for (const v of [lf, crlf, Buffer.from(crlf, "utf8")]) {
+    const p = parseHelperMarkers(v);
+    assert.deepStrictEqual(p.at, { start: 1759600000100, input: 1759600000150, cmdlet: 1759600001150, end: 1759600001250 });
+    assert.strictEqual(p.markerLines, 4);
+    assert.strictEqual(
+      describeMarkers(p, 1759600000000, 1759600001300),
+      "hostStart 100ms input 50ms import+firstCmdlet 1000ms body 100ms teardown 50ms (4 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))"
+    );
+  }
+});
+
+test("malformed, duplicate and foreign stderr lines are counted and never kept", () => {
+  const text = [
+    "secretloop-helper start 1759600000100",
+    "secretloop-helper start 1759600000999", // duplicate: first kept
+    "secretloop-helper input 17596000001", // too few digits
+    "secretloop-helper cmdlet notanumber",
+    "secretloop-helper bogus 1759600000100", // unknown stage
+    "secretloop-helper end 1759600001250 trailing",
+    "C:\\Users\\someone\\secret.txt : Access denied", // foreign text: counted only
+    "secretloop-helper end 1759600001250",
+  ].join("\n");
+  const p = parseHelperMarkers(text);
+  assert.deepStrictEqual(p.at, { start: 1759600000100, end: 1759600001250 });
+  assert.strictEqual(p.markerLines, 3);
+  assert.strictEqual(p.malformed, 4);
+  assert.strictEqual(p.duplicates, 1);
+  assert.strictEqual(p.otherLines, 1);
+  const phrase = describeMarkers(p, 1759600000000, 1759600001300);
+  assert.strictEqual(phrase, "hostStart 100ms input marker absent cmdlet marker absent body 1150ms teardown 50ms (3 marker line(s), 4 malformed, 1 duplicate, 1 other stderr line(s))");
+  assert.doesNotMatch(phrase, /Users|secret|denied/, "no stderr text reaches the phrase");
+});
+
+test("a start-only stderr still describes host start and names what is missing", () => {
+  const p = parseHelperMarkers("secretloop-helper start 1759600000100\n");
+  assert.strictEqual(describeMarkers(p, 1759600000000, 1759600000500), "hostStart 100ms input marker absent cmdlet marker absent end marker absent (1 marker line(s), 0 malformed, 0 duplicate, 0 other stderr line(s))");
+});
+
+suite("helper markers against the real PowerShell helper (Windows only)");
+
+/**
+ * Runs the inspection script exactly as the product does (-NoProfile -NonInteractive
+ * -EncodedCommand, paths on stdin) twice on the same path list: once as shipped and once with
+ * every marker line removed. STDOUT MUST BE BYTE-IDENTICAL -- the markers may change nothing the
+ * product reads -- and stderr of the shipped script must carry four monotonic markers. The
+ * instrumentation's cost is printed as measured here (stderr bytes exactly; warm wall-clock delta
+ * of the second run of each variant, which is noisy and informative only). This file runs after
+ * verify-consent.test.ts in `npm test`, so these spawns never precede the cold first-verify
+ * measurement there.
+ */
+test("the shipped script and the same script without markers produce byte-identical stdout; markers are four and monotonic", () => {
+  if (!WINDOWS) skip("NOT RUN off win32: this spawns the real Windows PowerShell helper");
+  const shipped = acl.HELPER_SCRIPT_FOR_TESTS;
+  const stripped = shipped
+    .split("\n")
+    .filter((l) => !l.includes(acl.HELPER_MARKER_PREFIX) && l !== "$marked=$false")
+    .join("\n");
+  assert.notStrictEqual(shipped, stripped);
+  const lab = mkdtempSync(path.join(tmpdir(), "secretloop-markers-"));
+  try {
+    writeFileSync(path.join(lab, "f.txt"), "x", "utf8");
+    const paths = [lab, path.join(lab, "f.txt"), path.join(lab, "absent")];
+    const exe = path.join(process.env.SystemRoot || "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const run = (src: string) => {
+      const wallStart = Date.now();
+      const r = spawnSync(exe, ["-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(src, "utf16le").toString("base64")], {
+        input: paths.join("\r\n") + "\r\n", encoding: "utf8", timeout: 60_000, maxBuffer: 1 << 20, windowsHide: true,
+      });
+      return { r, wallStart, wallEnd: Date.now() };
+    };
+    // Warm both variants once, then measure the second run of each.
+    run(stripped); run(shipped);
+    const a = run(stripped);
+    const b = run(shipped);
+    assert.strictEqual(a.r.status, 0, "stripped script exit status");
+    assert.strictEqual(b.r.status, 0, "shipped script exit status");
+    assert.strictEqual(b.r.stdout, a.r.stdout, "stdout is byte-identical with and without markers");
+    const parsedA = acl.classifyHelperResult({ error: null, signal: a.r.signal, status: a.r.status, stdout: a.r.stdout }, paths);
+    const parsedB = acl.classifyHelperResult({ error: null, signal: b.r.signal, status: b.r.status, stdout: b.r.stdout }, paths);
+    assert.deepStrictEqual(parsedB, parsedA, "the product's parse of both outputs is identical");
+    assert.ok(parsedA.ok, "the inspection succeeded on the lab paths");
+    const m = parseHelperMarkers(b.r.stderr);
+    assert.strictEqual(m.markerLines, 4, `four markers (${m.malformed} malformed, ${m.otherLines} other)`);
+    assert.strictEqual(m.malformed, 0);
+    assert.strictEqual(m.duplicates, 0);
+    const at = m.at as Required<typeof m.at>;
+    assert.ok(at.start <= at.input && at.input <= at.cmdlet && at.cmdlet <= at.end, "markers are monotonic");
+    assert.ok(at.start >= b.wallStart - 50 && at.end <= b.wallEnd + 50, "markers lie within the parent's spawn window (50 ms clock slack)");
+    const stderrBytes = Buffer.byteLength(b.r.stderr ?? "", "utf8");
+    assert.ok(stderrBytes <= 400, `marker stderr is small: ${stderrBytes} B`);
+    console.log(`    markers (warm, shipped): ${describeMarkers(m, b.wallStart, b.wallEnd)}`);
+    console.log(`    instrumentation cost: stderr ${stderrBytes} B charged to the allowance; warm wall ${b.wallEnd - b.wallStart} ms with markers vs ${a.wallEnd - a.wallStart} ms without (one sample each, noisy)`);
+    console.log(`    stripped script stderr: ${Buffer.byteLength(a.r.stderr ?? "", "utf8")} B`);
+  } finally {
+    rmSync(lab, { recursive: true, force: true });
+  }
 });
 
 test("every refusal sentence is fixed words, with no path, descriptor, record or OS text in it", () => {

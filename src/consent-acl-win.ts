@@ -391,16 +391,59 @@ export function decideAncestorDacl(
  *
  * If a cmdlet is ever added below, qualify it. `tests/consent-acl-win.test.ts` fails otherwise.
  */
+/**
+ * DIAGNOSTIC TIMING MARKERS, on standard error, numbers only.
+ *
+ * Three main runs have refused the first consented verify on the consent allowance's TIME
+ * category with the FIRST PowerShell process taking most of the 20 s (18,467 ms on run
+ * 37216056300). The test-side spawn timeline shows WHICH process is slow; it cannot see inside
+ * it. These four lines let the helper say when it reached each stage, so a slow cold start can be
+ * split into: process creation + host start + .NET + any antimalware scan of the host or the
+ * encoded command (`start` minus the parent's spawn time), reading the path list (`input`), the
+ * first cmdlet including its module import (`cmdlet`, fired once, after the first successful
+ * Get-Item), the inspection itself (`end` minus `cmdlet`), and exit + pipe teardown (the parent's
+ * return minus `end`). A single "script started" timestamp cannot separate the components before
+ * it from one another, and this does not claim to: everything before `start` is one block.
+ *
+ * What each line is: a fixed word, a stage name and the Unix epoch in milliseconds from
+ * `[DateTimeOffset]::UtcNow` — comparable with the parent's `Date.now()` on the same clock.
+ * Nothing else can appear: no path, SID, argument, exception text or environment value.
+ * `[Console]::Error.WriteLine` is a .NET call, not a cmdlet, so nothing is resolved through
+ * `PSModulePath` (type resolution measured at the cost of doing nothing, above). Each marker is
+ * wrapped in its own try/catch: a marker that cannot be written can never turn into an
+ * inspection failure. The product never reads these lines — `classifyHelperResult` and
+ * `parseHelperOutput` read stdout only — so stdout, decisions and exit status are unchanged.
+ * `tests/verify-consent.test.ts` parses them for its sanitized first-call log line.
+ *
+ * Cost, counted against the allowance: about 39 bytes per line, ~155 bytes per helper call,
+ * charged by `spendHelperBytes` because `maxBuffer` counts stderr. Three calls on a first verify
+ * are ~0.5 KB of the 4 MiB operation allowance and of the 1 MiB per-call cap; the allowance is
+ * not raised. No new process, no reordering, no retry: the markers ride inside the existing
+ * spawns.
+ */
+export const HELPER_MARKER_PREFIX = "secretloop-helper";
+export const HELPER_MARKER_STAGES = ["start", "input", "cmdlet", "end"] as const;
+function helperMarker(stage: (typeof HELPER_MARKER_STAGES)[number]): string {
+  return (
+    "try{[Console]::Error.WriteLine('" + HELPER_MARKER_PREFIX + " " + stage +
+    " ' + [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())}catch{}"
+  );
+}
+
 const HELPER_SOURCE = [
+  helperMarker("start"),
   "$ErrorActionPreference='Stop'",
   "$ProgressPreference='SilentlyContinue'",
   "$raw=[Console]::In.ReadToEnd()",
+  helperMarker("input"),
   "$paths=@($raw -split \"`r?`n\" | Microsoft.PowerShell.Core\\Where-Object { $_.Length -gt 0 })",
   "$out=Microsoft.PowerShell.Utility\\New-Object System.Collections.ArrayList",
+  "$marked=$false",
   "foreach($p in $paths){",
   "  $o=[ordered]@{path=[string]$p;ok=$false;exists=$false}",
   "  try{",
   "    $item=Microsoft.PowerShell.Management\\Get-Item -LiteralPath $p -Force",
+  "    if(-not $marked){$marked=$true;" + helperMarker("cmdlet") + "}",
   "    $o.exists=$true",
   "    $o.isDirectory=[bool]$item.PSIsContainer",
   "    $o.isReparsePoint=[bool](($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0)",
@@ -425,6 +468,7 @@ const HELPER_SOURCE = [
   // One compact object per line: PowerShell 5.1 unwraps a single-element array, so an array
   // would change shape with the number of paths.
   "foreach($r in $out){ Microsoft.PowerShell.Utility\\ConvertTo-Json -InputObject $r -Depth 4 -Compress }",
+  helperMarker("end"),
 ].join("\n");
 
 export const HELPER_SCRIPT_FOR_TESTS = HELPER_SOURCE;
