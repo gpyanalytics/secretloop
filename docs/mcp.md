@@ -28,7 +28,7 @@ invocation is logged there with its arguments and result counts, never a value.
 |---|---|
 | `secretloop_scan` | Scans the working tree of `path`. Optional `include` globs narrow it, on top of the project's own exclusions. Read-only. |
 | `secretloop_list_findings` | Filters the last scan's findings by severity, rule id or liveness. Always reports the unfiltered total beside the filtered count, and — **new in 0.6.0** — the `scope` of the scan those findings came from. Refuses, rather than returning an empty list, when no scan has run. |
-| `secretloop_get_finding` | One finding by fingerprint: rule metadata, location, and the surrounding source lines inside an untrusted-content block with every secret masked. |
+| `secretloop_get_finding` | One finding by fingerprint: rule metadata, location, and the surrounding source lines inside an untrusted-content block with every secret masked. Optional `path` names the repository when more than one has been scanned in the session; optional `contextLines` (integer, default 3, maximum 10) sets how many source lines are returned either side of the finding. |
 | `secretloop_history_scan` | Scans git history, bounded to 500 commits or 45 seconds by default (caps 5,000 and 120 seconds), returning at most 500 findings and saying when it stopped early. |
 | `secretloop_verify` | Asks a provider whether one *supported* credential is still live — only after a human approves it in a terminal. |
 

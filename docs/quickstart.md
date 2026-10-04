@@ -104,6 +104,30 @@ stderr so the masked stream stays clean. Generic high-entropy strings are not
 masked unless you pass `--entropy`, because masking every digest and UUID in a
 log destroys the log while protecting nothing.
 
+## 8. Remove it
+
+Each surface is removed on its own; none of them removes the others.
+
+```bash
+npm uninstall -g secretloop                        # the command-line tool
+code --uninstall-extension gpyanalytics.secretloop # the VS Code extension
+claude mcp remove secretloop                       # the MCP server, from Claude Code
+```
+
+Before uninstalling the extension, run **SecretLoop: Uninstall Pre-commit Hook**
+if you installed the hook (it restores any hook SecretLoop displaced) and
+**SecretLoop: Clear Stored AWS Admin Credentials** if you ever stored them; both
+live in the Command Palette. Other MCP clients are removed by deleting the
+`secretloop` entry from their configuration file (see
+[Integrations](integrations.md)).
+
+One thing stays behind: `~/.secretloop`, the consent store. It holds consent
+records for MCP verifications — each a SHA-256 commitment to the approved
+credential together with the finding's fingerprint, file, line, rule and
+provider, never the value, and each expiring five minutes after approval. Nothing
+else is kept there. SecretLoop does not delete the directory on uninstall. It is
+safe to remove yourself once nothing uses it, and harmless to leave.
+
 ## Where next
 
 - Something printed that you did not expect: [Troubleshooting](troubleshooting.md).

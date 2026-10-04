@@ -62,14 +62,25 @@ are listed in the [changelog](../CHANGELOG.md).
 
 ## What's in main and what's published
 
-Release status, current as of **2026-09-15**. This page is repository-only: it
+Release status, current as of **2026-10-04**. This page is repository-only: it
 is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 
-npm, Open VSX and the VS Code Marketplace all serve **0.6.0** (2026-09-15),
-released from the commit tagged `v0.6.0`. `main` carries the **0.7.0** release
-candidate, not yet published; the changelog's 0.7.0 section is its scope. The
-previous release was 0.5.1 (2026-09-11).
+[npm](https://www.npmjs.com/package/secretloop),
+[Open VSX](https://open-vsx.org/extension/gpyanalytics/secretloop) and the
+[VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=gpyanalytics.secretloop)
+all serve **0.7.0** (published 2026-10-04), released from the commit tagged
+`v0.7.0` (`da8b8c80`), and `main` carries the same. Each channel's package was
+downloaded after publication and compared byte for byte with the artifacts built
+in the release clean room. The previous release was 0.6.0 (2026-09-15).
+
+0.7.0 changes no detection: rules, fingerprints, thresholds and severities are
+those of 0.6.0. What changed is what a scan refuses and discloses — the consent
+store is checked before it is trusted, the scanner checks the file it actually
+opened before and, on Linux, after reading it, and the JSON report is
+`schemaVersion` 5, so reports must be regenerated with 0.7.0 before they can be
+compared. The [changelog](../CHANGELOG.md#070--2026-10-04) has the full list and
+what is not in this release.
 
 Everything 0.6.0 added is reporting and review: `secretloop compare`, the report
 comparison metadata, MCP scope and suppression disclosure, the editor's post-fix
