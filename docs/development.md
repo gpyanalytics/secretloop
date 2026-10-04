@@ -357,7 +357,7 @@ names an earlier release:
 
 - **F-1: `src/walk.ts` resolves the file name more than once.** Two concerns
   were recorded under one label. **Concern B (size cap) is CORRECTED in the
-  Unreleased candidate. Concern A (containment) remains OPEN.**
+  0.7.0. Concern A (containment) remains OPEN.**
 
   Both were **pre-existing** — every filesystem operation and its order was
   identical at `v0.5.1`, `v0.6.0` and the 0.6.0 documentation merge — and both
@@ -373,13 +373,13 @@ names an earlier release:
   skip-reason labels changed in 0.6.0 — though every filesystem operation and
   its order is. "Operationally identical" is the accurate phrase.
 
-  **Concern B — CORRECTED (Unreleased).** The cap now bounds the read: one
+  **Concern B — CORRECTED (0.7.0).** The cap now bounds the read: one
   descriptor, `fstat` on it, every byte from it, the limit enforced while
   reading. Measured before: a 64-byte cap and 4096 bytes read. See the
-  Unreleased changelog entry and
+  0.7.0 changelog entry and
   `secretloop-benchmark/f1-bounded-file-reads/`.
 
-  **The stat-to-open FIFO window — CORRECTED (Unreleased), on validated
+  **The stat-to-open FIFO window — CORRECTED (0.7.0), on validated
   platforms.** A regular file replaced by a FIFO between a reader's type check
   and its open blocked the open indefinitely (measured in
   `secretloop-benchmark/f1-containment-design/`, E2, darwin and Linux). Every
@@ -399,12 +399,12 @@ names an earlier release:
   on win32 the flag is undefined and the open is unchanged. Record:
   `secretloop-benchmark/compare-fifo-nonblocking-open/`.
 
-  **Concern A — OPEN, with check-time hardening in the Unreleased candidate.**
+  **Concern A — OPEN, with check-time hardening in 0.7.0.**
   A path approved by `isInsideRoot` can resolve outside the root by the time
   the read opens it, at the final component *or through a replaced parent
   directory*. **One descriptor does not close this**: `openSync` resolves the
   name and follows symlinks, so the containment decision has to be made about
-  the opened object. The Unreleased candidate makes exactly that decision, on
+  the opened object. 0.7.0 makes exactly that decision, on
   every content descriptor, before its first read (`readChecked` in
   `src/walk.ts`): identity capture by `lstat` one syscall before the open,
   `fstat` comparison on the descriptor, and on Linux the kernel's own path for
@@ -424,7 +424,7 @@ names an earlier release:
   open and before the check is accepted and read (MI1/MI2); an inside object
   moved out after the check and still outside after the last read is refused on
   Linux by the post-read repeat of the kernel-path check (`kernelPathAfterRead`,
-  Unreleased) with its bytes discarded — MO1 as measured — but one outside only
+  0.7.0) with its bytes discarded — MO1 as measured — but one outside only
   between the two checks is read, so location throughout the read is still not
   established; the identity check alone
   cannot see a parent replaced between path resolution and the capture, so on

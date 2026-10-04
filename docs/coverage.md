@@ -111,9 +111,9 @@ sentence and the JSON `summary` carry:
 | `N file(s) not scanned — could not be read` | **New in 0.6.0.** The scan intended to read them and could not — permission, I/O, or a supported binary format it could not conclusively inspect |
 | `N path(s) not scanned — not a regular file` | **New in 0.6.0.** A directory, fifo, socket or device where a file was expected |
 | `N file(s) not scanned — gone before they could be read` | **New in 0.6.0.** Enumerated, then absent by the time the read reached them |
-| `N file(s) not scanned — replaced between inspection and read` | **Unreleased.** The object the reader opened was not the object it had just inspected (device or inode differed). A positive observation of a substitution — outside content, or an inside file saved over the name in that instant; the check cannot tell which — and nothing is read from it. Counts against completeness |
-| `N file(s) excluded (symlinks resolving outside the scan root)` also counts, **Unreleased**, a file whose opened descriptor the Linux kernel records as located outside the root at the check before its first read | Same clause and reason as the symlink case: the object is outside |
-| `N descriptor(s) opened for content: identity …; kernel path …` | **Unreleased.** Always the last clause, printed on every working-tree and staged scan. What the readers' own checks did on each descriptor they opened — see [Opened-file checks](#opened-file-checks) |
+| `N file(s) not scanned — replaced between inspection and read` | **New in 0.7.0.** The object the reader opened was not the object it had just inspected (device or inode differed). A positive observation of a substitution — outside content, or an inside file saved over the name in that instant; the check cannot tell which — and nothing is read from it. Counts against completeness |
+| `N file(s) excluded (symlinks resolving outside the scan root)` also counts, **new in 0.7.0**, a file whose opened descriptor the Linux kernel records as located outside the root at the check before its first read | Same clause and reason as the symlink case: the object is outside |
+| `N descriptor(s) opened for content: identity …; kernel path …` | **New in 0.7.0.** Always the last clause, printed on every working-tree and staged scan. What the readers' own checks did on each descriptor they opened — see [Opened-file checks](#opened-file-checks) |
 | `N file(s) not scanned — binary or unreadable` | **0.5.1 and earlier; no longer emitted.** The single combined clause the four rows above replace. It makes the report incomplete, binary files included |
 | `N archive(s) opened — M member(s) scanned` | containers opened, members offered to the scanner |
 | `N archive member(s) not scanned` | members refused; reasons in `summary.archives.members.refused` |
@@ -129,7 +129,7 @@ member name or value.
 
 ## Opened-file checks
 
-**Unreleased.** Before a reader reads a byte from a file it opened, it checks
+**New in 0.7.0.** Before a reader reads a byte from a file it opened, it checks
 the descriptor it holds — not the name it resolved. The accounting is per
 **descriptor**, not per file: an ordinary file is opened by three readers (the
 PKCS#12 probe, the archive probe and the text reader), each on its own

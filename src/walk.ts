@@ -326,7 +326,7 @@ export interface OpenedFileChecks {
   opened: number;
   identity: CheckCounts;
   kernelPath: CheckCounts;
-  /** Unreleased, beside the two above: the post-read repeat of the kernel-path check. */
+  /** New in 0.7.0, beside the two above: the post-read repeat of the kernel-path check. */
   kernelPathAfterRead: CheckCounts;
 }
 

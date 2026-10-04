@@ -3,7 +3,7 @@
  *
  * This file exists so that knowing a credential *could* be checked does not
  * require shipping the code that checks it. src/verify.ts holds eighteen
- * verifier functions, and through them `fetch` calls to eighteen providers and
+ * verifier functions, and through them `fetch` calls to fifteen distinct providers and
  * the AWS SDK. Anything that imports verify.ts to ask `isVerifiable(ruleId)`
  * drags all of that into its bundle: the MCP server, which has no verification
  * tool and must not acquire the capability by accident, was 1.3 MB of which

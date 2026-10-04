@@ -65,7 +65,7 @@ For the editor, install **SecretLoop** from the VS Code Marketplace or from a
 `.vsix`:
 
 ```bash
-code --install-extension secretloop-0.5.1.vsix
+code --install-extension secretloop-0.7.0.vsix
 ```
 
 The extension scans on save and puts *redact*, *extract to `.env`* and, for some

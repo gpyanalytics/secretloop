@@ -65,7 +65,7 @@ has no input of its own for the tier. The current count is in
   **What it establishes:** which working-tree scan of which root produced these
   findings, and what that scan inspected — `filesScanned`, `outsideExcluded`,
   `apiDocumentsScoped`, any `archives` accounting, the scope sentence and
-  (**Unreleased**) `openedFileChecks`, the per-descriptor accounting of the
+  (**new in 0.7.0**) `openedFileChecks`, the per-descriptor accounting of the
   readers' identity and kernel-path checks — counts only, no path — described
   in [coverage](coverage.md#opened-file-checks). The scope statement ends with
   the same accounting as its last clause.
@@ -191,7 +191,7 @@ mode `0600` and hold hashes, but any process running as you can read and write
 them. This protects against a hostile repository and an over-eager or compromised
 agent, not against malware already running under your account.
 
-**The store is checked before it is trusted** (**Unreleased**). On macOS and
+**The store is checked before it is trusted** (**new in 0.7.0**). On macOS and
 Linux every consent operation — reading a record at either call, listing for
 `secretloop approve`, approving, claiming and deleting — first requires
 `~/.secretloop` and `~/.secretloop/pending` to be real directories (not

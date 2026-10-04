@@ -15,6 +15,7 @@ by SHA-256 of the frozen record; public summaries are in
 | [0004](0004-verification-consent-gate.md) | An MCP verification needs a human approval in a terminal, bound to one value | shipped in 0.2.0; refusals for member and encoded findings shipped in 0.5.0 |
 | [0005](0005-api-document-entropy-scope.md) | The entropy tier is not run over API description documents | shipped in 0.5.0 |
 | [0006](0006-archive-coverage-accounting.md) | Archive containers, members, metadata and enumeration are accounted separately from files | shipped in 0.5.0 |
+| [0007](0007-0.7.0-release-scope.md) | 0.7.0 ships containment route (a) only; N4 deferred, N5 not funded; published support statement adopted; every CI job gates publication | adopted for 0.7.0 |
 
 A record is amended, not rewritten, when a decision changes; the amendment says
 what changed and why.
