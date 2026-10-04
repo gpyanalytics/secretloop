@@ -62,17 +62,20 @@ are listed in the [changelog](../CHANGELOG.md).
 
 ## What's in main and what's published
 
-Release status, current as of **2026-10-04**. This page is repository-only: it
+Release status, current as of **2026-10-05**. This page is repository-only: it
 is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 
 [npm](https://www.npmjs.com/package/secretloop),
 [Open VSX](https://open-vsx.org/extension/gpyanalytics/secretloop) and the
 [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=gpyanalytics.secretloop)
-all serve **0.7.0** (published 2026-10-04), released from the commit tagged
-`v0.7.0` (`da8b8c80`), and `main` carries the same. Each channel's package was
-downloaded after publication and compared byte for byte with the artifacts built
-in the release clean room. The previous release was 0.6.0 (2026-09-15).
+all serve **0.7.1** (published 5 October 2026, Asia/Kolkata), released from the
+commit tagged `v0.7.1` (`0f2cd0db`), and `main` carries the same. Each channel's
+package was downloaded after publication and compared byte for byte with the
+artifacts built in the release clean room. 0.7.1 is a dependency and
+documentation maintenance release with no intended change to detection or
+behaviour; the [changelog](../CHANGELOG.md#071--2026-10-05) lists what moved.
+The previous release was 0.7.0 (2026-10-04); before that, 0.6.0 (2026-09-15).
 
 0.7.0 changes no detection: rules, fingerprints, thresholds and severities are
 those of 0.6.0. What changed is what a scan refuses and discloses — the consent
