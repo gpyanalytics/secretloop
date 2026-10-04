@@ -1,6 +1,55 @@
 # Changelog
 
-## Unreleased
+## 0.7.0 — 2026-10-04
+
+### What you can do in 0.7.0
+
+SecretLoop 0.7.0 changes no detection: the rules, fingerprints, severities and
+thresholds are those of 0.6.0, so the same tree reports the same findings and a
+0.6.0 consent record or baseline still matches. What changed is what a scan
+**refuses** and what it **discloses**.
+
+**Trust the consent store only when it is private.** Before any consent
+operation the store's directories, their ancestors up to the root and each record
+file are inspected — ownership, mode and links on macOS and Linux, owner and access
+list on Windows — and an unsafe store is refused with a fixed sentence, never
+repaired, with no provider request and no record written. One request has one
+work allowance, so an inspection that runs long is refused rather than left to run.
+
+**Know which object the scanner actually read.** Every content read checks that
+the opened descriptor is the object that was inspected, and on Linux that its
+kernel-recorded location is inside the scan root before the first read and after
+the last. A refused file is counted and makes the report `incomplete`; the scope
+sentence and the JSON `openedFileChecks` block say what each check did.
+
+**Compare like with like.** The JSON report is `schemaVersion` 5 because
+`incomplete` now counts those refusals. `secretloop compare` refuses a 0.6.0
+report on either side; to compare across the upgrade, scan both sides again with
+0.7.0. Nothing converts a report.
+
+**Windows.** The consent check runs in about half a second instead of twenty-odd,
+the suite runs natively on ARM64 as well as x64, and the store is exercised on an
+exFAT volume in CI, where it is refused as designed.
+
+### Not in 0.7.0, stated
+
+- **Containment on macOS and Windows is risk reduction, not a kernel-path check**
+  (F-1 Concern A stays open). The macOS `lsof` route (N4) is **deferred from
+  0.7.0** and the `node:wasi` evaluation (N5) is **not funded for this release**;
+  both stay on the backlog (decision record 0007). Linux's post-read check is two
+  points that bracket the read, not an interval.
+- **The first consented verify on x64 Windows has twice refused on the 20-second
+  allowance** on `main` (runs 35488134886 and 36333773664); the cause is
+  unresolved and a per-helper timing line now records where the time goes.
+- **Unexercised environments:** FAT32, ReFS and network volumes; domain and
+  managed profiles; non-English hosts; Node 18 on Windows ARM64 (no binary
+  exists). One hosted image per platform is not universal client support.
+- **Configurations 0.6.0 accepted and 0.7.0 refuses:** a group-writable home, a
+  home under another account's directory, an owner-only `allow` entry on macOS,
+  a store on an exFAT volume. The refusal names the cause; the fix is to make the
+  store private.
+- **The benchmark's real-noise corpus B** is unnamed and unpinned, so its rows are
+  historical only.
 
 ### Performance
 

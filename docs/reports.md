@@ -43,13 +43,13 @@ illustrative, not a claim about which release carries these fields.
     "scopeNoun": "file",
     "coverage": {                    // DESCRIPTIVE, not comparison-bearing
       "limitations": [],
-      // Unreleased: per-descriptor check accounting for the readers this scan
+      // 0.7.0: per-descriptor check accounting for the readers this scan
       // ran (see coverage.md, "Opened-file checks"); absent for a history scan
       "openedFileChecks": {
         "opened": 6,
         "identity":   { "verified": 6, "refused": 0, "unavailable": 0, "failed": 0, "notReached": 0 },
         "kernelPath": { "verified": 0, "refused": 0, "unavailable": 6, "failed": 0, "notReached": 0 },
-        // Unreleased: the same test repeated after the last read; notReached for a
+        // 0.7.0: the same test repeated after the last read; notReached for a
         // descriptor whose reads did not complete (declined by a format probe,
         // refused mid-read, or a read threw)
         "kernelPathAfterRead": { "verified": 0, "refused": 0, "unavailable": 2, "failed": 0, "notReached": 4 }
@@ -113,7 +113,7 @@ descriptive field does not bump it. **It is `5`**:
   so a still-present credential could read as removed;
 - version 4 adds **`binaryDigest`**, making the excluded set part of
   eligibility, which closes that;
-- version 5 (**Unreleased**) **widens what `incomplete` counts**: a file refused
+- version 5 (**0.7.0**) **widens what `incomplete` counts**: a file refused
   by the opened-file checks — `replaced`, a kernel-path `outside`, or failed
   check evidence — is a coverage limitation. A version-4 producer read such an
   object and said `incomplete: false`; a version-5 producer says `true` for the
@@ -311,7 +311,7 @@ suppression identity.
 look at**: a file over `maxFileSizeBytes`, a file it could not read, a path that
 was not a regular file or had vanished, a symlink refused by the containment
 guard, an archive it could not finish enumerating, a container it could not
-open, or a run that was stopped. **Unreleased:** also a file whose opened
+open, or a run that was stopped. **0.7.0:** also a file whose opened
 descriptor was not the object just inspected (`replaced`), or whose
 kernel-recorded location was outside the root at the check before its first
 read or at the check after its last read (`outside`; in the second case the
@@ -720,7 +720,7 @@ decide it, and **two equal coverage blocks do not make two scans comparable**.
 Nothing in it may be used as an identity — least of all `inlineSuppressed`, for
 the reason in the table above.
 
-`summary.coverage.openedFileChecks` (**Unreleased**) is descriptive in the same
+`summary.coverage.openedFileChecks` (**0.7.0**) is descriptive in the same
 way. Two complete reports whose blocks differ — one scanned on Linux with the
 kernel-path check verified, one on macOS with it unavailable — remain
 comparable, exactly as every report written before the block existed compares

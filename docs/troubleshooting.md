@@ -66,7 +66,7 @@ whose first 8,000 bytes carry no NUL is *not* caught and is scanned as text. If 
 UTF-16 file, convert it to UTF-8 to bring it into scope.
 
 **`N file(s) not scanned — replaced between inspection and read`** —
-**Unreleased.** The reader inspected a file, opened it, and found the opened
+**New in 0.7.0.** The reader inspected a file, opened it, and found the opened
 object was not the one it had inspected: its device or inode differed. Nothing
 was read from it and the report is incomplete. In an ordinary tree this means
 something rewrote the file in the instant between the two operations — an
@@ -75,7 +75,7 @@ tree someone else can write to, it is the substitution the check exists to
 catch, and it says so rather than guessing which.
 
 **`N descriptor(s) opened for content: identity …; kernel path …`** —
-**Unreleased**, on every working-tree and staged scan, last in the sentence.
+**New in 0.7.0**, on every working-tree and staged scan, last in the sentence.
 The readers' own accounting: how many descriptors they opened and what the
 identity and kernel-path checks did on each. `kernel path N unavailable` is
 what macOS and Windows always say — there is no kernel record of an open
@@ -124,7 +124,7 @@ with an empty list.
 
 **"the consent store (.secretloop under your home directory) … consent records
 cannot be trusted"** (MCP `secretloop_verify` error, or `secretloop approve`
-exit 2) — **Unreleased.** On macOS and Linux the store's two directories must
+exit 2) — **new in 0.7.0.** On macOS and Linux the store's two directories must
 be real directories owned by you with mode `0700`; the message says which
 check failed (not a directory, a symbolic link, another account's directory,
 or too open and not repairable). Nothing was transmitted or approved. Look at

@@ -166,16 +166,21 @@ stronger ones.
 - [ ] **Push `main` before `npm publish`.** A version on npm whose source is
       not yet public undercuts `SECURITY.md`'s own invitation to check an
       installed version against the public git tag.
-- [ ] **Native Windows consent green on the exact release candidate.**
-      `test-windows-two-user` and `packaging-windows` both green on the
-      release PR **and** on the push-to-`main` commit it produced. If either
-      is red, missing, or still running, **pause publication and investigate**
-      — do not rerun solely to obtain green.
+- [ ] **Every CI job green on the exact release candidate.** All jobs of the
+      workflow — the Linux, macOS and Windows suites on every Node version in
+      the matrix, the x64 and ARM64 two-account consent jobs, the exFAT store
+      job, every packaging smoke and `self-scan` — succeeded on the release PR
+      **and** on the push-to-`main` commit it produced (16 jobs per run at the
+      time of writing; read the count from the run, not from here). If any job
+      is red, missing, cancelled, timed out or still running, **pause
+      publication and investigate** — do not rerun solely to obtain green, and
+      record what the failed run showed.
 
       This is a **manual release requirement, not a GitHub required status
       check.** `main` requires only `self-scan`, `packaging`, `test (18)` and
       `test (20)`, so nothing stops a merge or a publish on your behalf; this
-      checklist is the only thing that does.
+      checklist is the only thing that does. The requirement was widened from
+      the two Windows jobs to every job for 0.7.0 (decision record 0007).
 - [ ] **The clean-room runtime can run the publish tools.** In the clean-room
       checkout: `node -v` reports **22 or newer**, and
       `./node_modules/.bin/ovsx --version` prints the version `package-lock.json`

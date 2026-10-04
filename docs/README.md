@@ -67,7 +67,8 @@ is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 
 npm, Open VSX and the VS Code Marketplace all serve **0.6.0** (2026-09-15),
-released from the commit tagged `v0.6.0`, and `main` carries the same. The
+released from the commit tagged `v0.6.0`. `main` carries the **0.7.0** release
+candidate, not yet published; the changelog's 0.7.0 section is its scope. The
 previous release was 0.5.1 (2026-09-11).
 
 Everything 0.6.0 added is reporting and review: `secretloop compare`, the report

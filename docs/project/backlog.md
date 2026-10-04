@@ -120,12 +120,12 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   `record.id` is read by no caller, so nothing was reachable through it. Five
   behavioural tests in `tests/verify-consent.test.ts` pin the invariant; two
   failed before the change.
-- **F-1 FIFO open window** — **corrected in the Unreleased candidate**
+- **F-1 FIFO open window** — **corrected in 0.7.0**
   (slice 1 of `f1-containment-design`). Non-blocking content opens plus
   post-open classification; validated on darwin and Linux, a plain read-only
   fallback on win32 stated as such.
 - **F-1 Concern A, slice 2 (check-time containment hardening)** —
-  **implemented in the Unreleased candidate**, as reviewed in
+  **implemented in 0.7.0**, as reviewed in
   `f1-containment-design-review` and its timing addendum: identity capture and
   `fstat` comparison on every content descriptor (2a, all platforms), the
   Linux kernel-path check (2b), and the `openedFileChecks` disclosure (2c),
@@ -135,10 +135,13 @@ refresh is closed (PR #52), and the history cancellation flake is fixed and
   open**: the checks prove location at the checks, not at the open, and an
   object moved in before the pre-read check is read by design; an object moved
   out after it is refused on Linux by the post-read repeat (`kernelPathAfterRead`,
-  Unreleased) unless it is back inside by then;
+  0.7.0) unless it is back inside by then;
   see [development](../development.md#open-items). Not taken: a native
   `openat2` binding, a snapshot of content, or a broader filesystem policy.
-- **Comparator FIFO input** — **corrected in the Unreleased candidate.**
+  **Owner decisions for 0.7.0** ([decision 0007](../decisions/0007-0.7.0-release-scope.md)):
+  the macOS `lsof` route (N4) is deferred from 0.7.0 and the `node:wasi`
+  evaluation (N5) is not funded for this release; both remain backlog items.
+- **Comparator FIFO input** — **corrected in 0.7.0.**
   `secretloop compare` given a report path that is a named pipe waited for a
   writer indefinitely; the report-file open is now non-blocking where the
   platform defines the flag and the existing not-a-regular-file refusal
