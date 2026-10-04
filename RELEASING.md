@@ -17,8 +17,15 @@ change to what users receive.
 - [ ] `self-scan` green (CI enforces — the tool scans its own repository).
 - [ ] `tsc -p ./` and `tsc -p tsconfig.tests.json` both exit 0.
 - [ ] **Clean-room verification:** a fresh sibling worktree — **not** `/tmp`,
-      **not** the working tree — then `npm ci` → build → test →
-      `npm pack --dry-run` showing exactly the intended files.
+      **not** the working tree — then `npm ci` → `npm run compile` →
+      `npm run bundle` → `npm test` → `npm pack --dry-run` showing exactly the
+      intended files. **Compile before the suite, every time.** The suite is
+      partly a test of compiled modules: at least one case spawns a child that
+      requires `out/consent.js`, which only `tsc` writes — `npm run bundle`
+      produces the three bundles and nothing else. A clean room that bundles
+      without compiling fails that case with a message about the reader, not
+      about the missing build (measured during the 0.7.0 release). CI runs
+      `npm run compile` before `npm test` for the same reason.
 
       Not the working tree because 0.1.6 shipped a VSIX carrying dev
       dependencies packaged from one, and 0.1.7 existed only to republish it.
