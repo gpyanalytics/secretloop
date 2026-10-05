@@ -24,9 +24,12 @@
 # temp directory and the workspace, and are capped in lines. The last-completed-test lines are the
 # harness's own fixed test names and headings.
 #
-# WHAT IT TOUCHES. Only processes in the recorded process group (never by name) and only
+# WHAT IT TOUCHES. Only processes in the recorded process group that started after the suite began
+# and are not this step or its ancestors (a group id is a reused pid; if it equals this step's own
+# group the script stops without touching anything), killed by pid, never by name; and only
 # directories that are new in the suite temp directory since the snapshot, were born after the
-# suite started, are owned by this user, and carry a test lab prefix (secretloop- or sl-). Nothing
+# suite started, are owned by this user, carry a test lab prefix (secretloop- or sl-) and are not
+# symbolic links. Nothing
 # else is killed or removed. The suite step's own failure is what fails the job; this script exits
 # non-zero only when its cleanup could not finish.
 #
@@ -56,7 +59,8 @@ WS="${GITHUB_WORKSPACE:-/nonexistent}"
 redact() {
   # Longest, most specific paths first. The suite temp directory usually sits under the user's
   # home-like /var/folders tree, the runner temp under the workspace parent.
-  sed -e "s#${SUITE_TMP}#<tmp>#g" -e "s#${RT}#<runner-temp>#g" -e "s#${WS}#<workspace>#g" -e "s#${HOME_DIR}#~#g"
+  sed -e "s#${SUITE_TMP}#<tmp>#g" -e "s#${RT}#<runner-temp>#g" -e "s#${WS}#<workspace>#g" -e "s#${HOME_DIR}#~#g" \
+      -e "s#/private/tmp/#<systmp>/#g" -e "s#/private/var/folders/#<systmp>/#g" -e "s#/var/folders/#<systmp>/#g" -e "s#/tmp/#<systmp>/#g"
 }
 bounded() { # bounded SECONDS cmd args...  -- the alarm persists across exec, so a stuck probe dies
   local secs="$1"; shift
@@ -90,8 +94,36 @@ else
 fi
 
 # ---- 2. surviving processes in the suite's own process group (never selected by name)
-echo "surviving processes in group ${PG}: $(members)"
-SURVIVORS="$(ps -axo pid=,ppid=,pgid=,stat=,etime=,comm= | awk -v pg="$PG" '$3==pg')"
+# A process-group id is the leader's pid, and pids are reused. Three guards against a stale or
+# recycled id: the recorded group must not be this step's own group; no member may be this script
+# or one of its ancestors; and every member must have started after the suite began (etime is the
+# member's own age, so start = now - etime). Anything failing a guard is reported, never touched.
+OWN_PG="$(ps -o pgid= -p $$ | tr -d ' ')"
+if [ "$PG" = "$OWN_PG" ]; then
+  echo "recorded group ${PG} is this step's own process group: the id has been reused; nothing is sampled, killed or removed"
+  echo "::endgroup::"
+  exit 0
+fi
+ANCESTORS=" "; A="$$"; while [ -n "$A" ] && [ "$A" != "0" ] && [ "$A" != "1" ]; do ANCESTORS="${ANCESTORS}${A} "; A="$(ps -o ppid= -p "$A" 2>/dev/null | tr -d ' ')"; done
+NOW="$(date +%s)"
+etime_secs() { # [[dd-]hh:]mm:ss -> seconds
+  local t="$1" d=0; case "$t" in *-*) d="${t%%-*}"; t="${t#*-}";; esac
+  local IFS=:; set -- $t
+  case $# in 3) echo $((d*86400 + $1*3600 + $2*60 + $3));; 2) echo $((d*86400 + $1*60 + $2));; *) echo 0;; esac
+}
+RAW="$(ps -axo pid=,ppid=,pgid=,stat=,etime=,comm= | awk -v pg="$PG" '$3==pg')"
+SURVIVORS=""; REJECTED=0
+while IFS= read -r ROW; do
+  [ -n "$ROW" ] || continue
+  set -- $ROW; RPID="$1"; RET="$5"
+  case "$ANCESTORS" in *" $RPID "*) REJECTED=$((REJECTED + 1)); continue;; esac
+  STARTED=$((NOW - $(etime_secs "$RET")))
+  if [ "$STARTED" -lt $((START - 5)) ]; then REJECTED=$((REJECTED + 1)); continue; fi
+  SURVIVORS="${SURVIVORS}${ROW}
+"
+done <<< "$RAW"
+SURVIVORS="$(printf '%s' "$SURVIVORS")"
+echo "surviving processes in group ${PG}: $(printf '%s\n' "$SURVIVORS" | grep -c .) accepted, ${REJECTED} rejected (this step's ancestry, or started before the suite)"
 if [ -n "$SURVIVORS" ]; then
   echo "  pid ppid pgid stat elapsed comm"
   echo "$SURVIVORS" | awk '{ n=split($6,a,"/"); printf "  %s %s %s %s %s %s\n", $1, $2, $3, $4, $5, a[n] }'
@@ -124,21 +156,26 @@ for PID in $ORDERED; do
   # (home) or <other>. A FIFO the process is still blocked in open() on has no descriptor yet and
   # does not appear here; the stack sample is what shows that state.
   bounded 20 /usr/sbin/lsof -nP -p "$PID" 2>&1 | awk 'NR>1 { print $4, $5, $NF }' | redact \
-    | awk '{ n=split($3,a,"/"); base=a[n]; cls="<other>"; if ($3 ~ /^<tmp>/) cls="<tmp>"; else if ($3 ~ /^<runner-temp>/) cls="<runner-temp>"; else if ($3 ~ /^<workspace>/) cls="<workspace>"; else if ($3 ~ /^~/) cls="~"; else if ($3 !~ /^\//) { cls=""; base=$3 } printf "%s %s %s%s%s\n", $1, $2, cls, (cls==""?"":"/.../"), base }' \
+    | awk '{ v=$3; if (v !~ /\//) { printf "%s %s %s\n", $1, $2, v; next }
+             n=split(v,a,"/"); base=a[n]; cls="<other>";
+             if (v ~ /^</) { cls=substr(v, 1, index(v, ">")) } else if (v ~ /^~/) { cls="~" }
+             printf "%s %s %s/.../%s\n", $1, $2, cls, base }' \
     | head -40 | sed 's/^/  /'
 done
 
-# ---- 4. end the suite's process group: TERM, wait up to 5 s, then KILL
+# ---- 4. end the accepted survivors: TERM, wait up to 5 s, then KILL -- by pid, never by name
 CLEAN_OK=1
-if [ "$(members)" -gt 0 ]; then
-  kill -TERM -- "-${PG}" 2>/dev/null || true
-  for _ in 1 2 3 4 5; do [ "$(members)" -eq 0 ] && break; sleep 1; done
-  if [ "$(members)" -gt 0 ]; then
-    kill -KILL -- "-${PG}" 2>/dev/null || true
+ACCEPTED="$(printf '%s\n' "$SURVIVORS" | awk 'NF {print $1}')"
+alive() { local n=0; for P in $ACCEPTED; do kill -0 "$P" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
+if [ -n "$ACCEPTED" ]; then
+  for P in $ACCEPTED; do kill -TERM "$P" 2>/dev/null || true; done
+  for _ in 1 2 3 4 5; do [ "$(alive)" -eq 0 ] && break; sleep 1; done
+  if [ "$(alive)" -gt 0 ]; then
+    for P in $ACCEPTED; do kill -KILL "$P" 2>/dev/null || true; done
     sleep 1
   fi
-  LEFT="$(members)"
-  echo "process group ${PG} after cleanup: ${LEFT} member(s)"
+  LEFT="$(alive)"
+  echo "accepted survivors after cleanup: ${LEFT} alive; group ${PG} now has $(members) member(s)"
   [ "$LEFT" -eq 0 ] || CLEAN_OK=0
 fi
 
@@ -150,6 +187,8 @@ if [ -d "$SUITE_TMP" ] && [ -f "$STATE/tmp-before.txt" ]; then
     [ -n "$NAME" ] || continue
     case "$NAME" in secretloop-*|sl-*) ;; *) continue ;; esac
     P="$SUITE_TMP/$NAME"
+    # A symbolic link is never followed or removed, whatever it points at.
+    if [ -L "$P" ]; then KEPT=$((KEPT + 1)); echo "  left in place: symbolic link $(echo "$NAME" | sed -E 's/-[A-Za-z0-9]{6,}$/-<random>/')"; continue; fi
     [ -d "$P" ] || continue
     BORN="$(stat -f %B "$P" 2>/dev/null || echo 0)"; OWNER="$(stat -f %u "$P" 2>/dev/null || echo -1)"
     if [ "$BORN" -ge "$START" ] && [ "$OWNER" = "$(id -u)" ]; then
@@ -160,7 +199,7 @@ if [ -d "$SUITE_TMP" ] && [ -f "$STATE/tmp-before.txt" ]; then
     fi
   done < <(comm -13 <(sort "$STATE/tmp-before.txt") <(sort "$STATE/tmp-after.txt"))
 fi
-echo "lab directories: ${REMOVED} removed, ${KEPT} left in place (not new, not ours, not born after the suite started, or not removable)"
+echo "lab directories: ${REMOVED} removed, ${KEPT} left in place (symbolic link, not ours, not born after the suite started, or not removable)"
 echo "::endgroup::"
 
 if [ "$CLEAN_OK" -eq 1 ]; then
