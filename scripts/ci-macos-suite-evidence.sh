@@ -102,7 +102,11 @@ fi
 # test's child -- while its ancestors merely wait on it. Survivors with no surviving child in the
 # group are sampled first, then the rest, so the cap falls on the waiters, not the blocked leaf.
 # (The first experiment run sampled npm, tee and sh by pid order and missed both node processes.)
-ORDERED="$(echo "$SURVIVORS" | awk '{ pid[NR]=$1; isparent[$2]=1 } END { for (i=1;i<=NR;i++) if (!(pid[i] in isparent)) print pid[i]; for (i=1;i<=NR;i++) if (pid[i] in isparent) print pid[i] }')"
+# Order: leaves before waiters, deeper before shallower (depth = ancestors inside the group), so a
+# childless helper such as `tee` does not take a slot ahead of the blocked leaf.
+ORDERED="$(echo "$SURVIVORS" | awk '{ pid[NR]=$1; ppid[$1]=$2; isparent[$2]=1 }
+  END { for (i=1;i<=NR;i++) { d=0; q=ppid[pid[i]]; while (q in ppid && d<64) { d++; q=ppid[q] }
+        printf "%d %d %s\n", (pid[i] in isparent) ? 1 : 0, -d, pid[i] } }' | sort -n -k1,1 -k2,2 | awk '{print $3}')"
 COUNT=0
 for PID in $ORDERED; do
   COUNT=$((COUNT + 1)); [ "$COUNT" -gt 4 ] && { echo "  (more survivors not sampled)"; break; }
