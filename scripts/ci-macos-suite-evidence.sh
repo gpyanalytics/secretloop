@@ -123,6 +123,30 @@ while IFS= read -r ROW; do
 "
 done <<< "$RAW"
 SURVIVORS="$(printf '%s' "$SURVIVORS")"
+# IDENTITY, re-checked at every use. A pid can be recycled between this listing and a later
+# sample or signal. Each accepted pid is fingerprinted now -- group, start time (second
+# resolution) and executable; NOT the parent pid, which the kernel rewrites to 1 when a parent
+# exits first -- and the fingerprint must still match immediately before it is
+# sampled and immediately before each signal; a pid whose fingerprint differs or cannot be read is
+# skipped and the cleanup reported incomplete. The window between a check and the following
+# kill(2) is not closed by this (nothing in user space can close it), so no claim of race-free
+# cleanup is made; the window is reduced to microseconds and any mismatch is reported.
+FP_FILE="$STATE/fingerprints.txt"; : > "$FP_FILE"
+fingerprint() { ps -o pgid=,lstart=,comm= -p "$1" 2>/dev/null | tr -s ' ' | sed -e 's/^ //' -e 's/ $//'; }
+for P in $(printf '%s\n' "$SURVIVORS" | awk 'NF {print $1}'); do printf '%s\t%s\n' "$P" "$(fingerprint "$P")" >> "$FP_FILE"; done
+same_identity() { # 0 = same process as fingerprinted; 1 = gone (exited, or a zombie not yet reaped); 2 = different or unreadable
+  local now st
+  now="$(fingerprint "$1")"
+  if [ -z "$now" ]; then
+    kill -0 "$1" 2>/dev/null || return 1
+    sleep 0.2; now="$(fingerprint "$1")"
+    [ -z "$now" ] && { kill -0 "$1" 2>/dev/null || return 1; return 2; }
+  fi
+  # Read AFTER the fingerprint: a process that exited between the two reads is gone, not different.
+  st="$(ps -o stat= -p "$1" 2>/dev/null | tr -d ' ')"
+  case "$st" in ""|Z*) return 1;; esac
+  [ "$now" = "$(grep "^$1	" "$FP_FILE" | cut -f2-)" ] && return 0 || return 2
+}
 echo "surviving processes in group ${PG}: $(printf '%s\n' "$SURVIVORS" | grep -c .) accepted, ${REJECTED} rejected (this step's ancestry, or started before the suite)"
 if [ -n "$SURVIVORS" ]; then
   echo "  pid ppid pgid stat elapsed comm"
@@ -140,8 +164,15 @@ ORDERED="$(echo "$SURVIVORS" | awk '{ pid[NR]=$1; ppid[$1]=$2; isparent[$2]=1 }
   END { for (i=1;i<=NR;i++) { d=0; q=ppid[pid[i]]; while (q in ppid && d<64) { d++; q=ppid[q] }
         printf "%d %d %s\n", (pid[i] in isparent) ? 1 : 0, -d, pid[i] } }' | sort -n -k1,1 -k2,2 | awk '{print $3}')"
 COUNT=0
+IDENTITY_SKIPS=0
 for PID in $ORDERED; do
   COUNT=$((COUNT + 1)); [ "$COUNT" -gt 4 ] && { echo "  (more survivors not sampled)"; break; }
+  same_identity "$PID"; ID=$?
+  if [ "$ID" -ne 0 ]; then
+    echo "--- pid ${PID}: $([ "$ID" -eq 1 ] && echo 'exited before sampling' || echo 'identity changed or unreadable before sampling; skipped')"
+    [ "$ID" -eq 2 ] && IDENTITY_SKIPS=$((IDENTITY_SKIPS + 1))
+    continue
+  fi
   echo "--- pid ${PID}: stack sample (2 s, redacted, first 120 lines)"
   # `sample` writes its report to /tmp unless told otherwise; keep it inside the job's own state
   # directory, which the runner discards, and print it from there.
@@ -163,20 +194,33 @@ for PID in $ORDERED; do
     | head -40 | sed 's/^/  /'
 done
 
-# ---- 4. end the accepted survivors: TERM, wait up to 5 s, then KILL -- by pid, never by name
+# ---- 4. end the accepted survivors: TERM, wait up to 5 s, then KILL -- by pid, identity re-checked
+# immediately before each signal; never by name, never by group signal
 CLEAN_OK=1
-ACCEPTED="$(printf '%s\n' "$SURVIVORS" | awk 'NF {print $1}')"
-alive() { local n=0; for P in $ACCEPTED; do kill -0 "$P" 2>/dev/null && n=$((n + 1)); done; echo "$n"; }
+[ "$IDENTITY_SKIPS" -gt 0 ] && CLEAN_OK=0
+# Signalled deepest-first (the order used for sampling), so a waiter is never signalled before the
+# process it waits on.
+ACCEPTED="$ORDERED"
+MISMATCH=0
+signal_same() { # signal_same SIG pid: signal only the fingerprinted process
+  same_identity "$2"; local id=$?
+  case "$id" in
+    0) kill "-$1" "$2" 2>/dev/null || true ;;
+    1) ;;
+    *) MISMATCH=$((MISMATCH + 1)); echo "  pid $2: identity changed or unreadable before $1; NOT signalled" ;;
+  esac
+}
+alive_same() { local n=0; for P in $ACCEPTED; do same_identity "$P" >/dev/null 2>&1; [ $? -eq 0 ] && n=$((n + 1)); done; echo "$n"; }
 if [ -n "$ACCEPTED" ]; then
-  for P in $ACCEPTED; do kill -TERM "$P" 2>/dev/null || true; done
-  for _ in 1 2 3 4 5; do [ "$(alive)" -eq 0 ] && break; sleep 1; done
-  if [ "$(alive)" -gt 0 ]; then
-    for P in $ACCEPTED; do kill -KILL "$P" 2>/dev/null || true; done
+  for P in $ACCEPTED; do signal_same TERM "$P"; done
+  for _ in 1 2 3 4 5; do [ "$(alive_same)" -eq 0 ] && break; sleep 1; done
+  if [ "$(alive_same)" -gt 0 ]; then
+    for P in $ACCEPTED; do signal_same KILL "$P"; done
     sleep 1
   fi
-  LEFT="$(alive)"
-  echo "accepted survivors after cleanup: ${LEFT} alive; group ${PG} now has $(members) member(s)"
-  [ "$LEFT" -eq 0 ] || CLEAN_OK=0
+  LEFT="$(alive_same)"
+  echo "accepted survivors after cleanup: ${LEFT} still alive with their recorded identity; ${MISMATCH} identity mismatch(es) left unsignalled; group ${PG} now has $(members) member(s)"
+  [ "$LEFT" -eq 0 ] && [ "$MISMATCH" -eq 0 ] || CLEAN_OK=0
 fi
 
 # ---- 5. lab directories the suite created and could not remove
@@ -206,5 +250,5 @@ if [ "$CLEAN_OK" -eq 1 ]; then
   echo "evidence collected and cleanup complete; the suite step's own result stands"
   exit 0
 fi
-echo "evidence collected but cleanup did NOT finish (see counts above)"
+echo "evidence collected but cleanup did NOT finish or could not be confirmed (see counts above)"
 exit 1
