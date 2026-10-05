@@ -20,6 +20,13 @@ Corpus B is a real repository with no known secrets, so every finding is a false
 positive. It stays a manual step because it needs an external checkout pinned to
 a specific commit.
 
+From 6 October 2026 corpus B is **named and pinned**: `getsentry/sentry-javascript`
+at the commit in `bench/repos.txt`, measured with the commands in
+`bench/COMMANDS.md`. Its findings are reported as **untriaged** — the repository is
+assumed, not audited, to hold no live credential, so a finding is "unlabelled",
+not "false positive", until someone labels it. The earlier, unnamed corpus B
+rows in `BASELINE.md` are historical and are not reproduced by the named one.
+
 ## entropy-vetoes.ts — the generic-high-entropy veto measurement
 
 ```bash

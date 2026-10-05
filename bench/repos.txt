@@ -88,9 +88,36 @@ open-telemetry/opentelemetry-js       b85eb28343ff
 # SecretLoop, endorses it, or was consulted.
 
 
-## Corpus B, the real-noise repository (bench/COMMANDS.md, bench/BASELINE.md)
+## Corpus B (historical, unnamed), the real-noise repository of the 2026 baselines
+#
+# The corpus B rows in bench/BASELINE.md dated before October 2026 come from
+# this repository. Its rows stay as recorded; they cannot be re-run.
 #
 # identity   unknown -- deliberately withheld, not lost. bench/COMMANDS.md
-#            states the repository is not named there and that the path shown
-#            is not a real one.
+#            stated the repository was not named there and that the path shown
+#            was not a real one.
 # commit     unknown -- referred to only as "its pinned commit".
+
+
+## Corpus B (named), from 6 October 2026 (bench/COMMANDS.md, bench/BASELINE.md)
+#
+# Selected by the owner on 2026-10-05 from the pinned identities already in
+# bench/keyed-repos.txt. It does NOT reproduce the historical unnamed corpus B
+# above: different repository, different size, different commit; no number
+# measured on one is comparable with a number measured on the other.
+#
+# repository                            commit (full)
+getsentry/sentry-javascript           fade8e2ddd3dfc2ff18b6e4053a93a94c1c7cbae
+#
+# licence    MIT (LICENSE at that commit; the published packages declare MIT)
+# provenance the same identity and commit as the 14-repository false-positive
+#            corpus (bench/MULTI-CORPUS.md, keyed-repos.txt), cloned shallow
+#            2026-09-01 for the N8 key-context measurement
+# history    the measurement clone carries the full history reachable from the
+#            commit (16,211 commits, 4 root commits, not shallow). A depth-1
+#            clone of the same commit yields the same tree but NOT the same
+#            history arm; a history figure from a shallow clone is a bounded
+#            figure and must say so.
+#
+# Inclusion means the repository was scanned. It does not mean the project
+# uses SecretLoop, endorses it, or was consulted.
