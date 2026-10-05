@@ -97,10 +97,15 @@ if [ -n "$SURVIVORS" ]; then
   echo "$SURVIVORS" | awk '{ n=split($6,a,"/"); printf "  %s %s %s %s %s %s\n", $1, $2, $3, $4, $5, a[n] }'
 fi
 
-# ---- 3. where they are blocked and what they hold open (first three, each probe bounded)
+# ---- 3. where they are blocked and what they hold open (leaves first, at most four, each probe bounded)
+# The process that is actually stuck is normally the DEEPEST one -- npm -> sh -> ts-node -> the
+# test's child -- while its ancestors merely wait on it. Survivors with no surviving child in the
+# group are sampled first, then the rest, so the cap falls on the waiters, not the blocked leaf.
+# (The first experiment run sampled npm, tee and sh by pid order and missed both node processes.)
+ORDERED="$(echo "$SURVIVORS" | awk '{ pid[NR]=$1; isparent[$2]=1 } END { for (i=1;i<=NR;i++) if (!(pid[i] in isparent)) print pid[i]; for (i=1;i<=NR;i++) if (pid[i] in isparent) print pid[i] }')"
 COUNT=0
-for PID in $(echo "$SURVIVORS" | awk '{print $1}'); do
-  COUNT=$((COUNT + 1)); [ "$COUNT" -gt 3 ] && { echo "  (more survivors not sampled)"; break; }
+for PID in $ORDERED; do
+  COUNT=$((COUNT + 1)); [ "$COUNT" -gt 4 ] && { echo "  (more survivors not sampled)"; break; }
   echo "--- pid ${PID}: stack sample (2 s, redacted, first 120 lines)"
   # `sample` writes its report to /tmp unless told otherwise; keep it inside the job's own state
   # directory, which the runner discards, and print it from there.
