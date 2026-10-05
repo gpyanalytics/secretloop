@@ -401,7 +401,13 @@ jobs:
           npx ts-node --transpile-only tests/consent-acl-macos.test.ts
           npx ts-node --transpile-only tests/consent-parent-chain.test.ts
           npx ts-node --transpile-only tests/verify-consent.test.ts
+      - name: EXPERIMENT ONLY — start an unrelated process that the evidence step must leave alone
+        run: |
+          nohup sleep 3000 >/dev/null 2>&1 &
+          echo $! > "$RUNNER_TEMP/unrelated.pid"
+          echo "unrelated sleeper pid $! in group $(ps -o pgid= -p $! | tr -d ' ')"
       - name: The full suite
+        id: suite
         # A 15-minute bound on the step, inside the unchanged 30-minute job timeout. Green runs of
         # this job take 2-7 minutes end to end; on 2026-09-27 `test-macos (18)` (run 36296308215)
         # went silent after one "ok" line and was cancelled at the job timeout with nothing to
@@ -432,7 +438,27 @@ jobs:
         # timeout-minutes bounds a stuck probe. It cannot turn the failed step green.
         if: always()
         timeout-minutes: 6
-        run: bash scripts/ci-macos-suite-evidence.sh
+        run: |
+          set -o pipefail
+          bash scripts/ci-macos-suite-evidence.sh 2>&1 | tee "$RUNNER_TEMP/evidence.out"
+      - name: EXPERIMENT ONLY — verify what the evidence step did and did not do
+        if: always()
+        run: |
+          E="$RUNNER_TEMP/evidence.out"; T="${TMPDIR:-/tmp}"; T="${T%/}"; ok=1
+          echo "suite step outcome: ${{ steps.suite.outcome }}"
+          if [ "${{ steps.suite.outcome }}" = "failure" ]; then echo "PASS timeout failure preserved"; else echo "FAIL suite step outcome is not failure"; ok=0; fi
+          if awk '/^--- pid [0-9]+: stack sample/{c++} c==1' "$E" | grep -q __open; then echo "PASS blocked node is the first sample and ends in __open"; else echo "FAIL first sample lacks __open"; ok=0; fi
+          if grep -q 'evidence collected and cleanup complete' "$E"; then echo "PASS cleanup confirmed by the script"; else echo "FAIL cleanup not confirmed"; ok=0; fi
+          if grep -q ' 0 identity mismatch' "$E"; then echo "PASS no identity mismatch"; else echo "FAIL identity mismatch reported"; ok=0; fi
+          if kill -0 "$(cat "$RUNNER_TEMP/unrelated.pid")" 2>/dev/null; then echo "PASS unrelated sleeper untouched"; else echo "FAIL unrelated sleeper is gone"; ok=0; fi
+          if [ -L "$T/secretloop-exphang-link" ]; then echo "PASS planted symlink untouched"; else echo "FAIL planted symlink missing"; ok=0; fi
+          if [ -f "$RUNNER_TEMP/exphang-target/marker" ]; then echo "PASS symlink target untouched"; else echo "FAIL symlink target damaged"; ok=0; fi
+          if grep -q -E '/Users/runner|/var/folders|/private/tmp/|work/_temp' "$E"; then echo "FAIL raw path in evidence output"; ok=0; else echo "PASS no raw home/temp/workspace path in evidence output"; fi
+          LEFT=$(ls -1A "$T" | grep -E '^(secretloop|sl)-' | grep -v -x secretloop-exphang-link | wc -l | tr -d ' ')
+          if [ "$LEFT" = "0" ]; then echo "PASS no lab directory left in the suite temp directory"; else echo "FAIL $LEFT lab entries left"; ok=0; fi
+          echo "(this verification step ran: the evidence step did not kill its own or the runner's processes)"
+          kill "$(cat "$RUNNER_TEMP/unrelated.pid")" 2>/dev/null || true
+          [ "$ok" = 1 ]
       - name: Packaging smoke
         run: npm run smoke:tarball
 
