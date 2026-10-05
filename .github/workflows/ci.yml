@@ -402,7 +402,37 @@ jobs:
           npx ts-node --transpile-only tests/consent-parent-chain.test.ts
           npx ts-node --transpile-only tests/verify-consent.test.ts
       - name: The full suite
-        run: npm test
+        # A 15-minute bound on the step, inside the unchanged 30-minute job timeout. Green runs of
+        # this job take 2-7 minutes end to end; on 2026-09-27 `test-macos (18)` (run 36296308215)
+        # went silent after one "ok" line and was cancelled at the job timeout with nothing to
+        # read. A hang now fails this step at 15 minutes and leaves 15 for the evidence step below.
+        #
+        # The suite runs as a background pipeline under job control (`set -m`) so it has its OWN
+        # process group, recorded for the evidence step: survivors are later found by that group,
+        # never by name. `wait %1` with pipefail returns npm's real exit status through the tee, so
+        # the step still fails when the suite fails. `suite.ok` exists only after a clean finish.
+        timeout-minutes: 15
+        run: |
+          set -o pipefail
+          STATE="$RUNNER_TEMP/secretloop-suite"; mkdir -p "$STATE"
+          date +%s > "$STATE/suite.start"
+          T="${TMPDIR:-/tmp}"; printf '%s\n' "$T" > "$STATE/suite.tmpdir"
+          ls -1A "$T" > "$STATE/tmp-before.txt" 2>/dev/null || true
+          set -m
+          npm test 2>&1 | tee "$STATE/suite.log" &
+          ps -o pgid= -p $! | tr -d ' ' > "$STATE/suite.pgid"
+          wait %1
+          touch "$STATE/suite.ok"
+      - name: Evidence if the suite did not finish
+        # Runs after a failed or timed-out suite step (a no-op one-liner after a green one). It
+        # prints the last completed test from the tee'd log, the survivors of the suite's own
+        # process group with a bounded stack sample and descriptor list each (home, temp and
+        # workspace paths redacted; never environment or arguments), ends that process group, and
+        # removes only lab directories the suite created and could not remove. Its own
+        # timeout-minutes bounds a stuck probe. It cannot turn the failed step green.
+        if: always()
+        timeout-minutes: 6
+        run: bash scripts/ci-macos-suite-evidence.sh
       - name: Packaging smoke
         run: npm run smoke:tarball
 

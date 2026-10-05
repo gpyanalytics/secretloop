@@ -4,6 +4,12 @@
 
 ### Diagnostics
 
+- **CI only, macOS: the full-suite step is bounded at 15 minutes and leaves evidence when it does not finish.** The
+  `test-macos` job's suite step runs in its own process group under a 15-minute step bound (the 30-minute job timeout is
+  unchanged); a following step prints the last completed test, the surviving processes of that group with a bounded stack
+  sample and descriptor list (paths redacted, never environment or arguments), ends the group and removes only the lab
+  directories the suite created. Nothing shipped changes. This names a hang; it does not resolve the one `test-macos (18)`
+  timeout of 2026-09-27, whose cause stays open.
 - **Windows consent helper: four timing markers on standard error.** The PowerShell inspection helper now writes
   `secretloop-helper <start|input|cmdlet|end> <epoch-ms>` to stderr at those stages — a fixed word and a number, never a
   path, identity, argument or exception text. The product does not read them: stdout, decisions, exit status, helper
