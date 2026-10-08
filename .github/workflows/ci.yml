@@ -136,6 +136,7 @@ jobs:
       - run: npm ci
       - run: npm run compile
       - name: Provision two ordinary accounts and the fixture parents
+        id: provision
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -194,6 +195,7 @@ jobs:
           "ACL_SID1=$sid1" >> $env:GITHUB_ENV
           "ACL_SID2=$sid2" >> $env:GITHUB_ENV
       - name: Plant a record with the real product, then hand it to the second account
+        id: plant
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
@@ -224,6 +226,40 @@ jobs:
           icacls $rx /inheritance:r /grant:r "*$($env:ACL_SID1):(OI)(CI)F" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
           icacls (Join-Path $rx "pending") /inheritance:r /grant:r "*$($env:ACL_SID1):(OI)(CI)RX" "*S-1-5-18:(OI)(CI)F" "*S-1-5-32-544:(OI)(CI)F" /q | Out-Null
           "ACL_RX_STORE=$rx" >> $env:GITHUB_ENV
+      - name: Where the ancestor rule draws the line on the fixture's own chain, as the ordinary owner
+        # DIAGNOSTIC for the refusal class recorded twice (PR #102 run 36296432311; main run
+        # 37842904712): the product, as slprobe, refused the store's ancestor chain while the
+        # immediate parent's ACL had been proven clean. This runs AFTER the plant -- never before it,
+        # because the product's helper spawns powershell.exe and would pre-warm the cold first verify
+        # that PLANT-TIMING measures -- as the SAME account through the same credential launch, and
+        # it runs even when the plant failed. It inspects the chain the plant actually used (derived
+        # from ACL_LAB, which exists whether or not the plant succeeded), prints every value through
+        # tests/fixtures/win-acl-sanitize.js, and asserts nothing: the plant step's own outcome stands,
+        # and a failure here can neither hide nor cause one (continue-on-error).
+        if: always() && steps.provision.outcome == 'success'
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $LAB = $env:ACL_LAB
+          $pw = Join-Path $env:RUNNER_TEMP "p1.txt"
+          $diag = Join-Path $PWD "tests\fixtures\win-chain-diagnostic.js"
+          $aclModule = Join-Path $PWD "out\consent-acl-win.js"
+          foreach ($need in @($LAB, $pw, $diag, $aclModule)) {
+            if (-not $need -or -not (Test-Path $need)) { "DIAG-SKIPPED: a prerequisite is missing (lab, credential file, diagnostic or built module)"; exit 0 }
+          }
+          "plant step outcome: ${{ steps.plant.outcome }}"
+          $store = Join-Path $LAB "private\.secretloop"
+          $cred = New-Object System.Management.Automation.PSCredential("slprobe", (ConvertTo-SecureString (Get-Content -Raw $pw) -AsPlainText -Force))
+          $node = (Get-Command node).Source
+          $o = Join-Path $env:RUNNER_TEMP "chain.out"; $e = Join-Path $env:RUNNER_TEMP "chain.err"
+          $p = Start-Process -FilePath $node -ArgumentList @($diag, $aclModule, "--base", $store) -Credential $cred -WorkingDirectory $LAB -RedirectStandardOutput $o -RedirectStandardError $e -PassThru -NoNewWindow -Wait
+          if (Test-Path $o) { Get-Content $o }
+          # stderr is reported by SIZE only: it may carry unsanitized text from the runtime.
+          if (Test-Path $e) { "chain diagnostic stderr: $((Get-Item $e).Length) bytes (not printed)" }
+          "chain diagnostic exit code: $($p.ExitCode)"
+          # Secondary assertion, not the sanitizer: the sanitizer ran before anything was written.
+          if ((Test-Path $o) -and (Select-String -Path $o -Pattern 'S-1-5-21-[0-9]+-[0-9]+-[0-9]+' -Quiet)) { throw "a machine-local SID reached the diagnostic output" }
       - name: What the second ordinary account can and cannot do
         shell: pwsh
         run: |
