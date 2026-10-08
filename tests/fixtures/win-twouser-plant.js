@@ -31,6 +31,11 @@ if (!out || !store || !repoDir) {
 (async () => {
   const consent = require(path.join(out, "consent.js"));
   const mcp = require(path.join(out, "mcp-core.js"));
+  // Diagnostic only: the product's own record of WHICH chain component refused and why, printed
+  // through the strict sanitizer (tests/fixtures/win-acl-sanitize.js) -- depth + allowlisted
+  // name, principal role, validated rights mask. Nothing else about the refusal is echoed.
+  const acl = require(path.join(out, "consent-acl-win.js"));
+  const sanitize = require(path.join(__dirname, "win-acl-sanitize.js"));
 
   fs.mkdirSync(repoDir, { recursive: true });
   // Composed at runtime so no credential-shaped literal is ever committed to this repository.
@@ -64,6 +69,17 @@ if (!out || !store || !repoDir) {
   if (!first.ok || first.payload.state !== "CONSENT_REQUIRED") {
     // Say what actually came back. A fixture that cannot explain its own failure turns a
     // diagnosable problem into a guess.
+    // Printed BEFORE the original error so the refusal keeps its wording, exit code and the
+    // PLANT-TIMING line above. Absent detail is stated as absent, never guessed.
+    let refusalLine = "no refusal detail recorded";
+    try {
+      const roles = sanitize.rolesFromEnv(process.env, acl.currentUserSid());
+      const chain = acl.ancestorChainOf(path.dirname(path.resolve(store))) || [];
+      refusalLine = sanitize.refusalDetail(acl.lastRefusalDetail(), chain, roles);
+    } catch {
+      refusalLine = "refusal detail unavailable (diagnostic error)";
+    }
+    console.log("PLANT-REFUSAL-DETAIL: " + refusalLine);
     const detail = first.ok ? `state ${first.payload.state}` : `refused: ${String(first.error).slice(0, 160)}`;
     throw new Error(`the first request did not ask for consent after ${verifyMs} ms (${detail})`);
   }
