@@ -356,14 +356,24 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
   // leave a directory holding a FIFO behind in the temporary directory. The
   // child still removes it itself on the way out (the Windows-shaped leak
   // detector below); the parent's own removal is the backstop.
+  // DIAGNOSTIC STAGE MARKERS. The child writes one fixed line per stage to stderr --
+  // "secretloop-fifo-stage <name> <elapsed-ms>" -- using a monotonic clock read at the very
+  // top, before any project module loads. The parent parses only lines matching the
+  // allowlist and, on a timeout, prints the stages it saw: nothing else from the child is
+  // ever echoed. What a marker pattern means is stated beside the timeout assertion below.
   const script = `
+    const __t0 = process.hrtime.bigint();
+    const __stage = (n) => { try { process.stderr.write("secretloop-fifo-stage " + n + " " + String((process.hrtime.bigint() - __t0) / 1000000n) + "\\n"); } catch {} };
+    __stage("start");
     const fs = require("fs"), os = require("os"), path = require("path"), cp = require("child_process");
     const w = require(${JSON.stringify(path.join(root, "src", "walk"))});
     const { defaultConfig } = require(${JSON.stringify(path.join(root, "src", "config"))});
+    __stage("modules-loaded");
     const c = Object.assign({}, defaultConfig, { maxFileSizeBytes: 1000000 });
     const lab = ${JSON.stringify(lab)};
     const p = path.join(lab, "f.txt");
     fs.writeFileSync(p, "REGULAR");
+    __stage("file-written");
     const probe = () => { const fd = fs.openSync(lab, "r"); fs.closeSync(fd); return fd; }; // the lab directory: present before and after, never the swapped path
     const before = probe();
     // Fire once, after the product's own pre-open type check on THIS path.
@@ -376,7 +386,7 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
     const real = fs[name]; let fired = false;
     fs[name] = function (...a) {
       const r = real.apply(this, a);
-      if (!fired && targets.has(String(a[0]))) { fired = true; fs.unlinkSync(p); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); }
+      if (!fired && targets.has(String(a[0]))) { fired = true; __stage("hook-fired"); fs.unlinkSync(p); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); __stage("fifo-made"); }
       return r;
     };
     const s = (r) => (r && typeof r === "object" && "skipped" in r ? r.skipped : ("text" in r ? "TEXT" : "BYTES"));
@@ -388,8 +398,11 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
           ? `s(w.readBinaryCandidate(lab, "f.txt", c))`
           : `s(w.readBinaryCandidate(lab, "f.txt", c, () => true, 16))`};
     } finally { fs[name] = real; }
+    __stage("reader-returned");
     const after = probe();
+    __stage("probe-done");
     let removed = true; try { fs.rmSync(lab, { recursive: true }); } catch { removed = false; }
+    __stage("lab-removed");
     process.stdout.write(JSON.stringify({ fired, result, before, after, removed }));
   `;
   const run = spawnSync(process.execPath, ["-r", "ts-node/register/transpile-only", "-e", script], {
@@ -400,6 +413,26 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
   let got: any = null;
   try { got = JSON.parse(run.stdout); } catch { /* reported below */ }
   return { run, got };
+}
+
+/**
+ * The child's stage markers, parsed by allowlist: a line is kept only if it is exactly one of
+ * the eight fixed stage names followed by an integer; every other stderr line is counted, never
+ * kept. Returned as "name@ms" tokens in the order seen.
+ */
+const FIFO_STAGES = ["start", "modules-loaded", "file-written", "hook-fired", "fifo-made", "reader-returned", "probe-done", "lab-removed"] as const;
+const FIFO_STAGE_LINE = new RegExp("^secretloop-fifo-stage (" + FIFO_STAGES.join("|") + ") (\\d{1,9})$");
+function parseFifoStages(stderr: string | Buffer | null | undefined): { stages: string[]; otherLines: number } {
+  const out = { stages: [] as string[], otherLines: 0 };
+  if (stderr === null || stderr === undefined) return out;
+  for (const raw of String(stderr).split(/\r?\n/)) {
+    const line = raw.replace(/\r$/, "");
+    if (line.length === 0) continue;
+    const m = FIFO_STAGE_LINE.exec(line);
+    if (m) out.stages.push(`${m[1]}@${m[2]}ms`);
+    else out.otherLines++;
+  }
+  return out;
 }
 
 function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
@@ -425,17 +458,39 @@ function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
     // already removed the directory and this is a no-op.
     rmSync(lab, { recursive: true, force: true });
   }
-  // A TIMEOUT IS THE DEFECT. It is a failure of this case, never a skip.
-  assert.ok(
-    !run.error || (run.error as NodeJS.ErrnoException).code !== "ETIMEDOUT",
-    `${what} BLOCKED on a FIFO swapped in after its type check: child killed after ${FIFO_CHILD_TIMEOUT_MS} ms`
-  );
-  assert.strictEqual(run.signal, null, `child died on ${run.signal}; stderr: ${run.stderr}`);
-  assert.strictEqual(run.status, 0, `child failed: ${run.stderr}`);
-  assert.ok(got, `child produced no result: ${run.stdout} ${run.stderr}`);
+  // A TIMEOUT IS A FAILURE of this case, never a skip -- but the message says only what was
+  // observed. HOW TO READ THE STAGES: "fifo-made" without "reader-returned" localizes the stall
+  // to the reader invocation; it does not say whether open or read stalled and does not
+  // establish a cause. No markers at all means the child's startup and progress were not
+  // observed. The returned signal is what spawnSync reports, not independent proof that the
+  // signal was delivered. A green run of this case does not resolve an intermittent failure.
+  // ONE SANITIZED SUMMARY for every failure message of this case. It carries only: the
+  // allowlisted stage markers with their elapsed times, the count of other stderr lines, the
+  // stdout/stderr byte counts, and the bounded error code, signal name and exit status that
+  // spawnSync reported. No child stdout or stderr text, no Error object and no error message is
+  // ever interpolated into an assertion message here.
+  // Every value in the summary is either numeric, an allowlisted name, or one of the fixed labels
+  // NONE (absent) and OTHER (present but not on the allowlist). Nothing is truncated: a value that
+  // is not on a list is replaced by its label, never printed in part.
+  const bytes = (x: unknown): number => (typeof x === "string" || Buffer.isBuffer(x) ? Buffer.byteLength(x) : 0);
+  const ERROR_CODES = new Set(["ETIMEDOUT", "ENOBUFS", "ENOENT", "EACCES", "EPERM", "EAGAIN", "EPIPE", "ESPIPE", "EINTR", "EIO"]);
+  const SIGNALS = new Set(["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGPIPE", "SIGALRM"]);
+  const label = (v: unknown, allowed: Set<string>): string => (v === null || v === undefined ? "NONE" : typeof v === "string" && allowed.has(v) ? v : "OTHER");
+  const numeric = (v: unknown): string => (typeof v === "number" && Number.isInteger(v) ? String(v) : v === null || v === undefined ? "NONE" : "OTHER");
+  const errCode = run.error ? label((run.error as NodeJS.ErrnoException).code, ERROR_CODES) : "NONE";
+  const seen = parseFifoStages(run.stderr);
+  const summary =
+    `error ${errCode}; signal ${label(run.signal, SIGNALS)}; status ${numeric(run.status)}; ` +
+    `stages observed: ${seen.stages.length ? seen.stages.join(" ") : "none"}; ${seen.otherLines} other stderr line(s); ` +
+    `stdout ${bytes(run.stdout)} B, stderr ${bytes(run.stderr)} B`;
+  const timedOut = run.error !== undefined && (run.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
+  assert.ok(!timedOut, `${what}: child did not finish within ${FIFO_CHILD_TIMEOUT_MS} ms; spawnSync reported ETIMEDOUT (${summary})`);
+  assert.strictEqual(run.signal, null, `${what}: child ended by signal (${summary})`);
+  assert.strictEqual(run.status, 0, `${what}: child exited non-zero (${summary})`);
+  assert.ok(got, `${what}: child produced no parseable result (${summary})`);
   assert.strictEqual(got.fired, true, "the replacement trigger did not fire: this run measured nothing");
   assert.strictEqual(got.result, "not-a-file", `${what} must refuse the swapped-in FIFO as not-a-file`);
-  assert.strictEqual(got.after, got.before, `descriptor number drifted ${got.before} -> ${got.after}: a handle leaked on the refusal`);
+  assert.strictEqual(got.after, got.before, `descriptor number drifted ${numeric(got.before)} -> ${numeric(got.after)}: a handle leaked on the refusal`);
   assert.strictEqual(got.removed, true, "the child's lab directory could not be removed after the refusal");
 }
 
