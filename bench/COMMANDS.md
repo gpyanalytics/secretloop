@@ -53,7 +53,7 @@ node out/cli.js scan    --path $B --format json -o B2.secretloop.tree.on.json  -
 node out/cli.js history --path $B --format json -o B2.secretloop.hist.off.json
 node out/cli.js history --path $B --format json -o B2.secretloop.hist.on.json  --include-entropy
 # --include-entropy is folded into the configuration before the digest is
-# computed, so the two arms carry distinct `comparison.configDigest` values;
+# computed, so the two arms carry distinct top-level `configDigest` values;
 # a run whose two arms share a digest measured one arm twice.
 # Findings on this corpus are UNTRIAGED unless individually labelled: the
 # repository is assumed, not audited, to hold no live credential.

@@ -66,12 +66,12 @@ positives", until each one is labelled; no finding was verified against any prov
 
 | input | value |
 |---|---|
-| tracked files | 9,978 (`git ls-files`); 54 skipped as binary and 4 unreadable by the bench LOC method |
-| lines (newlines in non-binary tracked files, the bench method) | 735,547 (735.5 KLOC) |
+| tracked files | **9,976** (`git ls-files -z`, verified). The legacy bench LOC method (`bench/run.py`, which whitespace-splits `git ls-files` output) reported **9,978 tokens** and "4 unreadable": one tracked path contains spaces and split into three tokens, inflating the count by two and producing three of the four "unreadable" entries; the fourth is one tracked entry that is a directory rather than a regular file, which the method cannot open (the scanner reports the same path as "not a regular file"). These are not four genuinely unreadable files. 54 skipped as binary. |
+| lines (legacy bench method: newlines in the non-binary tracked files it could open) | **735,547, the legacy measured total.** It omits the path with spaces, so it is below the true count by that file's lines; no corrected total was computed, and the derived 735.5 KLOC is this measured figure, not a complete one. |
 | tree scan scope | 9,905 files scanned; 1 generated file excluded by default; 1 file over `maxFileSizeBytes`; 53 binary; 1 not a regular file — the tree report is marked `incomplete` for the two limitations |
 | history scan scope | 14,532 non-merge commits (`git log --no-merges`) of the 16,211 reachable; merge commits' own diffs are not scanned by design; 2 generated files excluded; report not marked incomplete |
 | `ruleSetDigest` (all arms) | `c6f8fdd1265654d9` |
-| `configDigest` entropy-off / entropy-on | `3071344b11905ec5` / `7565a70d15c1b1b6` — distinct, so the two arms are two configurations; the off digest equals corpus A's default |
+| `configDigest` entropy-off / entropy-on | `3071344b11905ec5` / `7565a70d15c1b1b6` — distinct, so the two arms are two configurations; the off digest equals that of corpus A's **named-only** arm, whose config file sets `entropyPassEnabled: false` explicitly (the same effective configuration as no config file), and the on digest equals that of corpus A's `entropy-on` arm |
 | repository identity (`root`) | `git:2ccf6c6b74bb9a84` in every report |
 
 | arm | findings (untriaged) | by rule |
@@ -81,8 +81,8 @@ positives", until each one is labelled; no finding was verified against any prov
 | history, entropy-off | 34 | generic-api-key-assignment 15, http-basic-auth-url 7, db-connection-string 6, private-key-block 5, jwt 1 |
 | history, entropy-on | 47 | the 34 above + generic-high-entropy 13 |
 
-Per KLOC, tree arm: 0.020 findings (entropy-off), 0.030 (entropy-on) — stated as findings per KLOC, not
-as a false-positive rate, for the reason above. Severities, tree: 8 critical, 7 high (+7 medium with
+Per legacy-measured KLOC (735.5; see the line-count row for what it omits), tree arm: 0.020 findings
+(entropy-off), 0.030 (entropy-on) — findings per KLOC, not a false-positive rate, for the reason above. Severities, tree: 8 critical, 7 high (+7 medium with
 entropy); history: 18 critical, 16 high (+13 medium with entropy). Liveness: every finding `unchecked`.
 
 **Reproducibility:** every arm was run twice from the same clone; the two reports of each arm were
