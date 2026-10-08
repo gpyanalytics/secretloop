@@ -49,6 +49,53 @@ real-noise repository in the tables below is unnamed and its commit unrecorded,
 so its rows cannot be re-run; a corrected `entropy-on` figure for it does not
 exist. Naming and pinning a corpus B is still the smallest next step.
 
+## Corpus B, named and pinned — getsentry/sentry-javascript @ fade8e2ddd3dfc2ff18b6e4053a93a94c1c7cbae, 6 October 2026
+
+Measured on the build at `main` `0e2a3749` (SecretLoop 0.7.1 tree compiled with `tsc`; `out/cli.js`
+sha256 `abc4cd48aa7f9dfa…`), offline, no `--verify`, with the commands under "Corpus B (named)" in
+`bench/COMMANDS.md`. The measurement clone carried the **full history reachable from the pinned
+commit: 16,211 commits, 4 root commits, not shallow**. The preserved depth-1 clone of the same commit
+(the N8 keyed corpus) was not used for the history arm and was not altered.
+
+This corpus **does not reproduce the historical unnamed corpus B** below: different repository,
+different size, different commit. Nothing here is comparable with those rows.
+
+**Findings are untriaged.** The repository is assumed, not audited, to hold no live credential, and
+nothing in these counts was labelled by a person. A count below is "findings", not "false
+positives", until each one is labelled; no finding was verified against any provider.
+
+| input | value |
+|---|---|
+| tracked files | **9,976** (`git ls-files -z`, verified). The legacy bench LOC method (`bench/run.py`, which whitespace-splits `git ls-files` output) reported **9,978 tokens** and "4 unreadable": one tracked path contains spaces and split into three tokens, inflating the count by two and producing three of the four "unreadable" entries; the fourth is one tracked entry that is a directory rather than a regular file, which the method cannot open (the scanner reports the same path as "not a regular file"). These are not four genuinely unreadable files. 54 skipped as binary. |
+| lines (legacy bench method: newlines in the non-binary tracked files it could open) | **735,547, the legacy measured total.** It omits the path with spaces, so it is below the true count by that file's lines; no corrected total was computed, and the derived 735.5 KLOC is this measured figure, not a complete one. |
+| tree scan scope | 9,905 files scanned; 1 generated file excluded by default; 1 file over `maxFileSizeBytes`; 53 binary; 1 not a regular file — the tree report is marked `incomplete` for the two limitations |
+| history scan scope | 14,532 non-merge commits (`git log --no-merges`) of the 16,211 reachable; merge commits' own diffs are not scanned by design; 2 generated files excluded; report not marked incomplete |
+| `ruleSetDigest` (all arms) | `c6f8fdd1265654d9` |
+| `configDigest` entropy-off / entropy-on | `3071344b11905ec5` / `7565a70d15c1b1b6` — distinct, so the two arms are two configurations; the off digest equals that of corpus A's **named-only** arm, whose config file sets `entropyPassEnabled: false` explicitly (the same effective configuration as no config file), and the on digest equals that of corpus A's `entropy-on` arm |
+| repository identity (`root`) | `git:2ccf6c6b74bb9a84` in every report |
+
+| arm | findings (untriaged) | by rule |
+|---|---|---|
+| tree, entropy-off | 15 | generic-api-key-assignment 6, db-connection-string 4, private-key-block 3, http-basic-auth-url 1, jwt 1 |
+| tree, entropy-on (`--include-entropy`) | 22 | the 15 above + generic-high-entropy 7 |
+| history, entropy-off | 34 | generic-api-key-assignment 15, http-basic-auth-url 7, db-connection-string 6, private-key-block 5, jwt 1 |
+| history, entropy-on | 47 | the 34 above + generic-high-entropy 13 |
+
+Per legacy-measured KLOC (735.5; see the line-count row for what it omits), tree arm: 0.020 findings
+(entropy-off), 0.030 (entropy-on) — findings per KLOC, not a false-positive rate, for the reason above. Severities, tree: 8 critical, 7 high (+7 medium with
+entropy); history: 18 critical, 16 high (+13 medium with entropy). Liveness: every finding `unchecked`.
+
+**Reproducibility:** every arm was run twice from the same clone; the two reports of each arm were
+identical in every top-level field, including all findings and all digests. Wall time 5–7 s per tree
+scan and 16–22 s per history scan on an Apple-silicon laptop. Raw reports (values masked by the
+scanner's default) stay in the benchmark evidence workspace, record `corpus-b-sentry-javascript-2026-10-06`,
+and are not committed.
+
+**Limitations:** one person's unlabelled scan on one commit; the scanner's named rules and generic
+tier matched 15–47 locations that nobody has classified; the history arm excludes merge commits and
+two generated files; the tree arm excludes one oversized and one generated file; none of the counts
+says anything about recall, because nothing was planted and nothing is known to be present.
+
 ## Current baseline — generator scratch moved out of the corpus, 29 August 2026 (both arms genuine; the tier was on by default then)
 
 Recorded by running `python3 bench/run.py --corpus-b /path/to/real-noise-repo`
