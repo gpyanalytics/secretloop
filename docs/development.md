@@ -246,6 +246,21 @@ The measurement records live in a private benchmark workspace; the public docs
 cite them by SHA-256 rather than by path. The [decision records](decisions/README.md)
 summarise the evidence behind each scope decision.
 
+### Windows RED evidence for the runtime marker test
+
+`.github/workflows/windows-red-evidence.yml` runs once, automatically, on a pull request that touches the Windows
+consent helper, its tests or the harness itself. In a disposable copy of the reviewed PR head (never the synthetic
+merge commit) it verifies the hashes in `scripts/win-red/bound.json`, isolates the committed runtime marker test
+verbatim, runs it as a baseline, then applies three single-anchor mutations of `src/consent-acl-win.ts` (markers to
+stdout; a fifth marker; the once-only guard removed) and requires each to fail at the intended assertion with a
+nonzero exit and an independently measured marker count equal to `scripts/win-red/predictions.json`, then restores
+and re-runs the baseline. The orchestrator is pwsh 7; the product's helper under test is still Windows PowerShell 5.1.
+Every process the harness launches runs inside its own Windows Job Object (kill-on-close, created suspended, assigned,
+then resumed; no breakaway), and a case passes only if the job's accounting shows zero processes left and zero lab
+directories left. The uploaded artifact is an explicit allowlist (`summary.txt` and the three mutation diffs); raw test
+output never leaves the runner. The job is green only if the harness printed `RESULT: ALL-EXPECTED` and the upload
+succeeded. This is evidence that the test can fail, not evidence about the product's timing on any image.
+
 ## Security-critical surface
 
 Changes to `src/mcp*.ts`, `src/consent.ts`, `src/verify*.ts` or

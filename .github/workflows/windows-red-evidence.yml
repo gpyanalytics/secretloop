@@ -1,0 +1,78 @@
+# DRAFT (rev4) — not in the repository. One x64 Windows evidence job for the runtime marker test's RED validation.
+# Would live at .github/workflows/windows-red-evidence.yml with the harness under scripts/win-red/.
+# Trigger: pull_request only (its single automatic run on the PR that adds or changes these files is the
+# evidence). No workflow_dispatch, no ARM, no schedule. Permissions: read-only contents.
+#
+# Two PowerShells: the orchestrator below runs in pwsh 7 (`shell: pwsh` on windows-latest; the script's
+# `#Requires -Version 7.0` refuses anything older). The PRODUCT's consent helper -- what is being validated --
+# is spawned by the test and the measurement as Windows PowerShell 5.1, exactly as the product does.
+#
+# Time budget (scripts/win-red/budget.js, defaults): worst-case harness 4150 s + workflow overhead 300 s =
+# 4450 s of this job's 5400 s; headroom 950 s (minimum 900). The harness recomputes this at start from the
+# -JobTimeoutMin passed below and refuses to run if the arithmetic no longer fits. Expected duration is a few
+# minutes (observed x64 npm ci 10-20 s, compile 5-6 s; a case is ~6 helper spawns).
+name: windows-red-evidence
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-red-evidence.yml"
+      - "scripts/win-red/**"
+      - "src/consent-acl-win.ts"
+      - "tests/consent-acl-win.test.ts"
+      - "tests/helper-markers.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  windows-red-evidence:
+    # Separate workflow from ci.yml on purpose: it runs ~30 PowerShell helper spawns per job and must not
+    # share a runner with the cold-first-verify measurement in the two-account jobs.
+    runs-on: windows-latest
+    timeout-minutes: 90          # must equal -JobTimeoutMin below (mechanics check: static-checks.js)
+    steps:
+      - uses: actions/checkout@v4
+        # On pull_request this checks out the SYNTHETIC MERGE commit (github.sha). The harness binds to the
+        # REVIEWED HEAD (github.event.pull_request.head.sha) fetched below and reports both.
+      - name: Fetch the reviewed head so it can be archived
+        shell: pwsh
+        run: |
+          git fetch --depth=1 origin ${{ github.event.pull_request.head.sha }}
+          if ($LASTEXITCODE -ne 0) { throw "could not fetch the PR head" }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20          # the repository's Windows two-account jobs use 20
+          cache: npm
+      - name: RED-validate the Windows runtime marker test in a disposable copy (pwsh 7 orchestrator, Job Object containment)
+        id: harness
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/win-red/run-win-red.ps1 `
+            -HeadSha ${{ github.event.pull_request.head.sha }} `
+            -MergeSha ${{ github.sha }} `
+            -RepoPath "${{ github.workspace }}" `
+            -Work "${{ runner.temp }}\win-red" `
+            -Harness "${{ github.workspace }}\scripts\win-red" `
+            -JobTimeoutMin 90
+          if ($LASTEXITCODE -ne 0) { throw "harness exit $LASTEXITCODE (see summary.txt artifact)" }
+      - name: Upload ONLY the sanitized summary and the three mutation diffs
+        id: upload
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: win-red-evidence-${{ github.event.pull_request.head.sha }}
+          # explicit allowlist — never the work directory: raw-*.txt and c-*.out/.err hold assert dumps with profile paths
+          path: |
+            ${{ runner.temp }}/win-red/summary.txt
+            ${{ runner.temp }}/win-red/mutation-W1.diff
+            ${{ runner.temp }}/win-red/mutation-W2.diff
+            ${{ runner.temp }}/win-red/mutation-W3.diff
+          if-no-files-found: error
+          retention-days: 30
+      - name: Gate — the job is green only if the harness AND the upload both succeeded
+        if: always()
+        shell: pwsh
+        run: |
+          "harness: ${{ steps.harness.outcome }}; upload: ${{ steps.upload.outcome }}"
+          if ("${{ steps.harness.outcome }}" -ne "success" -or "${{ steps.upload.outcome }}" -ne "success") { exit 1 }
