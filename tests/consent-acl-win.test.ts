@@ -397,6 +397,26 @@ test("the inspection script's timing markers are four fixed stderr lines that us
   assert.ok(lines.indexOf(markerLines[1]) > lines.findIndex((l) => l.includes("ReadToEnd")), "input follows the stdin read");
 });
 
+test("the cmdlet marker is inside the once-only guard, and nothing else writes the flag", () => {
+  // S6 in release-0.7.2-final-gates-prep: deleting the `if(-not $marked){$marked=$true;...}` wrapper
+  // around the cmdlet marker left the shape test above green, because its regex makes the guard
+  // optional. This case binds the guard to the emission: exactly one marker -- the cmdlet one --
+  // sits inside a guard that tests AND sets the flag in the same statement, and the flag is written
+  // exactly twice in the whole script: initialised false before the loop, set true as that marker
+  // fires. A guard that does not set the flag, a second reset, or a marker moved outside the guard
+  // each changes one of these two lists.
+  // STATIC STRUCTURE ONLY. This reads the script text; it does not establish that PowerShell runs
+  // the guard once per invocation. The runtime property -- three paths inspected, four markers,
+  // zero duplicates -- is the Windows-only case below and cannot be replaced off win32.
+  const lines = acl.HELPER_SCRIPT_FOR_TESTS.split("\n");
+  const markerLines = lines.filter((l) => l.includes(acl.HELPER_MARKER_PREFIX));
+  const guarded = markerLines.map((l) => /^\s*if\(-not \$marked\)\{\$marked=\$true;try\{.*\}catch\{\}\}$/.test(l));
+  assert.deepStrictEqual(guarded, [false, false, true, false], "exactly the cmdlet marker is inside the once-only guard that tests and sets $marked");
+  const flagWrites = lines.filter((l) => /\$marked\s*=/.test(l)).map((l) => l.trim());
+  assert.deepStrictEqual(flagWrites, ["$marked=$false", markerLines[2].trim()], "the flag is written exactly twice: initialised false before the loop, set true as the cmdlet marker fires");
+  assert.ok(lines.indexOf("$marked=$false") < lines.indexOf(markerLines[2]), "the initialisation precedes the guarded marker");
+});
+
 suite("helper marker parser — numbers and counts only");
 
 test("absent stderr yields no markers and zero counts", () => {
