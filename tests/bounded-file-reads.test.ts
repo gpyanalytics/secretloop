@@ -3,6 +3,7 @@ import { constants as fsConstants } from "fs";
 import { defaultConfig } from "../src/config";
 import { test, suite, finish, assert, skip } from "./harness";
 import {
+  lstatSync,
   mkdtempSync,
   mkdirSync,
   rmSync,
@@ -349,7 +350,7 @@ test("a FIFO is refused promptly by both readers, without blocking on open", () 
  */
 const FIFO_CHILD_TIMEOUT_MS = 10000;
 
-function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: ReturnType<typeof spawnSync>; got: any } {
+function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: ReturnType<typeof spawnSync>; got: any; swap: string } {
   const root = path.join(__dirname, "..");
   // The lab directory is created by the PARENT and handed in, so that a child
   // killed on the timeout -- the defect this case exists to catch -- cannot
@@ -361,6 +362,15 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
   // top, before any project module loads. The parent parses only lines matching the
   // allowlist and, on a timeout, prints the stages it saw: nothing else from the child is
   // ever echoed. What a marker pattern means is stated beside the timeout assertion below.
+  //
+  // "unlinked" sits between the fixture's own two operations inside the hook -- the unlink of the
+  // regular file and the synchronous mkfifo spawn -- so a stall there is attributed to one or the
+  // other (run 38081079674 stalled between "hook-fired" and "fifo-made" and could not say which).
+  // DELIVERY LIMIT: a marker is a stderr write. Node delivers pipe writes asynchronously on macOS,
+  // so a marker written just before a blocking call may be queued and never flushed if the child is
+  // killed; a marker that is ABSENT therefore means "not seen by the parent", not "not executed".
+  // The post-mortem label below is the independent second signal. One more small stderr write now
+  // happens inside the hook, on the product's call stack; no claim is made that it costs nothing.
   const script = `
     const __t0 = process.hrtime.bigint();
     const __stage = (n) => { try { process.stderr.write("secretloop-fifo-stage " + n + " " + String((process.hrtime.bigint() - __t0) / 1000000n) + "\\n"); } catch {} };
@@ -386,7 +396,7 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
     const real = fs[name]; let fired = false;
     fs[name] = function (...a) {
       const r = real.apply(this, a);
-      if (!fired && targets.has(String(a[0]))) { fired = true; __stage("hook-fired"); fs.unlinkSync(p); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); __stage("fifo-made"); }
+      if (!fired && targets.has(String(a[0]))) { fired = true; __stage("hook-fired"); fs.unlinkSync(p); __stage("unlinked"); cp.execFileSync("mkfifo", [p], { stdio: "ignore" }); __stage("fifo-made"); }
       return r;
     };
     const s = (r) => (r && typeof r === "object" && "skipped" in r ? r.skipped : ("text" in r ? "TEXT" : "BYTES"));
@@ -412,15 +422,29 @@ function fifoSwapChild(mode: "text" | "binary" | "header", lab: string): { run: 
   });
   let got: any = null;
   try { got = JSON.parse(run.stdout); } catch { /* reported below */ }
-  return { run, got };
+  // POST-MORTEM of the swap path, taken by the PARENT after the child has ended (normally or by the
+  // timeout kill) and before the lab is removed. lstat, so a symlink is never followed. Only a fixed
+  // type label leaves this function -- never the path, never an error object or message -- and only
+  // ENOENT maps to "absent": any other inspection error is "unreadable", not a guess. What the label
+  // establishes is the state the child left behind: "regular" = the unlink had not completed,
+  // "absent" = unlinked but no FIFO yet, "fifo" = mkfifo had completed. It is state after the fact,
+  // not proof of the exact syscall the child was blocked in when it was killed.
+  let swap = "unreadable";
+  try {
+    const st = lstatSync(path.join(lab, "f.txt"));
+    swap = st.isFile() ? "regular" : st.isFIFO() ? "fifo" : "other";
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") swap = "absent";
+  }
+  return { run, got, swap };
 }
 
 /**
  * The child's stage markers, parsed by allowlist: a line is kept only if it is exactly one of
- * the eight fixed stage names followed by an integer; every other stderr line is counted, never
+ * the nine fixed stage names followed by an integer; every other stderr line is counted, never
  * kept. Returned as "name@ms" tokens in the order seen.
  */
-const FIFO_STAGES = ["start", "modules-loaded", "file-written", "hook-fired", "fifo-made", "reader-returned", "probe-done", "lab-removed"] as const;
+const FIFO_STAGES = ["start", "modules-loaded", "file-written", "hook-fired", "unlinked", "fifo-made", "reader-returned", "probe-done", "lab-removed"] as const;
 const FIFO_STAGE_LINE = new RegExp("^secretloop-fifo-stage (" + FIFO_STAGES.join("|") + ") (\\d{1,9})$");
 function parseFifoStages(stderr: string | Buffer | null | undefined): { stages: string[]; otherLines: number } {
   const out = { stages: [] as string[], otherLines: 0 };
@@ -450,8 +474,9 @@ function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
   const lab = mkdtempSync(path.join(tmpdir(), "secretloop-fifoswap-"));
   let run: ReturnType<typeof spawnSync>;
   let got: any;
+  let swap: string;
   try {
-    ({ run, got } = fifoSwapChild(mode, lab));
+    ({ run, got, swap } = fifoSwapChild(mode, lab));
   } finally {
     // Backstop for a child that was killed: spawnSync's timeout terminates it,
     // and this removes whatever it left. On the corrected source the child has
@@ -475,6 +500,7 @@ function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
   const bytes = (x: unknown): number => (typeof x === "string" || Buffer.isBuffer(x) ? Buffer.byteLength(x) : 0);
   const ERROR_CODES = new Set(["ETIMEDOUT", "ENOBUFS", "ENOENT", "EACCES", "EPERM", "EAGAIN", "EPIPE", "ESPIPE", "EINTR", "EIO"]);
   const SIGNALS = new Set(["SIGTERM", "SIGKILL", "SIGINT", "SIGHUP", "SIGQUIT", "SIGABRT", "SIGSEGV", "SIGBUS", "SIGPIPE", "SIGALRM"]);
+  const SWAP_LABELS = new Set(["absent", "regular", "fifo", "other", "unreadable"]);
   const label = (v: unknown, allowed: Set<string>): string => (v === null || v === undefined ? "NONE" : typeof v === "string" && allowed.has(v) ? v : "OTHER");
   const numeric = (v: unknown): string => (typeof v === "number" && Number.isInteger(v) ? String(v) : v === null || v === undefined ? "NONE" : "OTHER");
   const errCode = run.error ? label((run.error as NodeJS.ErrnoException).code, ERROR_CODES) : "NONE";
@@ -482,7 +508,8 @@ function fifoSwapCase(mode: "text" | "binary" | "header", what: string): void {
   const summary =
     `error ${errCode}; signal ${label(run.signal, SIGNALS)}; status ${numeric(run.status)}; ` +
     `stages observed: ${seen.stages.length ? seen.stages.join(" ") : "none"}; ${seen.otherLines} other stderr line(s); ` +
-    `stdout ${bytes(run.stdout)} B, stderr ${bytes(run.stderr)} B`;
+    `stdout ${bytes(run.stdout)} B, stderr ${bytes(run.stderr)} B; ` +
+    `swap path after the child ended: ${label(swap, SWAP_LABELS)}`;
   const timedOut = run.error !== undefined && (run.error as NodeJS.ErrnoException).code === "ETIMEDOUT";
   assert.ok(!timedOut, `${what}: child did not finish within ${FIFO_CHILD_TIMEOUT_MS} ms; spawnSync reported ETIMEDOUT (${summary})`);
   assert.strictEqual(run.signal, null, `${what}: child ended by signal (${summary})`);
