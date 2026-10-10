@@ -1,6 +1,45 @@
 # Changelog
 
-## Unreleased
+## 0.7.2 — 2026-10-10
+
+*Date provisional: the intended publication day, 10 October 2026 in Asia/Kolkata (IST, UTC+05:30). It is confirmed
+or corrected at publication; if publication slips, the heading moves with it. This heading is not a statement that
+publication has happened.*
+
+### Scope
+
+SecretLoop 0.7.2 is a reliability-evidence release. **No detection rule, fingerprint, severity, report schema (still `5`),
+verifier, provider or consent decision changes.** One product-source file changes, `src/consent-acl-win.ts`: the Windows
+consent helper writes four timing markers to its own standard error (below). Every other change since 0.7.1 is CI,
+tests, fixtures or documentation. **Dependency versions are unchanged from 0.7.1** (the lockfile differs only in the
+version fields). The repository's own `npm audit`, re-measured in the 0.7.2 clean room, **differs from 0.7.1**: 7 entries
+from 2 advisories, where 0.7.1 had 6 from 1. The known one is braces ≤ 3.0.3 (GHSA-vfj7-8cjw-p6xm, high, no fixed version
+exists; development tooling reached through ovsx → vsce → secretlint). The new one is **proxy-addr 2.0.7
+(GHSA-jqcg-44mw-7w3h, CVE-2026-90711, critical, published 2026-10-05; fixed in 2.0.8)**, reached only through
+`@modelcontextprotocol/sdk` → `express`, a development dependency: SecretLoop's MCP server uses the stdio transport, no
+build, test or release step starts the SDK's HTTP transport, and `proxy-addr` and `express` appear in none of the three
+shipped bundles. These are three different things and are stated separately: the repository and its tooling carry both
+advisories; the shipped tarball and VSIX carry neither (the package declares no runtime dependencies); a consumer install
+of the tarball audits at zero at every severity. The in-range `proxy-addr` update is recorded as a follow-up, not applied
+here. No "audit unchanged" or "no risk" claim is made.
+
+- **Regenerate both reports before comparing across this upgrade.** The comparator requires equal `toolVersion`, so a
+  0.7.1 report and a 0.7.2 report are refused with `identity-mismatch (toolVersion)` even though their findings are
+  identical. Scan both sides again with 0.7.2.
+- **Where the markers ship.** The helper is bundled into `out/cli.js` (through the `approve` command's import of the
+  consent module) and into `out/mcp.js`; it is **not** in `out/extension.js`. The npm package carries both bundles; the
+  VSIX carries `cli.js` and `extension.js`, so the extension itself is unchanged and is affected only through the bundled
+  CLI. On Linux and macOS the helper never runs.
+- **What this release does not do.** The diagnostics below record evidence; they resolve none of the intermittent CI
+  failures they instrument, and no claim is made that they are timing-neutral. Still open, with records in the
+  benchmark workspace: the Windows cold first-verify refusal (four occurrences; the fourth measured 12.7 s before the
+  helper's first script line and the inspection unfinished at the 20 s allowance); the macOS Node 18 `test-macos (18)`
+  hang of 2026-09-27 and the F-1 text-reader FIFO block of 2026-10-08 (linked only as a hypothesis); the Windows
+  two-user fixture's `unsafe-parent` refusal (two occurrences, refusing ancestor never recorded). N4 (`lsof` containment)
+  stays deferred and N5 (`node:wasi`) unfunded.
+- **Benchmark corpus B is now named and pinned** (`getsentry/sentry-javascript` at the commit in `bench/repos.txt`, MIT).
+  Its findings are reported as **untriaged** — nobody has labelled them — not as false positives or precision figures,
+  and they are not comparable with the historical unnamed corpus B rows, which stay as recorded.
 
 ### Diagnostics
 

@@ -9,7 +9,7 @@ value. Scans run on your machine. The only network request SecretLoop ever makes
 supported credential against that credential's own provider, and only after you ask for it.
 A GPY Analytics product.
 
-This README describes SecretLoop **0.7.1**. The [changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md)
+This README describes SecretLoop **0.7.2**. The [changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md)
 lists what each version changed, and the [documentation hub](https://github.com/gpyanalytics/secretloop/blob/main/docs/README.md)
 records which version each distribution channel currently serves.
 
@@ -27,7 +27,7 @@ npm install -g secretloop      # install it for hooks and CI
 or [Open VSX](https://open-vsx.org/extension/gpyanalytics/secretloop), or from a downloaded file:
 
 ```bash
-code --install-extension secretloop-0.7.1.vsix
+code --install-extension secretloop-0.7.2.vsix
 ```
 
 **MCP** — register the server with your client. For Claude Code:
@@ -51,6 +51,11 @@ report.
 **Upgrading to 0.7.1.** A dependency and security maintenance release with no intended change to detection or
 behaviour. Because the comparator requires equal tool versions, a 0.7.0 report and a 0.7.1 report are not comparable
 either: regenerate both with 0.7.1.
+
+**Upgrading to 0.7.2.** A reliability-evidence release: no detection, rule, schema or consent-decision change. The one
+product change is four timing markers the Windows consent helper writes to its own standard error, which SecretLoop
+never reads and never shows. As with every version step, a 0.7.1 report and a 0.7.2 report are not comparable:
+regenerate both with 0.7.2.
 
 ## Quick start: a safe local scan
 
