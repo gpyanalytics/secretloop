@@ -263,7 +263,7 @@ succeeded. This is evidence that the test can fail, not evidence about the produ
 
 ## Security-critical surface
 
-Changes to `src/mcp*.ts`, `src/consent.ts`, `src/verify*.ts` or
+Changes to `src/mcp*.ts`, `src/consent*.ts`, `src/verify*.ts` or
 `src/workspace*.ts` require the adversarial re-review in RELEASING.md §5
 against the invariants: consent gate, commitment integrity,
 consume-before-transmit, TOCTOU, workspace boundary, untrusted content, no

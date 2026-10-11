@@ -97,16 +97,17 @@ Run against the **built artifacts**, not the source tree.
 ## 5. Security review (conditional)
 
 - [ ] **If** this release touches the security-critical surface —
-      `src/mcp*.ts`, `src/consent.ts`, `src/verify*.ts`, `src/workspace*.ts`,
+      `src/mcp*.ts`, `src/consent*.ts`, `src/verify*.ts`, `src/workspace*.ts`,
       `src/workspace-verify.ts` — an adversarial re-review of the changed
-      invariants is complete and findings resolved.
+      invariants is complete and findings resolved. (`src/consent*.ts` since
+      decision record 0008; before it, only `src/consent.ts` was listed.)
 
       A large rebase or merge onto that surface **counts as touching it**,
       even with no logical change: verify the invariants survived.
       Detection, precision and rules-only changes do **not** require this.
 
       `git diff --name-only <previous-tag>..HEAD -- 'src/mcp*.ts'
-      src/consent.ts 'src/verify*.ts' 'src/workspace*.ts'` settles it. Empty
+      'src/consent*.ts' 'src/verify*.ts' 'src/workspace*.ts'` settles it. Empty
       means a prior review still applies.
 
       The review attacks each invariant rather than confirming it: consent
