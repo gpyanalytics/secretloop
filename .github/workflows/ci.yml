@@ -140,6 +140,12 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          # MACHINE-LOCAL SIDS NEVER REACH THE LOG. Each is masked the moment it exists, before
+          # anything can print it: GitHub echoes every GITHUB_ENV value in the header of each later
+          # step, and an account icacls cannot resolve is printed as its raw SID. Diagnostics name
+          # these principals by the sanitizer's role labels (tests/fixtures/win-acl-sanitize.js).
+          # In-process .NET and workflow commands only: nothing here spawns a process.
+          "::add-mask::$(([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value)"
           function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
           $pw1 = NewPw; $pw2 = NewPw
           net user slprobe $pw1 /add /y | Out-Null
@@ -148,6 +154,7 @@ jobs:
           "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
           $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
           $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          "::add-mask::$sid1"; "::add-mask::$sid2"
           # NOT under RUNNER_TEMP any more. RUNNER_TEMP on this image is D:\a\_temp, and the D: root's
           # access list is NOT the same on every VM of the same image version. On the VM of main run
           # 38064570504 it granted Authenticated Users 0x1301bf -- DELETE included -- on the root itself,
@@ -717,6 +724,8 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          # Machine-local SIDs are masked the moment they exist, exactly as in the x64 job.
+          "::add-mask::$(([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value)"
           function NewPw { -join ((48..57 + 65..90 + 97..122) | Get-Random -Count 24 | ForEach-Object { [char]$_ }) + "aA1!" }
           $pw1 = NewPw; $pw2 = NewPw
           net user slprobe $pw1 /add /y | Out-Null
@@ -725,6 +734,7 @@ jobs:
           "slprobe2:"; net user slprobe2 | Select-String -Pattern "Local Group Memberships"
           $sid1 = (New-Object System.Security.Principal.NTAccount("slprobe")).Translate([System.Security.Principal.SecurityIdentifier]).Value
           $sid2 = (New-Object System.Security.Principal.NTAccount("slprobe2")).Translate([System.Security.Principal.SecurityIdentifier]).Value
+          "::add-mask::$sid1"; "::add-mask::$sid2"
           # NOT under RUNNER_TEMP on this image. Measured here: C:\a\_temp\acl-lab inherits
           # "NT AUTHORITY\Authenticated Users:(M)" from C:\a, so EVERY authenticated account can
           # modify the lab's own parents. The product is right to refuse a store under that, and
@@ -769,17 +779,23 @@ jobs:
             throw "the lab root still grants Authenticated Users after /inheritance:r, so its own parents are unsafe and nothing below would be evidence:`n$labAcl"
           }
           "--- effective ancestry of the lab, as the product sees it"
+          # Owners and SDDL through the sanitizer, with the job's own accounts as roles: SELF is the
+          # builder, SLPROBE / SLPROBE2 the two ordinary accounts. The chain is this job's fixed paths.
+          $env:ACL_SID1 = $sid1; $env:ACL_SID2 = $sid2
           node -e "
             const acl = require('./out/consent-acl-win.js');
+            const sanitize = require('./tests/fixtures/win-acl-sanitize.js');
             const sid = acl.currentUserSid();
+            if (/^S-1-5-21-[0-9-]+$/.test(String(sid))) console.log('::add-mask::' + sid);
+            const roles = sanitize.rolesFromEnv(process.env, sid);
             const chain = acl.ancestorChainOf('C:\\sl-acl-lab\\private') || [];
             const info = acl.inspectPaths(chain);
-            console.log('builder sid:', sid);
+            console.log('builder:', sanitize.principal(sid, roles), '=', sanitize.principal(sid));
             if (!info.ok) { console.log('inspect failed:', info.problem); }
             else for (const c of chain) {
               const e = info.byPath.get(require('path').win32.resolve(c).toLowerCase());
-              console.log('  ', c, 'owner', e && e.ownerSid);
-              console.log('      sddl', e && e.sddl);
+              console.log('  ', c, 'owner', sanitize.principal(e && e.ownerSid, roles));
+              console.log('      sddl', sanitize.sddl(e && e.sddl, roles));
             }
           "
           # A parent shaped like a real profile: the owner, SYSTEM and Administrators only.
@@ -1142,6 +1158,7 @@ jobs:
           # the two-account fixture's "private" directory is (checked icacls, the ACL printed, the
           # precondition asserted), and the root is only printed.
           $sid = ([Security.Principal.WindowsIdentity]::GetCurrent()).User.Value
+          "::add-mask::$sid"
           $yRoot = "$($Y):\\"
           "--- $($Y):\ as formatted (left as the stock non-immediate ancestor it is)"; icacls $yRoot
           New-Item -ItemType Directory -Force "$($X):\sl-n2" | Out-Null
@@ -1155,8 +1172,12 @@ jobs:
           $privateAcl = (icacls $private | Out-String)
           $privateAcl
           $ownerSid = (Get-Acl -LiteralPath $private).GetOwner([System.Security.Principal.SecurityIdentifier]).Value
-          "owner of $private : $ownerSid (runner $sid)"
-          if (@($sid, "S-1-5-32-544", "S-1-5-18") -notcontains $ownerSid) { throw "FIXTURE: $private is owned by $ownerSid, which the store rule does not accept as a parent's owner" }
+          # Printed as a label, never the SID. The three owners the store rule accepts carry the
+          # sanitizer's own labels for them; anything else is named only as untrusted, without
+          # spawning a process to classify it.
+          $ownerLabel = if ($ownerSid -eq $sid) { "SELF" } elseif ($ownerSid -eq "S-1-5-32-544") { "ADMINISTRATORS" } elseif ($ownerSid -eq "S-1-5-18") { "SYSTEM" } else { "UNTRUSTED-OWNER" }
+          "owner of $private : $ownerLabel (SELF is the runner)"
+          if ($ownerLabel -eq "UNTRUSTED-OWNER") { throw "FIXTURE: $private is owned by a principal the store rule does not accept as a parent's owner (not SELF, ADMINISTRATORS or SYSTEM)" }
           # Fixture-level NAMED-PRINCIPAL checks, so a failed strip is a fixture failure with the ACL in
           # the log rather than a product refusal. Not an exhaustive validation of the access list: an
           # unexpected further SID would pass them, and the product's ancestor rule stays the authority
@@ -1168,21 +1189,24 @@ jobs:
           }
           "--- $($X):\ (exFAT) as icacls reports it, informational -- the product's own view follows in the next step"
           icacls "$($X):\\" 2>&1 | Out-String
-      - name: Filesystem evidence, as the product sees it (owner SID and SDDL of the disposable roots)
+      - name: Filesystem evidence, as the product sees it (owner and SDDL of the disposable roots, as role labels)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
           node -e "
             const acl = require('./out/consent-acl-win.js');
+            const sanitize = require('./tests/fixtures/win-acl-sanitize.js');
             const sid = acl.currentUserSid();
-            console.log('runner sid:', sid);
+            if (/^S-1-5-21-[0-9-]+$/.test(String(sid))) console.log('::add-mask::' + sid);
+            const roles = { self: sanitize.rolesFromEnv({}, sid).self };
+            console.log('runner:', sanitize.principal(sid, roles), '=', sanitize.principal(sid));
             const paths = ['$($env:SLN2_X):\\', '$($env:SLN2_X):\\sl-n2', '$($env:SLN2_Y):\\', '$($env:SLN2_Y):\\sl-n2'];
             const info = acl.inspectPaths(paths);
             if (!info.ok) { console.log('inspect failed:', info.problem); process.exit(0); }
             for (const p of paths) {
               const e = info.byPath.get(require('path').win32.resolve(p).toLowerCase());
-              console.log(p, '-> exists', e && e.exists, 'dir', e && e.isDirectory, 'owner', e && e.ownerSid, 'unreadable', e && e.unreadable);
-              console.log('   sddl', e && e.sddl);
+              console.log(p, '-> exists', e && e.exists, 'dir', e && e.isDirectory, 'owner', sanitize.principal(e && e.ownerSid, roles), 'unreadable', e && e.unreadable);
+              console.log('   sddl', sanitize.sddl(e && e.sddl, roles));
             }
           "
           if ($LASTEXITCODE -ne 0) { throw "the product-view inspection did not run (node exit $LASTEXITCODE); that is a non-measurement" }
