@@ -1,0 +1,113 @@
+# EXPERIMENT (rev2) -- draft PR only, never merged. One automatic pull_request run of ten x64 Windows jobs that repeat the
+# ordinary `test-windows` sequence (checkout, setup-node, npm ci, compile, npm test) while a bounded pwsh 7 sampler
+# records per-process CPU (with PIDs), per-core busy time and queue lengths. The question: during a slow first
+# Windows PowerShell start, where does CPU time go? It does not change the product, the tests, ci.yml, the 20 s
+# allowance, or the environment the suite runs in; it adds no retry and no warm-up. A refusal recorded here is
+# experiment data, never a product pass or a D5 result: each job's conclusion follows `npm test`'s exit code.
+#
+# Path-filtered to its own files, so it runs only on the PR that adds it. Ten jobs means ten runner allocations;
+# nothing guarantees ten distinct physical hosts.
+name: windows-cold-start-experiment
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-cold-start-experiment.yml"
+      - "scripts/cold-start-experiment/**"
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    runs-on: windows-latest
+    timeout-minutes: 30          # same ceiling as test-windows
+    strategy:
+      fail-fast: false           # one refusal must not cancel the other planned observations
+      matrix:
+        node-version: [18, 20]
+        rep: [1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - id: ci
+        run: npm ci
+      - id: compile
+        run: npm run compile
+
+      - name: Record sanitized PSModulePath facts (booleans and counts only; nothing is changed)
+        id: envfacts
+        shell: pwsh
+        run: |
+          $exp = Join-Path $env:RUNNER_TEMP 'cold-start'   # RUNNER_TEMP inside the step; the runner context is not allowed in job-level env
+          New-Item -ItemType Directory -Force $exp | Out-Null
+          $v = $env:PSModulePath
+          $entries = if ($v) { @($v -split ';' | Where-Object { $_ -ne '' }) } else { @() }
+          $isPs7 = { param($e) $e -match '\\PowerShell\\7(\\|$)' -or $e -match '\\Documents\\PowerShell\\Modules' -or $e -match '\\Program Files\\PowerShell\\Modules' }
+          $sys = -1; $firstPs7 = -1
+          for ($i = 0; $i -lt $entries.Count; $i++) {
+            if ($sys -lt 0 -and $entries[$i] -match '\\System32\\WindowsPowerShell\\v1\.0\\Modules\\?$') { $sys = $i }
+            if ($firstPs7 -lt 0 -and (& $isPs7 $entries[$i])) { $firstPs7 = $i }
+          }
+          $facts = [ordered]@{ present = [bool]$v; entries = $entries.Count; winPsSystem = ($sys -ge 0); ps7First = ($firstPs7 -ge 0 -and ($sys -lt 0 -or $firstPs7 -lt $sys)) }
+          $facts | ConvertTo-Json -Compress | Set-Content -LiteralPath (Join-Path $exp 'env-facts.json') -NoNewline
+
+      - name: Start the bounded sampler (pwsh 7; stops at 25 min or on the stop file)
+        id: sampler
+        shell: pwsh
+        run: |
+          $exp = Join-Path $env:RUNNER_TEMP 'cold-start'
+          $samples = Join-Path $exp 'samples.jsonl'
+          $p = Start-Process -FilePath pwsh -ArgumentList @('-NoProfile', '-NonInteractive', '-File', (Join-Path $env:GITHUB_WORKSPACE 'scripts\cold-start-experiment\sampler.ps1'), '-OutFile', $samples, '-StopFile', (Join-Path $exp 'stop'), '-MaxSeconds', '1500', '-IntervalMs', '1000') -PassThru -WindowStyle Hidden
+          Set-Content -LiteralPath (Join-Path $exp 'sampler.pid') -Value ("{0} {1}" -f $p.Id, $p.StartTime.ToUniversalTime().Ticks) -NoNewline
+          $deadline = (Get-Date).AddSeconds(60)
+          while ((Get-Date) -lt $deadline -and -not ((Test-Path $samples) -and ((Get-Content $samples | Measure-Object).Count -ge 2))) { Start-Sleep -Milliseconds 500 }
+          if (-not (Test-Path $samples)) { Write-Output "sampler wrote nothing within 60 s; the suite still runs and the summary will say SAMPLER-UNAVAILABLE" }
+
+      - name: npm test (ordinary suite; output stamped on arrival; npm's native exit code preserved)
+        id: suite
+        shell: pwsh
+        run: |
+          $exp = Join-Path $env:RUNNER_TEMP 'cold-start'
+          & (Join-Path $env:GITHUB_WORKSPACE 'scripts\cold-start-experiment\run-suite.ps1') -StampFile (Join-Path $exp 'stamps.tsv') -ExitFile (Join-Path $exp 'npm-exit.txt') -CheckFile (Join-Path $exp 'suite-check.txt')
+          exit $LASTEXITCODE
+
+      - name: Stop the sampler (only the PID this job started)
+        if: always()
+        shell: pwsh
+        run: |
+          $exp = Join-Path $env:RUNNER_TEMP 'cold-start'
+          if (Test-Path $exp) { New-Item -ItemType File -Force (Join-Path $exp 'stop') | Out-Null }
+          $pidFile = Join-Path $exp 'sampler.pid'
+          if (Test-Path $pidFile) {
+            $parts = (Get-Content -LiteralPath $pidFile -Raw).Trim() -split ' '
+            $id = [int]$parts[0]; $ticks = [int64]$parts[1]
+            $proc = Get-Process -Id $id -ErrorAction SilentlyContinue
+            # only the process this job started: same PID, image pwsh, same start time (guards against PID reuse)
+            if ($proc -and $proc.ProcessName -eq 'pwsh' -and $proc.StartTime.ToUniversalTime().Ticks -eq $ticks) {
+              if (-not $proc.WaitForExit(15000)) { Stop-Process -Id $id -Force -ErrorAction SilentlyContinue; Write-Output "sampler did not stop within 15 s; stopped by PID after identity check" }
+            }
+          }
+
+      - name: Summarize (sanitized; fixed labels, allowlisted categories, numbers only)
+        if: always()
+        shell: pwsh
+        run: |
+          $exp = Join-Path $env:RUNNER_TEMP 'cold-start'
+          $setup = if ('${{ steps.ci.outcome }}' -eq 'success' -and '${{ steps.compile.outcome }}' -eq 'success') { 'success' } else { 'failure' }
+          New-Item -ItemType Directory -Force (Join-Path $exp 'out') | Out-Null
+          node (Join-Path $env:GITHUB_WORKSPACE 'scripts\cold-start-experiment\summarize.js') --label "node${{ matrix.node-version }}-rep${{ matrix.rep }}" --setup $setup --samples (Join-Path $exp 'samples.jsonl') --stamps (Join-Path $exp 'stamps.tsv') --exit (Join-Path $exp 'npm-exit.txt') --check (Join-Path $exp 'suite-check.txt') --env (Join-Path $exp 'env-facts.json') --sampler-pid (Join-Path $exp 'sampler.pid') --out-json (Join-Path $exp 'out\summary.json') --out-text (Join-Path $exp 'out\summary.txt')
+
+      - name: Upload ONLY the sanitized summary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cold-start-node${{ matrix.node-version }}-rep${{ matrix.rep }}
+          path: |
+            ${{ runner.temp }}/cold-start/out/summary.json
+            ${{ runner.temp }}/cold-start/out/summary.txt
+          if-no-files-found: error
+          retention-days: 30
