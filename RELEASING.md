@@ -183,6 +183,16 @@ stronger ones.
       publication and investigate** — do not rerun solely to obtain green, and
       record what the failed run showed.
 
+      The release PR here is the **final** one: the PR whose merge produces the
+      commit you publish and tag. Every job that the repository's workflows run
+      for that PR and for its `main` commit must succeed; a workflow whose path
+      filter excludes the PR's files does not run, is not an executed pass, and
+      need not appear. If anything merges after those runs, open a new final
+      release PR and meet the gate again on it. A failed run stays a failure in
+      the record: a green run on a later commit does not clear it, and a failed
+      earlier release PR grants no waiver (decision 0007, amendment of
+      2026-10-11).
+
       This is a **manual release requirement, not a GitHub required status
       check.** `main` requires only `self-scan`, `packaging`, `test (18)` and
       `test (20)`, so nothing stops a merge or a publish on your behalf; this
