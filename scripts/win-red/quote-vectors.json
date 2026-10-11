@@ -1,0 +1,28 @@
+{
+  "_note": "Command-line quoting vectors (MSVCRT / CommandLineToArgvW rules). Checked locally by mechanics/quote-ref.js and on Windows by WinRed.ContainedProcess.QuoteSelfTest before anything is launched; a mismatch aborts the harness (QUOTE-SELFTEST-FAILED).",
+  "vectors": [
+    { "input": "simple", "expected": "simple" },
+    { "input": "", "expected": "\"\"" },
+    { "input": "a b", "expected": "\"a b\"" },
+    { "input": "C:\\Program Files\\nodejs\\node.exe", "expected": "\"C:\\Program Files\\nodejs\\node.exe\"" },
+    { "input": "C:\\path with space\\", "expected": "\"C:\\path with space\\\\\"" },
+    { "input": "say \"hi\"", "expected": "\"say \\\"hi\\\"\"" },
+    { "input": "back\\\"slash", "expected": "\"back\\\\\\\"slash\"" },
+    { "input": "tab\there", "expected": "\"tab\there\"" },
+    { "input": "no\\quote", "expected": "no\\quote" },
+    { "input": "trail\\", "expected": "trail\\" },
+    { "input": "a \\", "expected": "\"a \\\\\"" },
+    { "input": "\"\"", "expected": "\"\\\"\\\"\"" },
+    { "input": "D:\\a\\secretloop\\secretloop\\scripts\\win-red\\summarize.js", "expected": "D:\\a\\secretloop\\secretloop\\scripts\\win-red\\summarize.js" },
+    { "input": "--transpile-only", "expected": "--transpile-only" },
+    { "input": "x\\\\\"y", "expected": "\"x\\\\\\\\\\\"y\"" }
+  ],
+  "cmdScriptPaths": {
+    "accepted": ["C:\\Program Files\\nodejs\\npm.cmd", "C:\\hostedtoolcache\\windows\\node\\20.19.0\\x64\\npm.cmd", "C:\\Program Files (x86)\\x\\npm.CMD"],
+    "refused": ["C:\\x\\npm.ps1", "C:\\x\\npm", "C:\\x\\npm.cmd&calc", "C:\\x\\np|m.cmd", "C:\\x\\%TEMP%\\npm.cmd", "C:\\x\\np\"m.cmd", "C:\\x\\npm.cmd\r\ncalc", ""]
+  },
+  "cmdArguments": {
+    "accepted": ["ci", "--no-audit", "--no-fund", "run", "compile", "a=b"],
+    "refused": ["", "two words", "a&b", "a|b", "%TEMP%", "x\"y", "--flag=C:\\path", "a;b", "a^b"]
+  }
+}

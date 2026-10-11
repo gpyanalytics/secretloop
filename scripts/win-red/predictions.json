@@ -1,0 +1,55 @@
+{
+  "_note": "Exact predicted measurements (measure-markers.js output) per case. Every listed key must match exactly; numbers are counts, names are fixed stage names.",
+  "BASELINE": {
+    "stdoutIdentical": true,
+    "parsedIdentical": true,
+    "parsedOk": true,
+    "stderrMarkerLines": 4,
+    "stderrMalformed": 0,
+    "stderrDuplicates": 0,
+    "stderrOtherLines": 0,
+    "duplicatedStages": [],
+    "stdoutMarkerLines": 0,
+    "statusStripped": 0,
+    "statusShipped": 0
+  },
+  "W1": {
+    "stdoutIdentical": false,
+    "parsedIdentical": false,
+    "stderrMarkerLines": 0,
+    "stderrMalformed": 0,
+    "stderrDuplicates": 0,
+    "duplicatedStages": [],
+    "stdoutMarkerLines": 4,
+    "statusStripped": 0,
+    "statusShipped": 0
+  },
+  "W2": {
+    "stdoutIdentical": true,
+    "parsedIdentical": true,
+    "parsedOk": true,
+    "stderrMarkerLines": 5,
+    "stderrMalformed": 0,
+    "stderrDuplicates": 1,
+    "duplicatedStages": [
+      "end"
+    ],
+    "stdoutMarkerLines": 0,
+    "statusStripped": 0,
+    "statusShipped": 0
+  },
+  "W3": {
+    "stdoutIdentical": true,
+    "parsedIdentical": true,
+    "parsedOk": true,
+    "stderrMarkerLines": 5,
+    "stderrMalformed": 0,
+    "stderrDuplicates": 1,
+    "duplicatedStages": [
+      "cmdlet"
+    ],
+    "stdoutMarkerLines": 0,
+    "statusStripped": 0,
+    "statusShipped": 0
+  }
+}
