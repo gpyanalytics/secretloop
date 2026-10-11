@@ -305,10 +305,15 @@ test("workspace scan (VS Code workspace / baseline path) applies the project fil
 });
 
 test("open-document scan: the same classifier on the document text and its relative path", () => {
-  const config = loadConfig(tmp()); // no project file: defaults
-  const on = { ...config, entropyPassEnabled: true };
-  assert.deepStrictEqual(generic(scanText(openapiYaml(SEED), { config: on, filePath: "docs/api/openapi.yml" })), []);
-  assert.strictEqual(generic(scanText(openapiYaml(SEED), { config: on, filePath: "docs/api/openapi.md" })).length, 1);
+  const dir = tmp();
+  try {
+    const config = loadConfig(dir); // no project file: defaults
+    const on = { ...config, entropyPassEnabled: true };
+    assert.deepStrictEqual(generic(scanText(openapiYaml(SEED), { config: on, filePath: "docs/api/openapi.yml" })), []);
+    assert.strictEqual(generic(scanText(openapiYaml(SEED), { config: on, filePath: "docs/api/openapi.md" })).length, 1);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ---------------------------------------------------------------------------
