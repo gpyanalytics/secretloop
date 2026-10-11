@@ -1,4 +1,4 @@
-import { mkdtempSync, writeFileSync } from "fs";
+import { mkdtempSync, rmSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
@@ -289,15 +289,35 @@ test("honorInlineDirectives: false still honours nothing", () => {
 
 suite("\nsuppression accountability — baseline entries");
 
-function baselineFile(contents: unknown): string {
+/**
+ * Removes a lab directory this file created. Every lab here was left behind in the OS temp
+ * directory on each run until this existed. The bounded retries cover a transient Windows lock
+ * (EBUSY / EPERM from an indexer or scanner, or a child that has only just exited); a lab that
+ * still cannot be removed is left where the OS temp cleaner will find it, rather than turning a
+ * passing test into a failure or replacing the error a failing one threw.
+ */
+function removeLab(dir: string): void {
+  try {
+    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+  } catch {
+    // left for the OS temp cleaner; see above
+  }
+}
+
+/** Writes `contents` as a baseline file, loads it, and removes the lab before returning. */
+function loadBaselineFrom(contents: unknown): ReturnType<typeof loadBaseline> {
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-baseline-"));
-  const file = path.join(dir, "baseline.json");
-  writeFileSync(file, JSON.stringify(contents), "utf8");
-  return file;
+  try {
+    const file = path.join(dir, "baseline.json");
+    writeFileSync(file, JSON.stringify(contents), "utf8");
+    return loadBaseline(file);
+  } finally {
+    removeLab(dir);
+  }
 }
 
 test("a released baseline of bare strings loads exactly as before", () => {
-  const loaded = loadBaseline(baselineFile({ version: 2, fingerprints: ["a.py:rule:abc"] }));
+  const loaded = loadBaselineFrom({ version: 2, fingerprints: ["a.py:rule:abc"] });
   assert.deepStrictEqual([...loaded.fingerprints], ["a.py:rule:abc"]);
   assert.strictEqual(loaded.reasons.size, 0);
   assert.deepStrictEqual(loaded.diagnostics, []);
@@ -305,19 +325,17 @@ test("a released baseline of bare strings loads exactly as before", () => {
 });
 
 test("a bare array still loads as version 1", () => {
-  const loaded = loadBaseline(baselineFile(["a.py:rule:abc"]));
+  const loaded = loadBaselineFrom(["a.py:rule:abc"]);
   assert.deepStrictEqual([...loaded.fingerprints], ["a.py:rule:abc"]);
   assert.strictEqual(loaded.version, 1);
   assert.strictEqual(loaded.outdated, true);
 });
 
 test("an object entry carries a reason beside the fingerprint", () => {
-  const loaded = loadBaseline(
-    baselineFile({
-      version: 2,
-      fingerprints: ["a.py:rule:abc", { fingerprint: "b.py:rule:def", reason: "vendor sample" }],
-    })
-  );
+  const loaded = loadBaselineFrom({
+    version: 2,
+    fingerprints: ["a.py:rule:abc", { fingerprint: "b.py:rule:def", reason: "vendor sample" }],
+  });
   assert.deepStrictEqual([...loaded.fingerprints].sort(), ["a.py:rule:abc", "b.py:rule:def"]);
   assert.strictEqual(loaded.reasons.get("b.py:rule:def"), "vendor sample");
   assert.strictEqual(loaded.reasons.has("a.py:rule:abc"), false, "absent, not null");
@@ -329,16 +347,14 @@ test("diagnostics name the entry by position and carry nothing out of the file",
   // went into their CI log.
   const marker = `zzfp${Date.now().toString(36)}zz`;
   const reasonMarker = `zzreason${Date.now().toString(36)}zz`;
-  const loaded = loadBaseline(
-    baselineFile({
-      version: 2,
-      fingerprints: [
-        "keep.ts:github-token:aaaabbbbccccdddd",
-        { fingerprint: `src/${marker}/c.ts:github-token:0123456789abcdef`, reason: reasonMarker + "A".repeat(400) },
-        { nope: true, reason: reasonMarker },
-      ],
-    })
-  );
+  const loaded = loadBaselineFrom({
+    version: 2,
+    fingerprints: [
+      "keep.ts:github-token:aaaabbbbccccdddd",
+      { fingerprint: `src/${marker}/c.ts:github-token:0123456789abcdef`, reason: reasonMarker + "A".repeat(400) },
+      { nope: true, reason: reasonMarker },
+    ],
+  });
   const joined = loaded.diagnostics.join("\n");
   assert.ok(!joined.includes(marker), joined);
   assert.ok(!joined.includes(reasonMarker), joined);
@@ -357,25 +373,27 @@ test("a file that is not valid JSON is refused without echoing its bytes", () =>
   // carry reasons.
   const marker = `zzjson${Date.now().toString(36)}zz`;
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-baseline-bad-"));
-  const file = path.join(dir, "baseline.json");
-  writeFileSync(file, `{"version":2,"fingerprints":[{"reason":"${marker}"},]}`, "utf8");
   try {
-    loadBaseline(file);
-    assert.fail("expected a refusal");
-  } catch (err) {
-    const message = (err as Error).message;
-    assert.strictEqual(message, "Could not parse baseline.json: it is not valid JSON.");
-    assert.ok(!message.includes(marker.slice(2)), message);
+    const file = path.join(dir, "baseline.json");
+    writeFileSync(file, `{"version":2,"fingerprints":[{"reason":"${marker}"},]}`, "utf8");
+    try {
+      loadBaseline(file);
+      assert.fail("expected a refusal");
+    } catch (err) {
+      const message = (err as Error).message;
+      assert.strictEqual(message, "Could not parse baseline.json: it is not valid JSON.");
+      assert.ok(!message.includes(marker.slice(2)), message);
+    }
+  } finally {
+    removeLab(dir);
   }
 });
 
 test("a malformed entry is diagnosed and the rest of the file still loads", () => {
-  const loaded = loadBaseline(
-    baselineFile({
-      version: 2,
-      fingerprints: ["ok:r:1", { fingerprint: "b:r:2", reason: "vendor sample" }, 42],
-    })
-  );
+  const loaded = loadBaselineFrom({
+    version: 2,
+    fingerprints: ["ok:r:1", { fingerprint: "b:r:2", reason: "vendor sample" }, 42],
+  });
   assert.deepStrictEqual([...loaded.fingerprints].sort(), ["b:r:2", "ok:r:1"]);
   assert.strictEqual(loaded.diagnostics.length, 1, "one entry rejected, two kept");
   assert.match(loaded.diagnostics[0], /^baseline entry 2 \(zero-based\): /);
@@ -384,9 +402,7 @@ test("a malformed entry is diagnosed and the rest of the file still loads", () =
 
 test("a rejected entry is named by position and never echoed", () => {
   const marker = `zzentry${Date.now().toString(36)}zz`;
-  const loaded = loadBaseline(
-    baselineFile({ version: 2, fingerprints: [{ fingerprint: 1, note: marker }] })
-  );
+  const loaded = loadBaselineFrom({ version: 2, fingerprints: [{ fingerprint: 1, note: marker }] });
   assert.strictEqual(loaded.fingerprints.size, 0);
   assert.ok(!loaded.diagnostics[0].includes(marker), loaded.diagnostics[0]);
   assert.strictEqual(
@@ -396,12 +412,10 @@ test("a rejected entry is named by position and never echoed", () => {
 });
 
 test("an oversized baseline reason is truncated and named", () => {
-  const loaded = loadBaseline(
-    baselineFile({
-      version: 2,
-      fingerprints: [{ fingerprint: "a:r:1", reason: "A".repeat(500) }],
-    })
-  );
+  const loaded = loadBaselineFrom({
+    version: 2,
+    fingerprints: [{ fingerprint: "a:r:1", reason: "A".repeat(500) }],
+  });
   assert.strictEqual(loaded.reasons.get("a:r:1")?.length, MAX_REASON_LENGTH);
   assert.strictEqual(loaded.diagnostics.length, 1);
   assert.strictEqual(
@@ -527,16 +541,21 @@ const REASON_TOKEN = "zzsuppressionreasonneedlezz";
 
 function scanRepoWithAReason(format: string): { stdout: string; stderr: string } {
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-reason-"));
-  writeFileSync(
-    path.join(dir, "app.js"),
-    `const t = "${GITHUB}"; // secretloop:allow(github-token) -- ${REASON_TOKEN}\n`,
-    "utf8"
-  );
-  const res = spawnSync("node", [CLI_PATH, "scan", "--format", format], {
-    cwd: dir,
-    encoding: "utf8",
-  });
-  return { stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+  try {
+    writeFileSync(
+      path.join(dir, "app.js"),
+      `const t = "${GITHUB}"; // secretloop:allow(github-token) -- ${REASON_TOKEN}\n`,
+      "utf8"
+    );
+    const res = spawnSync("node", [CLI_PATH, "scan", "--format", format], {
+      cwd: dir,
+      encoding: "utf8",
+    });
+    return { stdout: res.stdout ?? "", stderr: res.stderr ?? "" };
+  } finally {
+    // The scan has exited and its output is captured; the callers assert on that, not the lab.
+    removeLab(dir);
+  }
 }
 
 for (const format of ["text", "json", "sarif"]) {
@@ -549,23 +568,27 @@ for (const format of ["text", "json", "sarif"]) {
 
 test("the MCP scan payload carries the count and no reason", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "secretloop-reason-mcp-"));
-  writeFileSync(
-    path.join(dir, "app.js"),
-    `const t = "${GITHUB}"; // secretloop:allow(github-token) -- ${REASON_TOKEN}\n`,
-    "utf8"
-  );
-  resetSessions();
-  setAllowedRoots([dir]);
-  const result = toolScan({ path: dir });
-  const serialized = JSON.stringify(result);
-  assert.ok(!serialized.includes(REASON_TOKEN), "the MCP payload published the reason");
-  assert.ok(
-    !serialized.includes("suppressionReasons"),
-    "no reason channel exists on this surface, wrapped or otherwise"
-  );
-  assert.ok(result.ok, "the scan should have succeeded");
-  const scope = (result as unknown as { payload: { scope: { statement: string } } }).payload.scope;
-  assert.match(scope.statement, /1 finding\(s\) suppressed by inline directives, 1 with a recorded reason/);
+  try {
+    writeFileSync(
+      path.join(dir, "app.js"),
+      `const t = "${GITHUB}"; // secretloop:allow(github-token) -- ${REASON_TOKEN}\n`,
+      "utf8"
+    );
+    resetSessions();
+    setAllowedRoots([dir]);
+    const result = toolScan({ path: dir });
+    const serialized = JSON.stringify(result);
+    assert.ok(!serialized.includes(REASON_TOKEN), "the MCP payload published the reason");
+    assert.ok(
+      !serialized.includes("suppressionReasons"),
+      "no reason channel exists on this surface, wrapped or otherwise"
+    );
+    assert.ok(result.ok, "the scan should have succeeded");
+    const scope = (result as unknown as { payload: { scope: { statement: string } } }).payload.scope;
+    assert.match(scope.statement, /1 finding\(s\) suppressed by inline directives, 1 with a recorded reason/);
+  } finally {
+    removeLab(dir);
+  }
 });
 
 test("what IS published is the count, and the finding stays suppressed", () => {
