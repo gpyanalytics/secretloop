@@ -53,9 +53,9 @@ behaviour. Because the comparator requires equal tool versions, a 0.7.0 report a
 either: regenerate both with 0.7.1.
 
 **Upgrading to 0.7.2.** A reliability-evidence release: no detection, rule, schema or consent-decision change. The one
-product change is four timing markers the Windows consent helper writes to its own standard error, which SecretLoop
-never reads and never shows. As with every version step, a 0.7.1 report and a 0.7.2 report are not comparable:
-regenerate both with 0.7.2.
+product change is four timing markers the Windows consent helper writes to its own standard error. SecretLoop does not
+parse or display that stream; its bytes count against the helper's output allowance (155 bytes per call). As with every
+version step, a 0.7.1 report and a 0.7.2 report are not comparable: regenerate both with 0.7.2.
 
 ## Quick start: a safe local scan
 

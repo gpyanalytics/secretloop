@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.7.2 — 2026-10-10
+## 0.7.2 — 2026-10-11
 
-*Date provisional: the intended publication day, 10 October 2026 in Asia/Kolkata (IST, UTC+05:30). It is confirmed
+*Date provisional: the intended publication day, 11 October 2026 in Asia/Kolkata (IST, UTC+05:30). It is confirmed
 or corrected at publication; if publication slips, the heading moves with it. This heading is not a statement that
 publication has happened.*
 
@@ -34,9 +34,14 @@ here. No "audit unchanged" or "no risk" claim is made.
   failures they instrument, and no claim is made that they are timing-neutral. Still open, with records in the
   benchmark workspace: the Windows cold first-verify refusal (four occurrences; the fourth measured 12.7 s before the
   helper's first script line and the inspection unfinished at the 20 s allowance); the macOS Node 18 `test-macos (18)`
-  hang of 2026-09-27 and the F-1 text-reader FIFO block of 2026-10-08 (linked only as a hypothesis); the Windows
-  two-user fixture's `unsafe-parent` refusal (two occurrences, refusing ancestor never recorded). N4 (`lsof` containment)
-  stays deferred and N5 (`node:wasi`) unfunded.
+  hang of 2026-09-27 and the F-1 text-reader FIFO block of 2026-10-08 (linked only as a hypothesis), and a FIFO-swap
+  child timeout in a run started 2026-10-11 01:15 IST (2026-10-10 19:45 UTC): the last observed stage was `hook-fired`
+  and `fifo-made` was not observed, which narrows the investigation to the fixture's unlink/`mkfifo` phase and marker
+  delivery but does not establish the exact stalled operation or the path's state at termination; its cause and its
+  relationship to the earlier events remain unresolved; the Windows two-user fixture's `unsafe-parent` refusal (three
+  occurrences; the third identified the refusing ancestor, the runner's D: volume root granting delete to
+  Authenticated Users, and the x64 fixture now builds its lab on C: — which neither establishes a root cause for the
+  first two nor rules out later refusals). N4 (`lsof` containment) stays deferred and N5 (`node:wasi`) unfunded.
 - **Benchmark corpus B is now named and pinned** (`getsentry/sentry-javascript` at the commit in `bench/repos.txt`, MIT).
   Its findings are reported as **untriaged** — nobody has labelled them — not as false positives or precision figures,
   and they are not comparable with the historical unnamed corpus B rows, which stay as recorded.
