@@ -65,7 +65,7 @@ cannot check for you:
 
 ## Changes to the security-critical surface
 
-Anything under `src/mcp*.ts`, `src/consent.ts`, `src/verify*.ts` or
+Anything under `src/mcp*.ts`, `src/consent*.ts`, `src/verify*.ts` or
 `src/workspace*.ts` is reviewed against the invariants listed in
 [docs/decisions/0004-verification-consent-gate.md](docs/decisions/0004-verification-consent-gate.md)
 before it merges. Expect questions about what an attacker who controls the
