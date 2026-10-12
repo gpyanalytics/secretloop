@@ -16,7 +16,7 @@ by SHA-256 of the frozen record; public summaries are in
 | [0005](0005-api-document-entropy-scope.md) | The entropy tier is not run over API description documents | shipped in 0.5.0 |
 | [0006](0006-archive-coverage-accounting.md) | Archive containers, members, metadata and enumeration are accounted separately from files | shipped in 0.5.0 |
 | [0007](0007-0.7.0-release-scope.md) | 0.7.0 ships containment route (a) only; N4 deferred, N5 not funded; published support statement adopted; every CI job gates publication | adopted for 0.7.0; D5 amended 2026-10-11 (the final release PR gates) |
-| [0008](0008-consent-review-scope.md) | The §5 security review is triggered by any `src/consent*.ts` file, not only `src/consent.ts` | adopted 2026-10-12; prospective from 0.7.3 |
+| [0008](0008-consent-review-scope.md) | The §5 security review is triggered by any `src/consent*.ts` file, not only `src/consent.ts` | adopted 2026-10-12; amended 2026-10-13 (applies from the first release published after 0.7.2, whatever its number) |
 
 A record is amended, not rewritten, when a decision changes; the amendment says
 what changed and why.

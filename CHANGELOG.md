@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+*Merged on `main` after 0.7.2 and not published. None of it changes what SecretLoop does when it runs, so it was
+not released on its own. It will ship with the next published release: expected to be one that changes SecretLoop's
+behaviour, unless a security or compatibility fix calls for an earlier release. That release's version number and
+date are not decided.*
+
+- **Executable code unchanged; packaged manifest changed.** No file under `src/` changed, and `out/cli.js`,
+  `out/mcp.js` and `out/extension.js` build byte-identical to the ones published in 0.7.2. `package.json`, which
+  ships in both the npm package and the VSIX, is not identical: its `test` script gains one entry at the end (#151).
+- **Development dependency:** `proxy-addr` 2.0.7 → 2.0.8 in `package-lock.json` (#140), clearing
+  GHSA-jqcg-44mw-7w3h. It is reached only through the MCP SDK's HTTP transport, as a development dependency; the
+  bundles build byte-identical with either version.
+- **Tests:** unit tests for the CI diagnostic sanitizer, `tests/fixtures/win-acl-sanitize.js` (#151). The
+  `suppression-accountability` and `api-document-scope` tests now remove the temporary directories they create;
+  before, each full run left 14 behind (#153).
+- **CI:** the Windows two-account and exFAT jobs mask machine-local account SIDs in the job log and print the
+  sanitizer's role labels instead (#152).
+- **Release process:** the RELEASING.md §5 security review now triggers on every `src/consent*.ts` file, not only
+  `src/consent.ts` ([decision 0008](docs/decisions/0008-consent-review-scope.md), #154). D5 and the rule that a run is
+  not repeated to obtain a green result are unchanged.
+- **Still open, as listed under 0.7.2:** the Windows cold first-verify refusal, the macOS `test-macos (18)` hang and
+  the FIFO-related stalls, and the Windows two-user fixture's `unsafe-parent` refusals. Nothing above addresses
+  them. N4 (`lsof` containment) stays deferred and N5 (`node:wasi`) unfunded.
+
 ## 0.7.2 — 2026-10-11
 
 *Date provisional: the intended publication day, 11 October 2026 in Asia/Kolkata (IST, UTC+05:30). It is confirmed
