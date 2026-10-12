@@ -62,7 +62,7 @@ are listed in the [changelog](../CHANGELOG.md).
 
 ## What's in main and what's published
 
-Release status, current as of **2026-10-11**. This page is repository-only: it
+Release status, current as of **2026-10-13**. This page is repository-only: it
 is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 
@@ -80,6 +80,18 @@ failures those markers instrument; the
 [changelog](../CHANGELOG.md#072--2026-10-11) lists what moved and what stays
 open. The previous release was 0.7.1 (2026-10-05), a dependency and security
 maintenance release; before that, 0.7.0 (2026-10-04) and 0.6.0 (2026-09-15).
+
+`main` is ahead of the published 0.7.2. What has merged since is a
+development-dependency fix, CI log hygiene, tests, and a wider release
+security-review rule ([decision 0008](decisions/0008-consent-review-scope.md)).
+None of it changes what SecretLoop does when it runs: no product source file
+changed, and the three bundles build byte-identical to 0.7.2. The packaged
+`package.json` is not identical, because its `test` script gains one entry. These
+changes were not released on their own. They will ship with the next published
+release: expected to be one that changes SecretLoop's behaviour, unless a
+security or compatibility fix calls for an earlier release. Its version number
+and date are not decided. The [changelog](../CHANGELOG.md#unreleased) lists them, and the
+investigations 0.7.2 left open remain open.
 
 0.7.0 changes no detection: rules, fingerprints, thresholds and severities are
 those of 0.6.0. What changed is what a scan refuses and discloses — the consent

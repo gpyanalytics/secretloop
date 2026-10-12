@@ -56,3 +56,21 @@ At `main` `209e5798`, `src/consent*.ts` matches exactly `src/consent.ts` and the
 above. Each of the four shipped in 0.7.2. For `v0.7.1..v0.7.2` the old command reports no file
 and the amended one reports `src/consent-acl-win.ts`, which is the gap as it occurred. It is
 recorded in the private benchmark workspace as `release-0.7.2-scope`.
+
+## Amendment — 2026-10-13: the first release it applies to
+
+**What changed.** The maintenance merged after 0.7.2 was not released on its own. It will ship
+with the next published release: expected to be one that changes SecretLoop's behaviour, unless a
+security or compatibility fix calls for an earlier release. Its version number and date are not
+decided (owner decision, 2026-10-13). "First applies to 0.7.3" above is therefore read as: first
+applies to the first release published after 0.7.2, whatever its version number. That release runs
+the settling command from `v0.7.2`, the last published tag.
+
+**What did not change.** The trigger, the settling command, the four modules it adds, and the rule
+that the change is not retroactive. Everything under "What this does not change" above also stands,
+including D5 and the rule that a run is not repeated to obtain a green result. The statement under
+"What it costs" about 0.7.3 described `main` when it was written. The next release's obligation is
+whatever the settling command reports when that release is prepared.
+
+**Why.** Without this, a next release numbered other than 0.7.3 could be read as falling outside the
+record's stated starting point.
