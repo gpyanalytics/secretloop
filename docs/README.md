@@ -83,18 +83,22 @@ maintenance release; before that, 0.7.0 (2026-10-04) and 0.6.0 (2026-09-15).
 
 `main` is ahead of the published 0.7.2. What has merged since is a text-report
 fix, credential groups in the JSON report, workspace containment for the
-editor's live verification, a development-dependency fix, CI log hygiene, tests,
-and a wider release security-review rule
-([decision 0008](decisions/0008-consent-review-scope.md)). The first three change
-what SecretLoop does when it runs: the text report no longer calls two different
-PKCS#12 keystores "the same value", the JSON report now says which findings
-carry the same credential ([credential groups](reports.md#credential-groups)),
-and the VS Code extension no longer verifies files outside the open workspace
-([the verification prompt](vscode.md#the-verification-prompt)). The first two
-are in `src/report.ts` and the third in `src/extension.ts`, so `out/cli.js` and
-`out/extension.js` no longer build byte-identical to 0.7.2; `out/mcp.js` uses
-neither. Until the text-report fix, none of it changed what SecretLoop does when
-it runs. The packaged
+editor's live verification and staged scan, a fix for names that begin with
+`..`, a development-dependency fix, CI log hygiene, tests, and a wider release
+security-review rule ([decision 0008](decisions/0008-consent-review-scope.md)).
+The first four change what SecretLoop does when it runs: the text report no
+longer calls two different PKCS#12 keystores "the same value", the JSON report
+now says which findings carry the same credential
+([credential groups](reports.md#credential-groups)), the VS Code extension no
+longer verifies files outside the open workspace
+([the verification prompt](vscode.md#the-verification-prompt)), and files whose
+names begin with `..` are scanned rather than skipped as outside the root
+([what the scan discloses](coverage.md#what-the-scan-discloses)). The first two
+are in `src/report.ts`, the third in `src/extension.ts` and the fourth in
+`src/walk.ts`, `src/mcp-core.ts` and `src/extension.ts`, so `out/cli.js`,
+`out/mcp.js` and `out/extension.js` all no longer build byte-identical to 0.7.2.
+Until the text-report fix, none of it changed what SecretLoop does when it runs.
+The packaged
 `package.json` is not identical, because its `test` script gains one entry. These
 changes were not released on their own. They will ship with the next published
 release: expected to be one that changes SecretLoop's behaviour, unless a

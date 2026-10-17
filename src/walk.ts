@@ -102,6 +102,20 @@ export interface FileListing {
  * an ordinary file and is still scanned. A path that cannot be resolved -- a
  * broken link -- has no location to check and is dropped rather than raising.
  */
+/**
+ * Whether a path.relative() result leaves the directory it was taken from:
+ * its first segment IS `..`, or it is absolute (another drive or share).
+ *
+ * By segment, not by prefix. `..env`, `..cfg/app.js` and `...` are ordinary
+ * names inside the directory; testing `rel.startsWith("..")` dropped them from
+ * every scan as though they had resolved outside the root. The separator is
+ * this platform's, as path.relative() produces it: on POSIX a backslash is part
+ * of a file name.
+ */
+export function relativeEscapes(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+}
+
 export function isInsideRoot(root: string, relPath: string): boolean {
   let realRoot: string;
   try {
@@ -116,7 +130,7 @@ export function isInsideRoot(root: string, relPath: string): boolean {
     return false;
   }
   const rel = path.relative(realRoot, real);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return rel === "" || !relativeEscapes(rel);
 }
 
 export function listFilesWithExclusions(root: string, config: SecretLoopConfig): FileListing {
@@ -410,7 +424,7 @@ function locateInsideRoot(
     return outsideOrGone();
   }
   const rel = path.relative(realRoot, real);
-  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return { realRoot, real };
+  if (rel === "" || !relativeEscapes(rel)) return { realRoot, real };
   return { skipped: "outside" };
 }
 

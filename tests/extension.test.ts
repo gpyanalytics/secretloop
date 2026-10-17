@@ -14,6 +14,7 @@ import {
   stagedScanNotice,
   effectiveConfig,
   scanDocument,
+  workspaceFolderContaining,
   warnOnStagedSecrets,
   stagedPaths,
   openBuffers,
@@ -1131,6 +1132,16 @@ test("with verification off, an outside document is never offered verification",
     // Control, last because it spends the session's one prompt: the same offer still appears inside the workspace.
     await scanSealed(documentAt(path.join(ws, "app.js"), freshToken()));
     assert.match(String(firstCall("window.showInformationMessage")?.[0] ?? ""), /Enable live verification\?/);
+  });
+});
+
+test("a document whose name merely begins with '..' is a workspace file, and is verified", async () => {
+  await inLab(async ({ ws }) => {
+    verificationOn();
+    const doc = documentAt(path.join(ws, "..env"), freshToken());
+    assert.strictEqual(workspaceFolderContaining(path.join(ws, "..env"), [ws]), ws, "..env was treated as outside ws");
+    await scanSealed(doc);
+    assert.strictEqual(sentTo.length, 1, "a workspace file named ..env was not verified");
   });
 });
 

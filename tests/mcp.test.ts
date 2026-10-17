@@ -1370,4 +1370,38 @@ test("cleanup", () => {
   rmSync(ROOT, { recursive: true, force: true });
 });
 
+suite("\nmcp-core — a name that merely begins with '..' is inside an allowed root");
+
+// `..data` and `..env` are ordinary names. The allowed-root check used to test rel.startsWith(".."), so a directory
+// with such a name under an allowed root was refused as outside the server's directories, and a top-level `..env` in
+// a scan root that is itself the allowed root was dropped from the scan. A first segment that IS `..` still escapes.
+const DOT_GENERIC = () => "pass" + 'word = "Qm7vR2xKp9Lw4Tz8Hc3N"\n';
+
+test("a directory named '..data' under an allowed root can be scanned", () => {
+  resetSessions();
+  const dir = repo("..data", { "app.js": DOT_GENERIC() });
+  const p = payload(toolScan({ path: dir }));
+  assert.ok(p.summary.total >= 1, `expected the generic finding, got ${p.summary.total}`);
+});
+
+test("a top-level '..env' is scanned when the scan root is the allowed root", () => {
+  const dir = repo("dot-top", { "..env": DOT_GENERIC(), "x.env": DOT_GENERIC() });
+  try {
+    setAllowedRoots([dir]);
+    resetSessions();
+    const p = payload(toolScan({ path: dir }));
+    const files = [...new Set(p.findings.map((f: any) => f.file))].sort();
+    assert.deepStrictEqual(files, ["..env", "x.env"], `..env was dropped: ${JSON.stringify(files)}`);
+  } finally {
+    setAllowedRoots([ROOT]);
+  }
+});
+
+test("control: a path that really leaves the allowed root is still refused", () => {
+  resetSessions();
+  const result = toolScan({ path: path.join(ROOT, "..") });
+  assert.strictEqual(result.ok, false, "the parent of the allowed root was accepted");
+  assert.match((result as { ok: false; error: string }).error, /outside the directories this server was started with/);
+});
+
 finish();

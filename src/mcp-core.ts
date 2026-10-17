@@ -53,7 +53,7 @@ import { scanHistory, isGitRepo } from "./history";
 // diverge in a file both of them ship.
 import { hasVerifier } from "./verify-meta";
 import { isVerifiable, verificationProvider, verifyFindings } from "./verify";
-import { readTextFile } from "./walk";
+import { readTextFile, relativeEscapes } from "./walk";
 import { scanText } from "./scanner";
 import {
   CONSENT_VERSION,
@@ -325,7 +325,7 @@ export function getAllowedRoots(): string[] {
 /** True when `child` is `parent` or sits underneath it. */
 function contains(parent: string, child: string): boolean {
   const rel = nodePath.relative(parent, child);
-  return rel === "" || (!rel.startsWith("..") && !nodePath.isAbsolute(rel));
+  return rel === "" || !relativeEscapes(rel);
 }
 
 function withinAllowedRoots(candidate: string): boolean {

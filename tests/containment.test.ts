@@ -1,9 +1,9 @@
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync, realpathSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
-import { listFilesWithExclusions, readTextFile } from "../src/walk";
+import { listFilesWithExclusions, readTextFile, isInsideRoot, relativeEscapes } from "../src/walk";
 import { mergeConfig } from "../src/config";
 import { describeScope } from "../src/report";
 
@@ -202,6 +202,95 @@ test("describeScope carries the clause only when nonzero", () => {
   assert.match(all, /1 generated file\(s\) excluded by default/);
   assert.match(all, /2 finding\(s\) suppressed by inline directives/);
   assert.match(all, /3 file\(s\) excluded \(symlinks resolving outside the scan root\)/);
+});
+
+suite("\ncontainment — a name that merely begins with '..' is inside the root");
+
+/*
+ * `..env` and `..cfg/` are ordinary names. Containment used to test `rel.startsWith("..")`, so a top-level entry
+ * whose name begins with two dots was treated as a path out of the root: dropped from the scan, counted as "resolved
+ * outside the scan root" and described as a symlink. Only a first segment that IS `..` leaves the root.
+ */
+const GENERIC = () => "pass" + 'word = "Qm7vR2xKp9Lw4Tz8Hc3N"\n'; // generic tier only; assembled so no literal sits here
+
+function withDotNames(fn: (root: string, outside: string) => void): void {
+  const base = mkdtempSync(path.join(tmpdir(), "secretloop-dotnames-"));
+  try {
+    const root = realpathSync(mkdirSyncP(path.join(base, "repo")));
+    const outside = realpathSync(mkdirSyncP(path.join(base, "outside")));
+    for (const rel of ["..env", "..cfg/app.js", "x.env", "sub/..env"]) {
+      mkdirSync(path.dirname(path.join(root, rel)), { recursive: true });
+      writeFileSync(path.join(root, rel), GENERIC(), "utf8");
+    }
+    writeFileSync(path.join(outside, "x.js"), GENERIC(), "utf8");
+    fn(root, outside);
+  } finally {
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+test("isInsideRoot accepts '..'-prefixed names and still refuses a real '../' escape", () => {
+  withDotNames((root) => {
+    for (const rel of ["..env", "..cfg/app.js", "x.env", "sub/..env"]) {
+      assert.strictEqual(isInsideRoot(root, rel), true, `${rel} was treated as outside`);
+    }
+    assert.strictEqual(isInsideRoot(root, path.join("..", "outside", "x.js")), false, "a real escape was accepted");
+  });
+});
+
+test("the walk lists top-level '..' names and excludes nothing when nothing escapes", () => {
+  withDotNames((root) => {
+    const l = listFilesWithExclusions(root, mergeConfig({}));
+    assert.deepStrictEqual([...l.files].sort(), ["..cfg/app.js", "..env", "sub/..env", "x.env"]);
+    assert.strictEqual(l.outsideExcluded, 0, "a '..' name was counted as resolved outside the root");
+  });
+});
+
+test("the reader opens a top-level '..' name", () => {
+  withDotNames((root) => {
+    assert.notStrictEqual(readTextFile(root, "..env", mergeConfig({})), null, "readTextFile refused ..env as outside");
+  });
+});
+
+test("a CLI scan reports '..' names, stays complete, and says nothing about escapes", () => {
+  withDotNames((root) => {
+    const r = spawnSync("node", [CLI, "scan", ".", "--format", "json", "--fail-on", "never"], { cwd: root, encoding: "utf8" });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const j = JSON.parse(r.stdout);
+    const files = [...new Set(j.findings.map((f: { file: string }) => f.file))].sort();
+    assert.deepStrictEqual(files, ["..cfg/app.js", "..env", "sub/..env", "x.env"]);
+    assert.strictEqual(j.incomplete, false, `limitations: ${JSON.stringify(j.summary.coverage?.limitations)}`);
+    assert.ok(!/outside the scan root/.test(j.summary.scope), `scope says: ${j.summary.scope}`);
+  });
+});
+
+test("control: with a real outside link present, only the link is excluded and described", () => {
+  withDotNames((root, outside) => {
+    try {
+      symlinkSync(path.join(outside, "x.js"), path.join(root, "link.js"));
+    } catch (err: any) {
+      if (err?.code === "EPERM" || err?.code === "EACCES") skip("this account may not create symlinks");
+      throw err;
+    }
+    const l = listFilesWithExclusions(root, mergeConfig({}));
+    assert.strictEqual(l.outsideExcluded, 1);
+    assert.ok(l.files.includes("..env") && !l.files.includes("link.js"));
+    const r = spawnSync("node", [CLI, "scan", ".", "--format", "json", "--fail-on", "never"], { cwd: root, encoding: "utf8" });
+    const j = JSON.parse(r.stdout);
+    assert.match(j.summary.scope, /1 file\(s\) excluded \(symlinks resolving outside the scan root\)/);
+    assert.ok(j.findings.some((f: { file: string }) => f.file === "..env"));
+  });
+});
+
+test("relativeEscapes reads the first segment with this platform's separator", () => {
+  assert.strictEqual(relativeEscapes(".."), true);
+  assert.strictEqual(relativeEscapes(path.join("..", "x")), true);
+  assert.strictEqual(relativeEscapes(path.resolve("/x")), true, "an absolute result is an escape");
+  for (const name of ["..env", path.join("..cfg", "app.js"), "...", path.join("sub", "..env"), "x"]) {
+    assert.strictEqual(relativeEscapes(name), false, `${name} was read as an escape`);
+  }
+  // A backslash separates segments only on Windows; on POSIX it is part of a file name.
+  assert.strictEqual(relativeEscapes("..\\x"), process.platform === "win32");
 });
 
 finish();
