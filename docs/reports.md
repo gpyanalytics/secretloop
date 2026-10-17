@@ -744,7 +744,7 @@ this block.
 `credentialGroups` says which findings in the report carry the same credential,
 so a consumer can tell one credential copied into three files from three
 credentials without comparing values or picking fingerprints apart — and for
-the rules whose fingerprint does not reveal it, without being able to tell at
+the findings whose fingerprint does not reveal it, without being able to tell at
 all (see [A group discloses equality](#a-group-discloses-equality) below).
 
 ```jsonc
@@ -807,17 +807,28 @@ scan and `G3` in the next. Do not store them, compare them across reports, or
 treat either as a credential identity. The fingerprint is the per-occurrence
 identity, and `secretloop compare` reads neither ids nor groups.
 
+**Descriptive, not comparison-bearing.** `schemaVersion` does not move: adding a
+descriptive field does not bump it (see the rule above), and nothing here decides
+eligibility. SARIF, the text report, the baseline format and the MCP server's
+responses are unchanged.
+
 ### A group discloses equality
 
 A group holds no value, no part of one and no digest of one, with or without
 `--no-redact`. What it does state is that two findings carry the same credential.
 
-**For most rules the report already said so.** A fingerprint built by the value
-strategy — the default — ends in a digest of the value, so two findings of one
-value under one rule share that digest in every file (see
-[The comparator](#the-comparator)); the redacted text report prints "N
-locations, same value" for the same pair. A group states the relationship
-outright instead of leaving it to be inferred.
+**For most findings in ordinary files the report already said so.** A
+fingerprint built by the value strategy — the default — ends in a digest of the
+value, so two findings of one value under one rule in two ordinary files share
+that digest (see [The comparator](#the-comparator)); the redacted text report
+prints "N locations, same value" for the same pair. A group states the
+relationship outright instead of leaving it to be inferred.
+
+**For archive members it is new.** A finding inside an archive is fingerprinted
+with its container and member path hashed in alongside the value, so it and any
+other finding of the same credential — another member, or an ordinary file —
+have different digests. Nothing in a JSON report showed that they match; a group
+does.
 
 **For context-strategy rules it is new.** A rule whose fingerprint hashes the
 structure around the secret rather than the secret — connection strings,
@@ -828,11 +839,6 @@ nothing in a JSON report disclosed it; a group does.
 
 Whoever can read a JSON report learns where each grouped credential was copied;
 handle the report accordingly.
-
-**Descriptive, not comparison-bearing.** `schemaVersion` does not move: adding a
-descriptive field does not bump it (see the rule above), and nothing here decides
-eligibility. SARIF, the text report, the baseline format and the MCP server's
-responses are unchanged.
 
 ## Compatibility
 

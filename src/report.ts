@@ -606,9 +606,11 @@ function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): s
  * The machine-readable counterpart of the text report's "N locations, same
  * value", so a consumer can tell one leaked credential copied into three files
  * from three credentials without comparing values or picking fingerprints
- * apart. A value-strategy fingerprint's digest already reveals equality; a
- * context-strategy one (connection strings, basic-auth URLs) does not, so for
- * those findings this is the first place the report says it.
+ * apart. A value-strategy fingerprint's digest already reveals equality
+ * between ordinary files. It does not for an archive member, whose digest also
+ * covers the container and member path, nor for a context-strategy rule
+ * (connection strings, basic-auth URLs), so for those findings this is the
+ * first place the report says it.
  *
  * Members are named by the report-local finding ids (`F1`, …) and groups are
  * numbered `G1`, … by where their first member appears. Both are positions in
