@@ -14,9 +14,16 @@ release's version number and date are not decided.*
   verification?" offer. Containment is by real path, as in the workspace scan: a symlink pointing out of the
   workspace, a path that cannot be resolved and, on macOS, a case-variant spelling count as outside; every folder of a
   multi-root workspace counts. A file opened in a window with no folder is no longer verified automatically; open its
-  folder as the workspace instead. Workspace and staged scans, the CLI's `--verify` and the MCP server are unchanged.
-  The change is in `src/extension.ts`; `out/cli.js` and `out/mcp.js` do not include it. See
-  [the verification prompt](docs/vscode.md#the-verification-prompt).
+  folder as the workspace instead. The **Scan Staged Files** command likewise covers only staged files inside the
+  workspace root (the first workspace folder, as before): it reads every repository the git extension knows, and a
+  staged file of a sibling repository whose path merely began with the workspace's (`ws-other` beside `ws`) could be
+  scanned, and verified, from its open editor buffer once it had vanished from disk. Staged files outside the root
+  are now left out, and the output channel counts them; open buffers count as the workspace's only by whole path
+  segment and real path, and a link that cannot be resolved counts as outside. The workspace scan covers the same
+  files as before, and the CLI's `--verify` and the MCP server are unchanged. The change is in `src/extension.ts`;
+  `out/cli.js` and `out/mcp.js` do not include it. See
+  [the verification prompt](docs/vscode.md#the-verification-prompt) and
+  [staged-file warnings](docs/vscode.md#staged-file-warnings).
 - **Added: the JSON report says which findings carry the same credential.** A new top-level `credentialGroups` array
   lists each credential found in two or more places under one rule: the ids of its findings and how many distinct
   places they cover. Every finding gains a report-local `id` (`F1`, `F2`, …), and `summary` gains

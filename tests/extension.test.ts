@@ -14,6 +14,9 @@ import {
   stagedScanNotice,
   effectiveConfig,
   scanDocument,
+  warnOnStagedSecrets,
+  stagedPaths,
+  openBuffers,
   PromptState,
 } from "../src/extension";
 import { Finding, UnknownReason } from "../src/scanner";
@@ -30,6 +33,8 @@ import {
   createDocument,
   setWorkspaceFolder,
   setWorkspaceFolders,
+  setOpenDocuments,
+  setGitStagedFiles,
   called,
   firstCall,
   reset as resetStub,
@@ -1126,6 +1131,210 @@ test("with verification off, an outside document is never offered verification",
     // Control, last because it spends the session's one prompt: the same offer still appears inside the workspace.
     await scanSealed(documentAt(path.join(ws, "app.js"), freshToken()));
     assert.match(String(firstCall("window.showInformationMessage")?.[0] ?? ""), /Enable live verification\?/);
+  });
+});
+
+suite("\nextension.ts — the staged scan stays inside the workspace");
+
+/*
+ * The staged scan reads every repository the git extension knows, and an open editor buffer wins over disk. A sibling
+ * repository whose path merely starts with the workspace's (`ws-other` beside `ws`) used to supply such a buffer for a
+ * staged file that had vanished from disk, so text from outside the workspace was scanned and, with verification on,
+ * sent. Same sealing as above: the recorder and the socket tripwire are installed before the command runs, and the
+ * command does not run unless the static check below passed.
+ */
+let stagedInterceptionVerified = false;
+
+async function stagedScanSealed(): Promise<void> {
+  if (!interceptionVerified || !stagedInterceptionVerified) {
+    throw new Error("network interception was not established; the staged scan was not run");
+  }
+  const realFetch = globalThis.fetch;
+  const realConnect = net.Socket.prototype.connect;
+  globalThis.fetch = recorder;
+  net.Socket.prototype.connect = function () {
+    throw new Error("a socket connect was attempted during a sealed scan");
+  } as typeof realConnect;
+  try {
+    await warnOnStagedSecrets();
+  } finally {
+    globalThis.fetch = realFetch;
+    net.Socket.prototype.connect = realConnect;
+  }
+}
+
+/** An open editor buffer for a path, with or without a file behind it on disk. */
+function openBuffer(fsPath: string, text: string): StubTextDocument {
+  return new StubTextDocument(text, { fsPath, scheme: "file" }, "javascript");
+}
+
+const tokenLine = (value: string) => `const token = "${value}";\n`;
+
+test("the network is sealed for the staged scan: verifyScan passes the global fetch", () => {
+  const ext = readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  assert.match(ext, /verifyScannedFiles\(scanned, fetch\b/, "verifyScan no longer hands the global fetch to verification");
+  stagedInterceptionVerified = true;
+});
+
+test("an open buffer in a sibling folder sharing the workspace's name prefix is not a workspace buffer", async () => {
+  await inLab(async ({ ws, sibling }) => {
+    setOpenDocuments([openBuffer(path.join(sibling, "app.js"), tokenLine(freshToken()))]);
+    assert.deepStrictEqual([...openBuffers(ws).keys()], [], "ws-other was treated as inside ws");
+  });
+});
+
+test("staged files outside the workspace root are not staged paths of the workspace", async () => {
+  await inLab(async ({ ws, sibling, outside }) => {
+    const paths = stagedPaths(ws, [
+      { state: { indexChanges: [{ uri: { fsPath: path.join(sibling, "app.js") } }, { uri: { fsPath: path.join(ws, "app.js") } }] } },
+      { state: { indexChanges: [{ uri: { fsPath: path.join(ws, "..", "outside", "x.js") } }, { uri: { fsPath: path.join(outside, "y.js") } }] } },
+    ]);
+    assert.deepStrictEqual(paths, ["app.js"], `outside staged paths were kept: ${JSON.stringify(paths)}`);
+  });
+});
+
+test("a vanished staged file in a sibling repository is not scanned or sent from its open buffer", async () => {
+  await inLab(async ({ ws, sibling }) => {
+    verificationOn();
+    const value = freshToken();
+    const elsewhere = path.join(sibling, "app.js"); // never written: deleted from disk, still open in the editor
+    setOpenDocuments([openBuffer(elsewhere, tokenLine(value))]);
+    setGitStagedFiles([[elsewhere]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0, `a staged buffer from outside the workspace reached a provider (${sentTo.length})`);
+    // Control: the same value staged inside the workspace IS checked, so the cache did not make this pass.
+    const inside = path.join(ws, "app.js");
+    writeFileSync(inside, tokenLine(value), "utf8");
+    setOpenDocuments([]);
+    setGitStagedFiles([[inside]]);
+    sentTo.length = 0;
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 1, "the same value staged inside the workspace should be checked exactly once");
+  });
+});
+
+test("a vanished staged file under a symlinked folder that escapes the workspace is not scanned from its buffer", async () => {
+  await inLab(async ({ ws, outside }) => {
+    try {
+      symlinkSync(outside, path.join(ws, "linked"), "dir");
+    } catch (err: any) {
+      if (err?.code === "EPERM" || err?.code === "EACCES") skip("this account may not create symlinks");
+      throw err;
+    }
+    verificationOn();
+    const value = freshToken();
+    const viaLink = path.join(ws, "linked", "gone.js"); // resolves into `outside`, and does not exist there
+    setOpenDocuments([openBuffer(viaLink, tokenLine(value))]);
+    setGitStagedFiles([[viaLink]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0, "a buffer reached through a link out of the workspace was verified");
+    assert.deepStrictEqual([...openBuffers(ws).keys()], [], "the escaping buffer was admitted");
+  });
+});
+
+/** A link at `at` to `target`, or a skip where this account may not create one. */
+function linkOrSkip(target: string, at: string, kind: "file" | "dir"): void {
+  try {
+    symlinkSync(target, at, kind);
+  } catch (err: any) {
+    if (err?.code === "EPERM" || err?.code === "EACCES") skip("this account may not create symlinks");
+    throw err;
+  }
+}
+
+test("a staged link whose outside target is gone is not scanned from its open buffer", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    const value = freshToken();
+    const link = path.join(ws, "shared.js");
+    linkOrSkip(path.join(outside, "gone.js"), link, "file"); // dangling: the target never existed
+    setOpenDocuments([openBuffer(link, tokenLine(value))]);
+    setGitStagedFiles([[link]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0, "a dangling link's buffer was verified as a workspace file");
+    assert.deepStrictEqual([...openBuffers(ws).keys()], [], "a link that cannot be resolved was admitted");
+    // Control: the same value staged as an ordinary workspace file IS checked.
+    const inside = path.join(ws, "real.js");
+    writeFileSync(inside, tokenLine(value), "utf8");
+    setOpenDocuments([]);
+    setGitStagedFiles([[inside]]);
+    sentTo.length = 0;
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 1, "the same value staged inside the workspace should be checked exactly once");
+  });
+});
+
+test("a file under a folder link whose target is gone is outside", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    const value = freshToken();
+    linkOrSkip(path.join(outside, "removed"), path.join(ws, "linked"), "dir"); // the folder it pointed to is gone
+    const viaLink = path.join(ws, "linked", "x.js");
+    setOpenDocuments([openBuffer(viaLink, tokenLine(value))]);
+    setGitStagedFiles([[viaLink]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0, "a buffer under a dangling folder link was verified");
+    assert.deepStrictEqual(stagedPaths(ws, [{ state: { indexChanges: [{ uri: { fsPath: viaLink } }] } }]), []);
+  });
+});
+
+test("a path through a symlink loop is outside", async () => {
+  await inLab(async ({ ws }) => {
+    const loop = path.join(ws, "loop");
+    linkOrSkip(loop, loop, "dir"); // points at itself: resolving it can never finish
+    const through = path.join(loop, "x.js");
+    setOpenDocuments([openBuffer(through, tokenLine(freshToken()))]);
+    assert.deepStrictEqual([...openBuffers(ws).keys()], [], "a path through a loop was admitted");
+    assert.deepStrictEqual(stagedPaths(ws, [{ state: { indexChanges: [{ uri: { fsPath: through } }] } }]), []);
+  });
+});
+
+test("control: a staged file inside the workspace is scanned and verified", async () => {
+  await inLab(async ({ ws }) => {
+    verificationOn();
+    const inside = path.join(ws, "src", "app.js");
+    mkdirSync(path.dirname(inside), { recursive: true });
+    writeFileSync(inside, tokenLine(freshToken()), "utf8");
+    setGitStagedFiles([[inside]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 1);
+    assert.strictEqual(called("diagnostics.set"), true, "the staged finding lost its diagnostics");
+  });
+});
+
+test("control: an open buffer of a staged workspace file still wins over disk", async () => {
+  await inLab(async ({ ws }) => {
+    verificationOn();
+    const inside = path.join(ws, "src", "app.js");
+    mkdirSync(path.dirname(inside), { recursive: true });
+    writeFileSync(inside, "const token = process.env.TOKEN;\n", "utf8"); // nothing on disk to find
+    setOpenDocuments([openBuffer(inside, tokenLine(freshToken()))]);
+    assert.deepStrictEqual([...openBuffers(ws).keys()], ["src/app.js"], "the buffer key is the root-relative path with / separators");
+    setGitStagedFiles([[inside]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 1, "the unsaved buffer was not the text scanned");
+  });
+});
+
+test("control: an existing staged file outside the workspace is still refused", async () => {
+  await inLab(async ({ sibling }) => {
+    verificationOn();
+    const elsewhere = path.join(sibling, "app.js");
+    writeFileSync(elsewhere, tokenLine(freshToken()), "utf8");
+    setGitStagedFiles([[elsewhere]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0);
+  });
+});
+
+test("Windows: an open buffer whose drive letter differs only in case is inside", async () => {
+  if (process.platform !== "win32") skip("drive letters exist only on Windows");
+  await inLab(async ({ ws }) => {
+    const inside = path.join(ws, "app.js");
+    writeFileSync(inside, "x\n", "utf8");
+    const flipped = inside[0] === inside[0].toUpperCase() ? inside[0].toLowerCase() + inside.slice(1) : inside[0].toUpperCase() + inside.slice(1);
+    setOpenDocuments([openBuffer(flipped, "y\n")]);
+    assert.deepStrictEqual([...openBuffers(ws).keys()], ["app.js"]);
   });
 });
 

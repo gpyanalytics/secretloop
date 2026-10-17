@@ -1,7 +1,7 @@
 import type { OpenedFileChecks } from "./walk";
 import { isInsideRoot } from "./walk";
 import * as vscode from "vscode";
-import { realpathSync } from "fs";
+import { lstatSync, realpathSync } from "fs";
 import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import { scanText, maskFindings, Finding } from "./scanner";
 import {
@@ -774,7 +774,8 @@ export function workspaceScanSummary(
     : `SecretLoop: no secrets found across ${scope}.`;
 }
 
-async function warnOnStagedSecrets() {
+/** Exported for tests only: the extension host reaches it through the Scan Staged Files command. */
+export async function warnOnStagedSecrets() {
   if (!setting<boolean>("blockCommitOnSecret", true)) return;
 
   const root = requireWorkspaceRoot();
@@ -789,12 +790,13 @@ async function warnOnStagedSecrets() {
   // Same guards as everywhere else. This used to open each staged document
   // directly, skipping the size and binary checks the CLI's `staged` command
   // applies — the same divergence scanWorkspace had.
-  const staged: string[] = [];
-  for (const repo of gitExtension.getAPI(1).repositories) {
-    for (const change of repo.state.indexChanges) {
-      staged.push(path.relative(root, change.uri.fsPath).split(path.sep).join("/"));
-    }
-  }
+  const repositories = gitExtension.getAPI(1).repositories;
+  const staged = stagedPaths(root, repositories);
+  const outsideRoot =
+    repositories.reduce(
+      (n: number, r: { state: { indexChanges: ReadonlyArray<unknown> } }) => n + r.state.indexChanges.length,
+      0
+    ) - staged.length;
 
   const config = configForFolder(
     root,
@@ -803,7 +805,11 @@ async function warnOnStagedSecrets() {
   );
   const buffers = openBuffers(root);
   const scanned = scanFiles(root, staged, config, { textFor: (p) => buffers.get(p) });
-  log(`SecretLoop: staged scan covered ${scanned.length} of ${staged.length} staged file(s).`);
+  log(
+    `SecretLoop: staged scan covered ${scanned.length} of ${staged.length} staged file(s)` +
+      (outsideRoot > 0 ? `; ${outsideRoot} staged file(s) outside the workspace root not scanned` : "") +
+      "."
+  );
 
   await verifyScan(scanned, "the staged scan");
   for (const file of scanned) renderScannedFile(root, file);
@@ -1014,11 +1020,90 @@ function configForFolder(
 }
 
 /** Unsaved editor buffers, keyed by the path a scan will look them up under. */
-function openBuffers(root: string): Map<string, string> {
+/**
+ * `fsPath` relative to `root`, with / separators, when it lies inside `root`;
+ * otherwise undefined.
+ *
+ * By whole path segment, not string prefix: `…/ws-other` is not inside `…/ws`.
+ * And by real path: a path whose deepest existing ancestor resolves outside the
+ * root -- a symlinked folder pointing out of it -- is outside, even when the
+ * file itself no longer exists, which is the staged-deletion case. A name that
+ * exists but cannot be resolved -- a dangling link, a loop, a target out of
+ * reach -- has no location to check and is outside, as is everything under it;
+ * so is a path whose root cannot be resolved.
+ *
+ * The staged scan needs both. It reads every repository the git extension
+ * knows, and an open buffer wins over disk, so a sibling repository's staged
+ * file that had vanished from disk but was still open was scanned -- and, with
+ * verification on, sent -- as if it were the workspace's.
+ */
+export function workspaceRelativePath(root: string, fsPath: string): string | undefined {
+  const lexical = path.relative(path.resolve(root), path.resolve(fsPath));
+  if (!strictlyBelow(lexical)) return undefined;
+  let realRoot: string;
+  try {
+    realRoot = realpathSync(root);
+  } catch {
+    return undefined;
+  }
+  const real = realpathOfDeepestExisting(path.resolve(fsPath));
+  if (real === undefined || !strictlyBelow(path.relative(realRoot, real))) return undefined;
+  return lexical.split(path.sep).join("/");
+}
+
+/** Below the root, compared by whole segment; the root itself is not a file in it. */
+function strictlyBelow(rel: string): boolean {
+  return rel !== "" && rel.split(path.sep)[0] !== ".." && !path.isAbsolute(rel);
+}
+
+/**
+ * The real path of `p`: its deepest existing ancestor resolved, the rest
+ * re-appended. It climbs only past names that are not there: a name that is
+ * there but will not resolve stops it, and the answer is "no location".
+ */
+function realpathOfDeepestExisting(p: string): string | undefined {
+  const rest: string[] = [];
+  let current = p;
+  for (;;) {
+    try {
+      return path.join(realpathSync(current), ...[...rest].reverse());
+    } catch {
+      try {
+        lstatSync(current);
+        return undefined; // present, yet unresolvable
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return undefined;
+      rest.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/** The staged files under `root` of every repository the git extension knows, relative to `root`. */
+export function stagedPaths(
+  root: string,
+  repositories: ReadonlyArray<{ state: { indexChanges: ReadonlyArray<{ uri: { fsPath: string } }> } }>
+): string[] {
+  const staged: string[] = [];
+  for (const repo of repositories) {
+    for (const change of repo.state.indexChanges) {
+      const rel = workspaceRelativePath(root, change.uri.fsPath);
+      if (rel !== undefined) staged.push(rel);
+    }
+  }
+  return staged;
+}
+
+export function openBuffers(root: string): Map<string, string> {
   const buffers = new Map<string, string>();
   for (const doc of vscode.workspace.textDocuments) {
-    if (doc.uri.scheme !== "file" || !doc.uri.fsPath.startsWith(root)) continue;
-    buffers.set(path.relative(root, doc.uri.fsPath).split(path.sep).join("/"), doc.getText());
+    if (doc.uri.scheme !== "file") continue;
+    const rel = workspaceRelativePath(root, doc.uri.fsPath);
+    if (rel !== undefined) buffers.set(rel, doc.getText());
   }
   return buffers;
 }

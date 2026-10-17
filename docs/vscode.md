@@ -189,6 +189,16 @@ counts what the checks established — live, needing a look, unverified, dead �
 and escalates only for a confirmed-live secret, so commit-time friction is
 proportional to actual risk.
 
+The scan covers the staged files **inside the workspace root**, the first
+workspace folder (unreleased; on `main` after 0.7.2). The git extension may also
+know repositories outside it —
+one an open file belongs to, say — and their staged files are left out; the
+output channel says how many. An open editor buffer, which wins over the file on
+disk, is used only for a file inside the root by whole path segment and real
+path: a sibling folder such as `ws-other` beside `ws`, a folder linked in from
+outside, or a link that cannot be resolved (its target gone, or a loop) does not
+count.
+
 ## AWS admin credentials
 
 The admin credentials used for AWS rotation are the one privileged secret the
