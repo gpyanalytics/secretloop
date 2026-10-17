@@ -31,6 +31,8 @@ export function reset(): void {
   // Registered documents go too: one test's edited buffer must not be another
   // test's starting text.
   resetDocuments();
+  openDocuments = [];
+  gitRepositories = undefined;
 }
 
 /**
@@ -79,6 +81,32 @@ export function setWorkspaceFolder(fsPath: string | undefined): void {
 export function setWorkspaceFolders(fsPaths: string[]): void {
   workspaceFolders = fsPaths.map((fsPath) => ({ uri: { fsPath } }));
 }
+
+/** The editor's open documents, as workspace.textDocuments reports them. */
+let openDocuments: StubTextDocument[] = [];
+
+export function setOpenDocuments(docs: StubTextDocument[]): void {
+  openDocuments = docs;
+}
+
+/**
+ * The built-in git extension, reduced to what the staged scan reads: each
+ * repository's staged changes, by path. Undefined means "not installed".
+ */
+let gitRepositories: Array<{ state: { indexChanges: Array<{ uri: { fsPath: string } }> } }> | undefined;
+
+export function setGitStagedFiles(repositories: string[][] | undefined): void {
+  gitRepositories = repositories?.map((files) => ({
+    state: { indexChanges: files.map((fsPath) => ({ uri: { fsPath } })) },
+  }));
+}
+
+export const extensions = {
+  getExtension: (id: string) =>
+    id === "vscode.git" && gitRepositories !== undefined
+      ? { exports: { getAPI: (_version: number) => ({ repositories: gitRepositories }) } }
+      : undefined,
+};
 
 export const window = {
   showInformationMessage: async <T extends string>(
@@ -157,6 +185,14 @@ export const DiagnosticSeverity = {
 
 /** The lines an OutputChannel was given, so a test can read what was logged. */
 export const outputLines: string[] = [];
+
+/** What renderScannedFile builds positions from. */
+export class Position {
+  constructor(
+    readonly line: number,
+    readonly character: number
+  ) {}
+}
 
 /** What renderDiagnostics builds; only the fields it sets are modelled. */
 export class Diagnostic {
@@ -322,6 +358,9 @@ export const workspace = {
   },
   get workspaceFolders() {
     return workspaceFolders;
+  },
+  get textDocuments() {
+    return openDocuments;
   },
   getWorkspaceFolder: (_uri: unknown) => workspaceFolders?.[0],
   // Display only: the extension logs this and passes it to the scanner as the
