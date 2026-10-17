@@ -134,7 +134,10 @@ export function isInsideRoot(root: string, relPath: string): boolean {
 }
 
 export function listFilesWithExclusions(root: string, config: SecretLoopConfig): FileListing {
-  const fromGit = spawnSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], {
+  // -z: each name verbatim and NUL-terminated. Line by line, git C-quotes a
+  // name holding a non-ASCII byte, a quote, a backslash or a tab ("caf\303\251.js"),
+  // and the quoted form names no file -- it was dropped and counted as outside.
+  const fromGit = spawnSync("git", ["ls-files", "-z", "--cached", "--others", "--exclude-standard"], {
     cwd: root,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
@@ -142,7 +145,7 @@ export function listFilesWithExclusions(root: string, config: SecretLoopConfig):
 
   const candidates =
     fromGit.status === 0
-      ? fromGit.stdout.split("\n").filter((l) => l.trim().length > 0)
+      ? fromGit.stdout.split("\0").filter((l) => l.length > 0)
       : walkDirectory(root, root);
 
   const files: string[] = [];
@@ -895,7 +898,8 @@ export function isTracked(root: string, relPath: string): TrackedState {
 export type StagedFiles = { files: string[] } | { error: string };
 
 export function getStagedFiles(root: string): StagedFiles {
-  const res = spawnSync("git", ["diff", "--cached", "--name-only", "--diff-filter=ACM"], {
+  // -z for the same reason as the listing above: names verbatim, never C-quoted.
+  const res = spawnSync("git", ["diff", "--cached", "--name-only", "-z", "--diff-filter=ACM"], {
     cwd: root,
     encoding: "utf8",
   });
@@ -905,7 +909,7 @@ export function getStagedFiles(root: string): StagedFiles {
   if (res.status !== 0) {
     return { error: describeStagedFailure(res.status, res.signal, res.stderr ?? "") };
   }
-  return { files: res.stdout.split("\n").filter((l) => l.trim().length > 0) };
+  return { files: res.stdout.split("\0").filter((l) => l.length > 0) };
 }
 
 /**

@@ -487,10 +487,11 @@ export function scopeIdentity(selection: ScopeSelection | undefined): string | u
  * a literal POSIX filename as a separator is the one thing this function must
  * never do, so the whole set is refused instead.
  *
- * AND GIT'S QUOTING IS NOT A GUARD. `git ls-files` happens to C-quote such a
- * name, so the git-backed enumeration never forwards one. That is a formatting
- * behaviour of one producer, not a containment guarantee, and nothing here may
- * depend on it -- the fallback walk has no such behaviour.
+ * AND GIT'S QUOTING WAS NEVER A GUARD. Read line by line, `git ls-files`
+ * C-quoted such a name, so the git-backed enumeration did not forward one; it
+ * now reads `-z` and forwards the real name, as the fallback walk always did.
+ * That quoting was a formatting behaviour of one producer, not a containment
+ * guarantee, and nothing here depends on it.
  *
  * NORMALIZATION, so two runs of the same tree agree:
  *   - a leading `./` is stripped;

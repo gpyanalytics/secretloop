@@ -1397,6 +1397,17 @@ test("control: a path that really leaves the allowed root is still refused", () 
   assert.match((result as { ok: false; error: string }).error, /outside the directories this server was started with/);
 });
 
+suite("\nmcp-core — file names git quotes");
+
+test("an MCP scan of a git repository reports a non-ASCII file name", () => {
+  const dir = repo("quoted-names", { "plain.js": DOT_GENERIC(), "café.js": DOT_GENERIC() }, true);
+  resetSessions();
+  const p = payload(toolScan({ path: dir }));
+  const files = [...new Set(p.findings.map((f: any) => f.file))].sort();
+  assert.deepStrictEqual(files, ["café.js", "plain.js"], `a quoted name was dropped: ${JSON.stringify(files)}`);
+  assert.doesNotMatch(p.scope.statement, /outside the scan root/);
+});
+
 // ---------------------------------------------------------------------------
 suite("mcp-core — cleanup");
 

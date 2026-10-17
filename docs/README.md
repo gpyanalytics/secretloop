@@ -84,18 +84,21 @@ maintenance release; before that, 0.7.0 (2026-10-04) and 0.6.0 (2026-09-15).
 `main` is ahead of the published 0.7.2. What has merged since is a text-report
 fix, credential groups in the JSON report, workspace containment for the
 editor's live verification and staged scan, a fix for names that begin with
-`..`, a development-dependency fix, CI log hygiene, tests, and a wider release
-security-review rule ([decision 0008](decisions/0008-consent-review-scope.md)).
-The first four change what SecretLoop does when it runs: the text report no
+`..`, a fix for file names git quotes, a development-dependency fix, CI log
+hygiene, tests, and a wider release security-review rule
+([decision 0008](decisions/0008-consent-review-scope.md)).
+The first five change what SecretLoop does when it runs: the text report no
 longer calls two different PKCS#12 keystores "the same value", the JSON report
 now says which findings carry the same credential
 ([credential groups](reports.md#credential-groups)), the VS Code extension no
 longer verifies files outside the open workspace
 ([the verification prompt](vscode.md#the-verification-prompt)), and files whose
-names begin with `..` are scanned rather than skipped as outside the root
+names begin with `..` are scanned rather than skipped as outside the root, and
+so are files whose names git quotes, which history now also names correctly
 ([what the scan discloses](coverage.md#what-the-scan-discloses)). The first two
-are in `src/report.ts`, the third in `src/extension.ts` and the fourth in
-`src/walk.ts`, `src/mcp-core.ts` and `src/extension.ts`, so `out/cli.js`,
+are in `src/report.ts`, the third in `src/extension.ts`, the fourth in
+`src/walk.ts`, `src/mcp-core.ts` and `src/extension.ts`, and the fifth in
+`src/walk.ts` and `src/history.ts`, so `out/cli.js`,
 `out/mcp.js` and `out/extension.js` all no longer build byte-identical to 0.7.2.
 Until the text-report fix, none of it changed what SecretLoop does when it runs.
 The packaged

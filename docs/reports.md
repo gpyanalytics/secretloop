@@ -497,15 +497,15 @@ stripped and duplicates collapse; nothing else is rewritten.
   confident identity for a subset, the second would claim nothing was excluded.
   A withheld digest makes the pair ineligible, which is the safe direction.
 
-**What the git route does, and what it is not.** `git ls-files` C-quotes a path
-containing a backslash (`"dir\\file.png"`) whatever `core.quotePath` is set to, so
-the git-backed enumeration is handed a path that does not exist, the containment
-guard refuses it, and that refusal is already a coverage limitation making the
-report `incomplete`. **This is a formatting behaviour of one producer, not a
-containment guarantee**, and nothing in the identity may depend on it: the
-fallback directory walk, used when `git ls-files` cannot answer, has no such
-behaviour and forwards the real name. That is the route where the identity had
-to stop collapsing.
+**What the git route does.** `git ls-files` C-quotes a path containing a
+backslash (`"dir\\file.png"`) whatever `core.quotePath` is set to, when it prints
+one path per line. Through 0.7.2 the git-backed enumeration read it that way, was
+handed a path that does not exist, and refused it as outside the root, making the
+report `incomplete`. It now reads git's NUL-terminated output (unreleased), so,
+like the fallback directory walk, it forwards the real name, and the refusal
+above applies: the digest is withheld. That was always the design — the quoting
+was **a formatting behaviour of one producer, not a containment guarantee**, and
+nothing in the identity depended on it.
 
 **The representation is versioned inside the digest** (`BINARY_CONTRACT_VERSION`),
 like the scope contract. It moved **1 → 2** when backslash rewriting was removed,
