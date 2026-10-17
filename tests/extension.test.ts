@@ -1232,6 +1232,63 @@ test("a vanished staged file under a symlinked folder that escapes the workspace
   });
 });
 
+/** A link at `at` to `target`, or a skip where this account may not create one. */
+function linkOrSkip(target: string, at: string, kind: "file" | "dir"): void {
+  try {
+    symlinkSync(target, at, kind);
+  } catch (err: any) {
+    if (err?.code === "EPERM" || err?.code === "EACCES") skip("this account may not create symlinks");
+    throw err;
+  }
+}
+
+test("a staged link whose outside target is gone is not scanned from its open buffer", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    const value = freshToken();
+    const link = path.join(ws, "shared.js");
+    linkOrSkip(path.join(outside, "gone.js"), link, "file"); // dangling: the target never existed
+    setOpenDocuments([openBuffer(link, tokenLine(value))]);
+    setGitStagedFiles([[link]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0, "a dangling link's buffer was verified as a workspace file");
+    assert.deepStrictEqual([...openBuffers(ws).keys()], [], "a link that cannot be resolved was admitted");
+    // Control: the same value staged as an ordinary workspace file IS checked.
+    const inside = path.join(ws, "real.js");
+    writeFileSync(inside, tokenLine(value), "utf8");
+    setOpenDocuments([]);
+    setGitStagedFiles([[inside]]);
+    sentTo.length = 0;
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 1, "the same value staged inside the workspace should be checked exactly once");
+  });
+});
+
+test("a file under a folder link whose target is gone is outside", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    const value = freshToken();
+    linkOrSkip(path.join(outside, "removed"), path.join(ws, "linked"), "dir"); // the folder it pointed to is gone
+    const viaLink = path.join(ws, "linked", "x.js");
+    setOpenDocuments([openBuffer(viaLink, tokenLine(value))]);
+    setGitStagedFiles([[viaLink]]);
+    await stagedScanSealed();
+    assert.strictEqual(sentTo.length, 0, "a buffer under a dangling folder link was verified");
+    assert.deepStrictEqual(stagedPaths(ws, [{ state: { indexChanges: [{ uri: { fsPath: viaLink } }] } }]), []);
+  });
+});
+
+test("a path through a symlink loop is outside", async () => {
+  await inLab(async ({ ws }) => {
+    const loop = path.join(ws, "loop");
+    linkOrSkip(loop, loop, "dir"); // points at itself: resolving it can never finish
+    const through = path.join(loop, "x.js");
+    setOpenDocuments([openBuffer(through, tokenLine(freshToken()))]);
+    assert.deepStrictEqual([...openBuffers(ws).keys()], [], "a path through a loop was admitted");
+    assert.deepStrictEqual(stagedPaths(ws, [{ state: { indexChanges: [{ uri: { fsPath: through } }] } }]), []);
+  });
+});
+
 test("control: a staged file inside the workspace is scanned and verified", async () => {
   await inLab(async ({ ws }) => {
     verificationOn();

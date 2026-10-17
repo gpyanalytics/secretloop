@@ -1,7 +1,7 @@
 import type { OpenedFileChecks } from "./walk";
 import { isInsideRoot } from "./walk";
 import * as vscode from "vscode";
-import { realpathSync } from "fs";
+import { lstatSync, realpathSync } from "fs";
 import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import { scanText, maskFindings, Finding } from "./scanner";
 import {
@@ -1027,8 +1027,10 @@ function configForFolder(
  * By whole path segment, not string prefix: `…/ws-other` is not inside `…/ws`.
  * And by real path: a path whose deepest existing ancestor resolves outside the
  * root -- a symlinked folder pointing out of it -- is outside, even when the
- * file itself no longer exists, which is the staged-deletion case. A root that
- * cannot be resolved contains nothing.
+ * file itself no longer exists, which is the staged-deletion case. A name that
+ * exists but cannot be resolved -- a dangling link, a loop, a target out of
+ * reach -- has no location to check and is outside, as is everything under it;
+ * so is a path whose root cannot be resolved.
  *
  * The staged scan needs both. It reads every repository the git extension
  * knows, and an open buffer wins over disk, so a sibling repository's staged
@@ -1054,7 +1056,11 @@ function strictlyBelow(rel: string): boolean {
   return rel !== "" && rel.split(path.sep)[0] !== ".." && !path.isAbsolute(rel);
 }
 
-/** The real path of `p`: its deepest existing ancestor resolved, the rest re-appended. */
+/**
+ * The real path of `p`: its deepest existing ancestor resolved, the rest
+ * re-appended. It climbs only past names that are not there: a name that is
+ * there but will not resolve stops it, and the answer is "no location".
+ */
 function realpathOfDeepestExisting(p: string): string | undefined {
   const rest: string[] = [];
   let current = p;
@@ -1062,6 +1068,13 @@ function realpathOfDeepestExisting(p: string): string | undefined {
     try {
       return path.join(realpathSync(current), ...[...rest].reverse());
     } catch {
+      try {
+        lstatSync(current);
+        return undefined; // present, yet unresolvable
+      } catch (err: unknown) {
+        const code = (err as NodeJS.ErrnoException | undefined)?.code;
+        if (code !== "ENOENT" && code !== "ENOTDIR") return undefined;
+      }
       const parent = path.dirname(current);
       if (parent === current) return undefined;
       rest.push(path.basename(current));
