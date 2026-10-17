@@ -1363,13 +1363,6 @@ test("git honours the option that made this exploitable", () => {
   );
 });
 
-// ---------------------------------------------------------------------------
-suite("mcp-core — cleanup");
-
-test("cleanup", () => {
-  rmSync(ROOT, { recursive: true, force: true });
-});
-
 suite("\nmcp-core — a name that merely begins with '..' is inside an allowed root");
 
 // `..data` and `..env` are ordinary names. The allowed-root check used to test rel.startsWith(".."), so a directory
@@ -1402,6 +1395,13 @@ test("control: a path that really leaves the allowed root is still refused", () 
   const result = toolScan({ path: path.join(ROOT, "..") });
   assert.strictEqual(result.ok, false, "the parent of the allowed root was accepted");
   assert.match((result as { ok: false; error: string }).error, /outside the directories this server was started with/);
+});
+
+// ---------------------------------------------------------------------------
+suite("mcp-core — cleanup");
+
+test("cleanup", () => {
+  rmSync(ROOT, { recursive: true, force: true });
 });
 
 finish();

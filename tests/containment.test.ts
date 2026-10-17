@@ -264,6 +264,20 @@ test("a CLI scan reports '..' names, stays complete, and says nothing about esca
   });
 });
 
+test("a staged top-level '..env' is scanned by the staged scan, as the pre-commit hook runs it", () => {
+  withDotNames((root) => {
+    const git = (...a: string[]) => spawnSync("git", a, { cwd: root, encoding: "utf8" });
+    git("init", "-q");
+    git("add", "..env", "x.env");
+    const r = spawnSync("node", [CLI, "staged", "--format", "json", "--fail-on", "never"], { cwd: root, encoding: "utf8" });
+    assert.strictEqual(r.status, 0, r.stderr);
+    const j = JSON.parse(r.stdout);
+    const files = [...new Set(j.findings.map((f: { file: string }) => f.file))].sort();
+    assert.deepStrictEqual(files, ["..env", "x.env"], `a staged ..env was refused: ${JSON.stringify(files)}`);
+    assert.strictEqual(j.incomplete, false, `limitations: ${JSON.stringify(j.summary.coverage?.limitations)}`);
+  });
+});
+
 test("control: with a real outside link present, only the link is excluded and described", () => {
   withDotNames((root, outside) => {
     try {

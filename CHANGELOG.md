@@ -27,8 +27,10 @@ release's version number and date are not decided.*
 - **Fixed: files and folders whose names begin with `..` are scanned.** A top-level `..env` or `..cfg/` was treated
   as a path out of the scan root, because containment tested `rel.startsWith("..")`: the CLI, the extension's
   workspace scan and the MCP server skipped it, counted it as "resolved outside the scan root" (described as a
-  symlink) and marked the report incomplete; the MCP server also refused a `..data` directory under an allowed root,
-  and the editor did not verify a workspace `..env`. A relative path now leaves the root only when its first segment
+  symlink) and marked the report incomplete; the staged scans (`secretloop staged`, so the pre-commit hook, and the
+  extension's **Scan Staged Files**) refused a staged `..env` the same way; the MCP server also refused a `..data`
+  directory under an allowed root, and the editor did not verify a workspace `..env`. Each of these now scans the
+  file, and with live verification on the extension verifies it like any other workspace file. A relative path now leaves the root only when its first segment
   is exactly `..`, or it is absolute. Real `../` escapes and symlinks resolving outside are still excluded, and a
   path that cannot be resolved still fails closed. Nested names such as `sub/..env` were never affected. In reports,
   such files now produce findings and no longer make the report incomplete; `scopeDigest` does not change (a

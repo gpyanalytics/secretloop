@@ -89,20 +89,6 @@ export interface FileListing {
  * twelve files reads exactly like one that had nothing to skip.
  */
 /**
- * Whether a path really lives inside the directory being scanned.
- *
- * git tracks symlinks -- mode 120000 -- so a clone can carry a link to
- * ~/.aws/credentials or /etc/passwd. `git ls-files` lists the link and a plain
- * read follows it, so the target's content was scanned, reported under a path
- * inside the repository, and with --verify transmitted to a provider. On a
- * threat model that assumes a cloned repository may be hostile, a scan that
- * cannot stay inside the directory it was given is not bounded at all.
- *
- * Containment, not symlink avoidance: a link resolving back inside the root is
- * an ordinary file and is still scanned. A path that cannot be resolved -- a
- * broken link -- has no location to check and is dropped rather than raising.
- */
-/**
  * Whether a path.relative() result leaves the directory it was taken from:
  * its first segment IS `..`, or it is absolute (another drive or share).
  *
@@ -116,6 +102,20 @@ export function relativeEscapes(rel: string): boolean {
   return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
 }
 
+/**
+ * Whether a path really lives inside the directory being scanned.
+ *
+ * git tracks symlinks -- mode 120000 -- so a clone can carry a link to
+ * ~/.aws/credentials or /etc/passwd. `git ls-files` lists the link and a plain
+ * read follows it, so the target's content was scanned, reported under a path
+ * inside the repository, and with --verify transmitted to a provider. On a
+ * threat model that assumes a cloned repository may be hostile, a scan that
+ * cannot stay inside the directory it was given is not bounded at all.
+ *
+ * Containment, not symlink avoidance: a link resolving back inside the root is
+ * an ordinary file and is still scanned. A path that cannot be resolved -- a
+ * broken link -- has no location to check and is dropped rather than raising.
+ */
 export function isInsideRoot(root: string, relPath: string): boolean {
   let realRoot: string;
   try {
@@ -397,8 +397,9 @@ function hooksOf(arg: ReadHooksArg): ReadHooks {
  * The reader's own containment locator: the same two resolutions as
  * isInsideRoot, returning the canonical root and the resolved name so the
  * readers can inspect and open the RESOLVED object rather than resolving the
- * name a third time. `isInsideRoot` itself is left byte-identical: it is one
- * of the functions the security review pins.
+ * name a third time. It and `isInsideRoot`, one of the functions the security
+ * review pins, decide an escape with the same relativeEscapes, so the two
+ * cannot drift; a change to that test is a change to both.
  *
  * Splits the two ways resolution can fail exactly as the readers always have:
  * a name that resolves OUTSIDE is a containment refusal, one that does not
