@@ -10,7 +10,7 @@ off everywhere by default and has a separate control on each surface. Applies to
 | surface | switch | default |
 |---|---|---|
 | CLI | `--verify` | off |
-| VS Code | `secretloop.enableLiveVerification` | `false`; the extension offers to enable it the first time it finds a checkable credential |
+| VS Code | `secretloop.enableLiveVerification` | `false`; the extension offers to enable it the first time it finds a checkable credential. Unreleased: files outside every open workspace folder are never verified and never prompt ([details](vscode.md#the-verification-prompt)) |
 | MCP | `secretloop approve <fingerprint>` in a terminal, per credential | nothing is ever sent without it |
 
 If your policy is that no credential leaves the machine: do not pass `--verify`,

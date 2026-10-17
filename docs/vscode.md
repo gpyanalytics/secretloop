@@ -125,7 +125,7 @@ All under **SecretLoop** in the Command Palette:
 | `secretloop.envFilePath` | `.env` | Where extracted secrets are written |
 | `secretloop.excludePaths` | `[]` | Extra globs never scanned, **added to** the built-in excludes and to any `excludePaths` in `.secretloop.json` |
 | `secretloop.entropyPassEnabled` | `false` | Opt in to the generic high-entropy tier. A `.secretloop.json` value for `entropyPassEnabled` overrides this setting |
-| `secretloop.enableLiveVerification` | `false` | Make read-only provider calls to confirm a credential is active. The extension offers to turn this on the first time it finds a credential it could check |
+| `secretloop.enableLiveVerification` | `false` | Make read-only provider calls to confirm a credential is active, for files inside an open workspace folder only (unreleased; see [below](#the-verification-prompt)). The extension offers to turn this on the first time it finds a credential it could check |
 
 `excludePaths` is the one setting that **adds to** the project file rather than
 deferring to it: the two lists are concatenated, so the editor can exclude more
@@ -147,6 +147,25 @@ up in *their* audit logs. The first time a scan finds a credential SecretLoop
 could check, it offers to turn verification on and names the provider it would
 contact. Answering **Never** is permanent until **Reset Prompt Preferences** is
 run, which clears that answer and this session's prompt state and nothing else.
+
+**Only files of the open workspace are verified** (unreleased; on `main` after
+0.7.2). A document outside every workspace folder — a temporary file, another
+tool's transcript, a file of some other project, or any file in a window with no
+folder open — is still scanned and still gets its diagnostics, but nothing in it
+is sent, and it never triggers the offer, because answering **Enable** would
+otherwise switch verification on and check exactly that document. "Inside" is
+decided by real path, as the workspace scan does: a symlink in the workspace that
+points outside it is outside, a path that cannot be resolved counts as outside,
+and on macOS so does a spelling the folder's own real path does not share, such
+as a different letter case on a case-insensitive volume (Windows compares paths
+without regard to case, as its filesystem does). Every folder of a multi-root
+workspace counts. To verify such a file, open its folder as the workspace. The
+output channel says what was held back:
+
+```
+live verification is on (user setting secretloop.enableLiveVerification);
+  not checking 1 verifiable finding(s) in /tmp/notes.js: outside every workspace folder.
+```
 
 Every decision is written to **View > Output > SecretLoop**: which guard fired,
 whether an offer was made and how it was answered, and how many credentials

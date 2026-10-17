@@ -7,6 +7,16 @@ does when it runs, so it was not released on its own. It will ship with the next
 one that changes SecretLoop's behaviour, unless a security or compatibility fix calls for an earlier release. That
 release's version number and date are not decided.*
 
+- **Changed (security hardening): the VS Code extension verifies only files of the open workspace.** With
+  `secretloop.enableLiveVerification` on, a document outside every workspace folder (a temporary file, another
+  tool's transcript, a file of another project, or any file in a window with no folder) is still scanned and keeps
+  its diagnostics, but none of its findings is sent to a provider, and it never triggers the "Enable live
+  verification?" offer. Containment is by real path, as in the workspace scan: a symlink pointing out of the
+  workspace, a path that cannot be resolved and, on macOS, a case-variant spelling count as outside; every folder of a
+  multi-root workspace counts. A file opened in a window with no folder is no longer verified automatically; open its
+  folder as the workspace instead. Workspace and staged scans, the CLI's `--verify` and the MCP server are unchanged.
+  The change is in `src/extension.ts`; `out/cli.js` and `out/mcp.js` do not include it. See
+  [the verification prompt](docs/vscode.md#the-verification-prompt).
 - **Added: the JSON report says which findings carry the same credential.** A new top-level `credentialGroups` array
   lists each credential found in two or more places under one rule: the ids of its findings and how many distinct
   places they cover. Every finding gains a report-local `id` (`F1`, `F2`, …), and `summary` gains

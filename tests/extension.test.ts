@@ -13,6 +13,7 @@ import {
   maskClipboardText,
   stagedScanNotice,
   effectiveConfig,
+  scanDocument,
   PromptState,
 } from "../src/extension";
 import { Finding, UnknownReason } from "../src/scanner";
@@ -21,11 +22,23 @@ import { scanWorkspaceScan } from "../src/workspace";
 import { emptyArchiveAccounting } from "../src/archive";
 import { UNKNOWN_REASONS } from "../src/report";
 import { MigrationOutcome } from "../src/rotate";
-import { DiagnosticSeverity, setConfiguration, resetConfiguration } from "./stubs/vscode";
-import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "fs";
+import {
+  DiagnosticSeverity,
+  setConfiguration,
+  resetConfiguration,
+  StubTextDocument,
+  createDocument,
+  setWorkspaceFolder,
+  setWorkspaceFolders,
+  called,
+  firstCall,
+  reset as resetStub,
+} from "./stubs/vscode";
+import { mkdtempSync, writeFileSync, rmSync, mkdirSync, readFileSync, realpathSync, symlinkSync, existsSync } from "fs";
+import * as net from "net";
 import { tmpdir } from "os";
 import * as path from "path";
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { positiveSamples } from "./fixtures";
 
 function finding(ruleId: string): Finding {
@@ -879,6 +892,241 @@ test("the workspace command feeds both totals into the summary", () => {
   assert.match(scanBody, /\(s\.suppressed \?\? 0\)/, "scanWorkspace does not total the inline suppressions");
   assert.match(scanBody, /\(s\.fixtureSuppressed \?\? 0\)/, "scanWorkspace does not total the fixture suppressions");
   assert.match(scanBody, /workspaceScanSummary\([\s\S]{0,200}suppressed/, "the totals never reach the summary");
+});
+
+suite("\nextension.ts — automatic verification stays inside the workspace");
+
+/*
+ * Every scan below runs with the network sealed twice over: the global `fetch` is swapped for a recorder that answers
+ * 401 without leaving the process, and any socket connect throws. The first test checks that scanDocument hands the
+ * global `fetch` to its verifiers at call time and that nothing imports another HTTP client, and no scan runs unless
+ * it passed. A request can therefore only ever reach the recorder.
+ *
+ * Each test uses its own credential-shaped value, assembled at run time and never written to source or printed, so
+ * the extension's verification cache cannot make a "nothing sent" result pass for the wrong reason: wherever a test
+ * expects nothing sent, it then scans the same value from inside the workspace and expects exactly one request.
+ */
+const sentTo: string[] = [];
+const recorder = (async (input: unknown) => {
+  sentTo.push(typeof input === "string" ? input : String((input as { url?: unknown }).url ?? input));
+  return new Response(null, { status: 401 });
+}) as typeof fetch;
+let interceptionVerified = false;
+
+async function scanSealed(doc: StubTextDocument): Promise<void> {
+  if (!interceptionVerified) throw new Error("network interception was not established; the scan was not run");
+  const realFetch = globalThis.fetch;
+  const realConnect = net.Socket.prototype.connect;
+  globalThis.fetch = recorder;
+  net.Socket.prototype.connect = function () {
+    throw new Error("a socket connect was attempted during a sealed scan");
+  } as typeof realConnect;
+  try {
+    await scanDocument(doc as unknown as Parameters<typeof scanDocument>[0]);
+  } finally {
+    globalThis.fetch = realFetch;
+    net.Socket.prototype.connect = realConnect;
+  }
+}
+
+let tokenSeed = 0x2f6b9d13;
+/** A fresh GitHub-classic-shaped value. Assembled here so no such literal sits in source. */
+function freshToken(): string {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789";
+  let out = "";
+  for (let i = 0; i < 36; i++) {
+    tokenSeed ^= tokenSeed << 13;
+    tokenSeed ^= tokenSeed >>> 17;
+    tokenSeed ^= tokenSeed << 5;
+    out += alphabet[Math.abs(tokenSeed) % alphabet.length];
+  }
+  return "gh" + "p_" + out;
+}
+
+/** A file on disk holding the value, and the editor document for it. */
+function documentAt(fsPath: string, value: string): StubTextDocument {
+  mkdirSync(path.dirname(fsPath), { recursive: true });
+  const text = `const token = "${value}";\n`;
+  writeFileSync(fsPath, text, "utf8");
+  return createDocument(text, fsPath, "javascript");
+}
+
+/** A scratch tree: `ws` is opened as the workspace; `ws-other` and `outside` are not. */
+async function inLab(fn: (dirs: { base: string; ws: string; sibling: string; outside: string }) => Promise<void>) {
+  const base = mkdtempSync(path.join(tmpdir(), "secretloop-containment-"));
+  const dirs = { base, ws: path.join(base, "ws"), sibling: path.join(base, "ws-other"), outside: path.join(base, "outside") };
+  for (const d of [dirs.ws, dirs.sibling, dirs.outside]) mkdirSync(d);
+  try {
+    resetStub();
+    sentTo.length = 0;
+    setWorkspaceFolder(dirs.ws);
+    await fn(dirs);
+  } finally {
+    setWorkspaceFolder(undefined);
+    resetConfiguration();
+    rmSync(base, { recursive: true, force: true });
+  }
+}
+
+const verificationOn = () =>
+  setConfiguration("secretloop", "enableLiveVerification", { defaultValue: false, globalValue: true });
+
+/** The same value, opened from inside the workspace, IS sent: the gate made the difference, not the cache. */
+async function sentFromInside(ws: string, value: string, name: string): Promise<void> {
+  sentTo.length = 0;
+  await scanSealed(documentAt(path.join(ws, name), value));
+  assert.strictEqual(sentTo.length, 1, "the same value scanned inside the workspace should be checked exactly once");
+}
+
+test("the network is sealed: scanDocument passes the global fetch, and no other HTTP client is imported", () => {
+  const src = (name: string) => readFileSync(path.join(__dirname, "..", "src", name), "utf8");
+  const ext = src("extension.ts");
+  const body = ext.slice(ext.indexOf("export async function scanDocument"));
+  assert.match(body.slice(0, 4000), /fetchImpl: fetch\b/, "scanDocument no longer hands the global fetch to verification");
+  for (const name of ["extension.ts", "verify.ts"]) {
+    assert.ok(
+      !/from "(node-fetch|undici|cross-fetch|axios|got)"|require\("(node-fetch|undici|cross-fetch|axios|got)"\)|from "https?"/.test(src(name)),
+      `${name} imports an HTTP client the recorder cannot intercept`
+    );
+  }
+  interceptionVerified = true;
+});
+
+test("with verification on, a document outside every workspace folder sends nothing", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    const value = freshToken();
+    await scanSealed(documentAt(path.join(outside, "notes.js"), value));
+    assert.strictEqual(sentTo.length, 0, `an outside document reached a provider (${sentTo.length} request(s))`);
+    await sentFromInside(ws, value, "app.js");
+  });
+});
+
+test("with no workspace folder open, nothing is sent", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    setWorkspaceFolder(undefined);
+    const value = freshToken();
+    await scanSealed(documentAt(path.join(outside, "single.js"), value));
+    assert.strictEqual(sentTo.length, 0, "a single-file window reached a provider");
+    setWorkspaceFolder(ws);
+    await sentFromInside(ws, value, "app.js");
+  });
+});
+
+test("a sibling folder whose name merely starts with the workspace's is outside it", async () => {
+  await inLab(async ({ ws, sibling }) => {
+    verificationOn();
+    const value = freshToken();
+    await scanSealed(documentAt(path.join(sibling, "app.js"), value));
+    assert.strictEqual(sentTo.length, 0, "ws-other was treated as inside ws");
+    await sentFromInside(ws, value, "app.js");
+  });
+});
+
+test("a symlink inside the workspace that resolves outside it is outside", async () => {
+  await inLab(async ({ ws, outside }) => {
+    verificationOn();
+    const value = freshToken();
+    documentAt(path.join(outside, "target.js"), value);
+    try {
+      symlinkSync(path.join(outside, "target.js"), path.join(ws, "link.js"));
+    } catch (err: any) {
+      if (err?.code === "EPERM" || err?.code === "EACCES") skip("this account may not create symlinks");
+      throw err;
+    }
+    const text = `const token = "${value}";\n`;
+    await scanSealed(createDocument(text, path.join(ws, "link.js"), "javascript"));
+    assert.strictEqual(sentTo.length, 0, "a link out of the workspace was verified as a workspace file");
+    await sentFromInside(ws, value, "real.js");
+  });
+});
+
+test("control: a document inside the workspace is still verified", async () => {
+  await inLab(async ({ ws }) => {
+    verificationOn();
+    await scanSealed(documentAt(path.join(ws, "src", "app.js"), freshToken()));
+    assert.strictEqual(sentTo.length, 1);
+  });
+});
+
+test("control: a document in the second folder of a multi-root workspace is verified", async () => {
+  await inLab(async ({ ws, sibling }) => {
+    verificationOn();
+    setWorkspaceFolders([ws, sibling]);
+    await scanSealed(documentAt(path.join(sibling, "app.js"), freshToken()));
+    assert.strictEqual(sentTo.length, 1, "only the first folder was treated as the workspace");
+  });
+});
+
+test("a folder opened through a symlinked path still contains its files", async () => {
+  await inLab(async ({ ws }) => {
+    const real = realpathSync(ws);
+    if (real === ws) skip("the temporary directory has no symlinked path on this platform; the alias case is not exercised");
+    verificationOn();
+    await scanSealed(documentAt(path.join(real, "app.js"), freshToken()));
+    assert.strictEqual(sentTo.length, 1, `a file under ${real} was not recognised as inside ${ws}`);
+  });
+});
+
+test("Windows: a drive letter in the other case is the same folder", async () => {
+  if (process.platform !== "win32") skip("drive letters exist only on Windows");
+  await inLab(async ({ ws }) => {
+    verificationOn();
+    const value = freshToken();
+    documentAt(path.join(ws, "app.js"), value);
+    const flipped = ws[0] === ws[0].toUpperCase() ? ws[0].toLowerCase() + ws.slice(1) : ws[0].toUpperCase() + ws.slice(1);
+    await scanSealed(createDocument(`const token = "${value}";\n`, path.join(flipped, "app.js"), "javascript"));
+    assert.strictEqual(sentTo.length, 1, "a drive-letter case difference put a workspace file outside");
+  });
+});
+
+test("macOS: a case-variant spelling of the workspace path fails closed", async () => {
+  if (process.platform !== "darwin") skip("case-insensitive default volumes are the macOS case");
+  await inLab(async ({ ws }) => {
+    const variant = path.join(path.dirname(ws), "WS");
+    verificationOn();
+    const value = freshToken();
+    documentAt(path.join(ws, "app.js"), value);
+    if (!existsSync(path.join(variant, "app.js"))) skip("this volume is case-sensitive; the variant path does not exist");
+    await scanSealed(createDocument(`const token = "${value}";\n`, path.join(variant, "app.js"), "javascript"));
+    assert.strictEqual(sentTo.length, 0, "a path whose real form is not under the folder's real path was verified");
+    await sentFromInside(ws, value, "app.js");
+  });
+});
+
+test("an outside document keeps its diagnostics: detection is unchanged", async () => {
+  await inLab(async ({ outside }) => {
+    verificationOn();
+    await scanSealed(documentAt(path.join(outside, "notes.js"), freshToken()));
+    assert.strictEqual(called("diagnostics.set"), true, "the outside document lost its diagnostics");
+  });
+});
+
+test("control: an untitled document is neither scanned nor verified", async () => {
+  await inLab(async () => {
+    verificationOn();
+    const doc = new StubTextDocument(`const token = "${freshToken()}";\n`, { fsPath: "Untitled-1", scheme: "untitled" });
+    await scanSealed(doc);
+    assert.strictEqual(sentTo.length, 0);
+    assert.strictEqual(called("diagnostics.set"), false);
+  });
+});
+
+test("the prompt names an outside document as its reason for not appearing", () => {
+  const gate = decideVerificationPrompt([finding("github-token")], { ...freshState(), outsideWorkspace: true } as PromptState);
+  assert.deepStrictEqual(gate, { show: false, reason: "outside-workspace" });
+});
+
+test("with verification off, an outside document is never offered verification", async () => {
+  await inLab(async ({ ws, outside }) => {
+    await scanSealed(documentAt(path.join(outside, "notes.js"), freshToken()));
+    assert.strictEqual(called("window.showInformationMessage"), false, "accepting this offer would verify an outside document");
+    assert.strictEqual(sentTo.length, 0);
+    // Control, last because it spends the session's one prompt: the same offer still appears inside the workspace.
+    await scanSealed(documentAt(path.join(ws, "app.js"), freshToken()));
+    assert.match(String(firstCall("window.showInformationMessage")?.[0] ?? ""), /Enable live verification\?/);
+  });
 });
 
 finish();
