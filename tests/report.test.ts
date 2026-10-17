@@ -1,5 +1,6 @@
 import { render, sortFindings } from "../src/report";
 import { Finding } from "../src/scanner";
+import { PKCS12_RULE_ID } from "../src/pkcs12";
 import { test, suite, finish, assert } from "./harness";
 
 suite("report.ts");
@@ -398,6 +399,84 @@ test("the scope survives the zero-finding path", () => {
   const out = render([], "text", { ...opts, scope: "412 file(s)" });
   assert.match(out, /412 file\(s\)/, "a clean scan must still report what it covered");
   assert.match(out, /no secrets found/i);
+});
+
+suite("\nreport.ts — same-value grouping in the text report");
+
+// The text report folds occurrences of one credential into one entry: "N locations, same value". That sentence is a
+// claim about the credential, so it may only be made when the occurrences really carry the same credential value.
+const keystore = (file: string, digest: string): Finding =>
+  finding({
+    ruleId: PKCS12_RULE_ID,
+    description: "PKCS#12 keystore containing private-key material",
+    // What the detector reports in place of the keystore: a description, identical for any two keystores of one size.
+    value: "PKCS#12 keystore, 2555 bytes, private-key material present",
+    endIndex: 2555,
+    line: 1,
+    file,
+    fingerprintStrategy: "context",
+    fingerprint: `${file}:${PKCS12_RULE_ID}:${digest}`,
+  });
+
+test("two different keystores of the same size are not reported as the same value", () => {
+  const out = render([keystore("a/client.p12", "1111111111111111"), keystore("b/client.p12", "2222222222222222")], "text", opts);
+  assert.ok(!out.includes("same value"), "equal descriptions are not equal credentials; nothing here shows the keystores match");
+  assert.strictEqual(out.split("(pkcs12-private-key)").length - 1, 2, "each keystore must be its own entry");
+  const a = out.slice(out.indexOf("a/client.p12:1"), out.indexOf("b/client.p12:1"));
+  assert.ok(a.includes("a/client.p12:pkcs12-private-key:1111111111111111"), "each entry carries its own fingerprint");
+  assert.ok(!a.includes("2222222222222222"), "and not the other keystore's");
+});
+
+test("even byte-identical keystores are listed separately: the report has no keystore identity to compare", () => {
+  // Same fingerprint digest on purpose. The report never derives a content identity for a keystore, so it does not
+  // claim two of them match, whatever their digests say.
+  const out = render([keystore("a/client.p12", "3333333333333333"), keystore("b/client.p12", "3333333333333333")], "text", opts);
+  assert.ok(!out.includes("same value"));
+  assert.strictEqual(out.split("(pkcs12-private-key)").length - 1, 2);
+});
+
+test("control: one credential in two files is still one entry, '2 locations, same value'", () => {
+  const value = "ghp_Q7mK2xVb9RtL4nWz8YcP1sDf6HjA3uEgT5oN";
+  const out = render(
+    [
+      finding({ value, file: "src/github-client.js", line: 2, fingerprint: "src/github-client.js:github-token:e8f3ee9fc6b4a606" }),
+      finding({ value, file: "deploy/ci-settings.yaml", line: 3, fingerprint: "deploy/ci-settings.yaml:github-token:e8f3ee9fc6b4a606" }),
+    ],
+    "text",
+    opts
+  );
+  assert.match(out, /2 locations, same value:/);
+  assert.strictEqual(out.split("(github-token)").length - 1, 1, "one entry for one credential");
+  assert.ok(out.includes("src/github-client.js:2") && out.includes("deploy/ci-settings.yaml:3"), "every location is listed");
+});
+
+test("control: different values whose masked forms are identical are not grouped", () => {
+  // Same length, same first four and last four characters: both mask to ghp_********************T5oN.
+  const one = "ghp_Q7mK2xVb9RtL4nWz8YcP1sDf6HjA3uEgT5oN";
+  const two = "ghp_Zx9Lm3Qr7Tn1Wv5Yb2Kc8Hd4Jf6Ps0UgT5oN";
+  const out = render([finding({ value: one, file: "a.js", line: 1 }), finding({ value: two, file: "b.js", line: 1 })], "text", opts);
+  assert.strictEqual(out.split("ghp_********************T5oN").length - 1, 2, "the two masks really are identical");
+  assert.ok(!out.includes("same value"), "a matching mask is not a matching credential");
+});
+
+test("control: different values whose fingerprint digests are identical are not grouped", () => {
+  // Context-strategy fingerprints hash secret-free structure, so two different passwords on one host share a digest.
+  const url = (password: string) => `postgres://app:${password}@db.internal:5432/app`;
+  const out = render(
+    [
+      finding({ ruleId: "db-connection-string", value: url("Qm7vR2xKp9Lw4Tz8"), file: "a/app.env", line: 1, fingerprintStrategy: "context", fingerprint: "a/app.env:db-connection-string:b838750174e218f4" }),
+      finding({ ruleId: "db-connection-string", value: url("Zx4nW8cV1bN6mQ3r"), file: "b/worker.env", line: 1, fingerprintStrategy: "context", fingerprint: "b/worker.env:db-connection-string:b838750174e218f4" }),
+    ],
+    "text",
+    opts
+  );
+  assert.ok(!out.includes("same value"), "a matching fingerprint digest is not a matching credential");
+});
+
+test("control: one value under two different rules stays two entries", () => {
+  const value = "ghp_Q7mK2xVb9RtL4nWz8YcP1sDf6HjA3uEgT5oN";
+  const out = render([finding({ value, file: "a.js" }), finding({ ruleId: "generic-api-key", value, file: "b.js" })], "text", opts);
+  assert.ok(!out.includes("same value"), "two rules are two different claims about the string");
 });
 
 finish();

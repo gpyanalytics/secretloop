@@ -2,14 +2,19 @@
 
 ## Unreleased
 
-*Merged on `main` after 0.7.2 and not published. None of it changes what SecretLoop does when it runs, so it was
-not released on its own. It will ship with the next published release: expected to be one that changes SecretLoop's
-behaviour, unless a security or compatibility fix calls for an earlier release. That release's version number and
-date are not decided.*
+*Merged on `main` after 0.7.2 and not published. Until the text-report fix below, none of it changed what SecretLoop
+does when it runs, so it was not released on its own. It will ship with the next published release: expected to be
+one that changes SecretLoop's behaviour, unless a security or compatibility fix calls for an earlier release. That
+release's version number and date are not decided.*
 
-- **Executable code unchanged; packaged manifest changed.** No file under `src/` changed, and `out/cli.js`,
-  `out/mcp.js` and `out/extension.js` build byte-identical to the ones published in 0.7.2. `package.json`, which
-  ships in both the npm package and the VSIX, is not identical: its `test` script gains one entry at the end (#151).
+- **Fixed: the text report no longer calls two different PKCS#12 keystores "the same value".** A PKCS#12 finding's
+  value is a description of the keystore (`PKCS#12 keystore, N bytes, private-key material present`), not the
+  credential, so two different keystores of the same size were folded into one entry under "2 locations, same
+  value". Each keystore is now its own entry. Every other finding groups exactly as before, and JSON, SARIF,
+  fingerprints and baselines are unchanged. The change is in `src/report.ts`, so `out/cli.js` and `out/extension.js`
+  no longer build byte-identical to 0.7.2; `out/mcp.js` does not use the text report.
+- **Packaged manifest changed.** `package.json`, which ships in both the npm package and the VSIX, is not identical
+  to 0.7.2: its `test` script gains one entry at the end (#151).
 - **Development dependency:** `proxy-addr` 2.0.7 → 2.0.8 in `package-lock.json` (#140), clearing
   GHSA-jqcg-44mw-7w3h. It is reached only through the MCP SDK's HTTP transport, as a development dependency; the
   bundles build byte-identical with either version.
