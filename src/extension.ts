@@ -1,5 +1,5 @@
 import type { OpenedFileChecks } from "./walk";
-import { isInsideRoot } from "./walk";
+import { isInsideRoot, relativeEscapes } from "./walk";
 import * as vscode from "vscode";
 import { lstatSync, realpathSync } from "fs";
 import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
@@ -343,7 +343,7 @@ export function workspaceFolderContaining(fsPath: string, folders: readonly stri
       continue;
     }
     const rel = path.relative(realFolder, real);
-    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    if (rel === "" || relativeEscapes(rel)) continue;
     if (isInsideRoot(folder, rel)) return folder;
   }
   return undefined;

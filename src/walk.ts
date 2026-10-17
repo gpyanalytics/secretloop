@@ -89,6 +89,20 @@ export interface FileListing {
  * twelve files reads exactly like one that had nothing to skip.
  */
 /**
+ * Whether a path.relative() result leaves the directory it was taken from:
+ * its first segment IS `..`, or it is absolute (another drive or share).
+ *
+ * By segment, not by prefix. `..env`, `..cfg/app.js` and `...` are ordinary
+ * names inside the directory; testing `rel.startsWith("..")` dropped them from
+ * every scan as though they had resolved outside the root. The separator is
+ * this platform's, as path.relative() produces it: on POSIX a backslash is part
+ * of a file name.
+ */
+export function relativeEscapes(rel: string): boolean {
+  return rel === ".." || rel.startsWith(`..${path.sep}`) || path.isAbsolute(rel);
+}
+
+/**
  * Whether a path really lives inside the directory being scanned.
  *
  * git tracks symlinks -- mode 120000 -- so a clone can carry a link to
@@ -116,7 +130,7 @@ export function isInsideRoot(root: string, relPath: string): boolean {
     return false;
   }
   const rel = path.relative(realRoot, real);
-  return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
+  return rel === "" || !relativeEscapes(rel);
 }
 
 export function listFilesWithExclusions(root: string, config: SecretLoopConfig): FileListing {
@@ -383,8 +397,9 @@ function hooksOf(arg: ReadHooksArg): ReadHooks {
  * The reader's own containment locator: the same two resolutions as
  * isInsideRoot, returning the canonical root and the resolved name so the
  * readers can inspect and open the RESOLVED object rather than resolving the
- * name a third time. `isInsideRoot` itself is left byte-identical: it is one
- * of the functions the security review pins.
+ * name a third time. It and `isInsideRoot`, one of the functions the security
+ * review pins, decide an escape with the same relativeEscapes, so the two
+ * cannot drift; a change to that test is a change to both.
  *
  * Splits the two ways resolution can fail exactly as the readers always have:
  * a name that resolves OUTSIDE is a containment refusal, one that does not
@@ -410,7 +425,7 @@ function locateInsideRoot(
     return outsideOrGone();
   }
   const rel = path.relative(realRoot, real);
-  if (rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))) return { realRoot, real };
+  if (rel === "" || !relativeEscapes(rel)) return { realRoot, real };
   return { skipped: "outside" };
 }
 

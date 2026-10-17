@@ -24,6 +24,20 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed: files and folders whose names begin with `..` are scanned.** A top-level `..env` or `..cfg/` was treated
+  as a path out of the scan root, because containment tested `rel.startsWith("..")`: the CLI, the extension's
+  workspace scan and the MCP server skipped it, counted it as "resolved outside the scan root" (described as a
+  symlink) and marked the report incomplete; the staged scans (`secretloop staged`, so the pre-commit hook, and the
+  extension's **Scan Staged Files**) refused a staged `..env` the same way; the MCP server also refused a `..data`
+  directory under an allowed root, and the editor did not verify a workspace `..env`. Each of these now scans the
+  file, and with live verification on the extension verifies it like any other workspace file. A relative path now leaves the root only when its first segment
+  is exactly `..`, or it is absolute. Real `../` escapes and symlinks resolving outside are still excluded, and a
+  path that cannot be resolved still fails closed. Nested names such as `sub/..env` were never affected. In reports,
+  such files now produce findings and no longer make the report incomplete; `scopeDigest` does not change (a
+  working-tree scan's identity is its selection mode, not its file list), and `binaryDigest` changes if one of
+  these files is binary. The change is in `src/walk.ts`, `src/mcp-core.ts` and `src/extension.ts`, so `out/cli.js`,
+  `out/mcp.js` and `out/extension.js` all change. See
+  [what the scan discloses](docs/coverage.md#what-the-scan-discloses).
 - **Added: the JSON report says which findings carry the same credential.** A new top-level `credentialGroups` array
   lists each credential found in two or more places under one rule: the ids of its findings and how many distinct
   places they cover. Every finding gains a report-local `id` (`F1`, `F2`, …), and `summary` gains

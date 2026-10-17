@@ -103,7 +103,7 @@ sentence and the JSON `summary` carry:
 | `N file(s)` | files actually read |
 | `N generated file(s) excluded` | skipped by the generated-file group; `--include-generated` reads them |
 | `N finding(s) suppressed by inline directives` | spans a directive removed |
-| `N file(s) resolved outside the scan root` | symlinks whose target is outside |
+| `N file(s) resolved outside the scan root` | symlinks whose target is outside. A name that merely begins with `..` — `..env`, `..cfg/` — is inside and scanned (unreleased; before, such a name at the top of the root was counted here and skipped) |
 | `N generic finding(s) suppressed in test/fixture paths` | entropy-tier findings held back |
 | `N API description document(s) scanned without generic entropy` | documents the entropy tier skipped |
 | `N file(s) not scanned — larger than maxFileSizeBytes` | oversized files |
