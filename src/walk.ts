@@ -11,6 +11,7 @@ import {
   existsSync,
   constants as fsConstants,
   BigIntStats,
+  Dirent,
 } from "fs";
 import * as path from "path";
 import { spawnSync } from "child_process";
@@ -192,17 +193,30 @@ export function filterGenerated(
 }
 
 function walkDirectory(dir: string, root: string, acc: string[] = []): string[] {
-  let entries: string[];
+  let entries: Dirent[];
   try {
-    entries = readdirSync(dir);
+    entries = readdirSync(dir, { withFileTypes: true });
   } catch {
     return acc;
   }
   for (const entry of entries) {
-    if (entry === ".git" || entry === "node_modules") continue;
-    const full = path.join(dir, entry);
+    if (entry.name === ".git" || entry.name === "node_modules") continue;
+    const full = path.join(dir, entry.name);
     let stat;
     try {
+      // A link is listed, never walked, as `git ls-files` lists one: walking a
+      // link to `.` rescanned the tree once per level until the OS refused the
+      // path, two such links never finished, and a link to `..` enumerated the
+      // parent. Listed, a directory link is "not a regular file" inside the root
+      // and excluded outside it; a file link is read as before, and statSync
+      // still drops a link that resolves to nothing. The type comes from
+      // readdir, so other entries are stat'ed exactly as before; lstat confirms
+      // a link, since on Windows readdir may report any reparse point as one.
+      if (entry.isSymbolicLink() && lstatSync(full).isSymbolicLink()) {
+        statSync(full);
+        acc.push(path.relative(root, full).split(path.sep).join("/"));
+        continue;
+      }
       stat = statSync(full);
     } catch {
       continue;
