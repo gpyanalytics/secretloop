@@ -97,6 +97,14 @@ rest are reachable through *View all branch alerts*
 accessed 2026-09-12). The invocation properties are not part of that view, so
 the scope sentence — including any incomplete-coverage clause — is read from the
 SARIF file or the job log, not from the pull request.
+Each result's `artifactLocation.uri` is the path relative to the scan root as a
+URI reference: every segment is percent-encoded as UTF-8 and `/` kept, so
+`my dir/a#1.js` is written `my%20dir/a%231.js`. The characters RFC 3986 allows
+in a path segment stay literal, so an ordinary name is written as it is, and a
+`:` is encoded only in the first segment, where it would read as a scheme
+(unreleased; before, the path was written verbatim: a name holding `#`, `?`, `%`
+or a backslash resolved to another file, and one holding a space, a control or a
+non-ASCII character was not a valid URI reference). Partial fingerprints are not derived from the URI.
 An archive-member result names the archive as the physical artifact and the
 member as a logical location, with the line relative to the member, and the
 invocation properties carry the archive accounting. This has shipped since
