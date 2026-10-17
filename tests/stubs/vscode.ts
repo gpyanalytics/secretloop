@@ -75,6 +75,11 @@ export function setWorkspaceFolder(fsPath: string | undefined): void {
   workspaceFolders = fsPath === undefined ? undefined : [{ uri: { fsPath } }];
 }
 
+/** A multi-root workspace: every folder, in order. */
+export function setWorkspaceFolders(fsPaths: string[]): void {
+  workspaceFolders = fsPaths.map((fsPath) => ({ uri: { fsPath } }));
+}
+
 export const window = {
   showInformationMessage: async <T extends string>(
     message: string,
@@ -152,6 +157,17 @@ export const DiagnosticSeverity = {
 
 /** The lines an OutputChannel was given, so a test can read what was logged. */
 export const outputLines: string[] = [];
+
+/** What renderDiagnostics builds; only the fields it sets are modelled. */
+export class Diagnostic {
+  code?: string | number;
+  source?: string;
+  constructor(
+    readonly range: Range,
+    readonly message: string,
+    readonly severity: number
+  ) {}
+}
 
 export class Range {
   constructor(
@@ -308,6 +324,16 @@ export const workspace = {
     return workspaceFolders;
   },
   getWorkspaceFolder: (_uri: unknown) => workspaceFolders?.[0],
+  // Display only: the extension logs this and passes it to the scanner as the
+  // finding's path. Containment is never decided from it.
+  asRelativePath: (pathOrUri: string | { fsPath: string }, _includeWorkspaceFolder?: boolean): string => {
+    const fsPath = typeof pathOrUri === "string" ? pathOrUri : pathOrUri.fsPath;
+    for (const folder of workspaceFolders ?? []) {
+      const prefix = folder.uri.fsPath.endsWith("/") ? folder.uri.fsPath : `${folder.uri.fsPath}/`;
+      if (fsPath.startsWith(prefix)) return fsPath.slice(prefix.length);
+    }
+    return fsPath;
+  },
   // Backed by the real filesystem: these are genuine file operations and
   // faking them would only test the fake.
   fs: {

@@ -1,5 +1,7 @@
 import type { OpenedFileChecks } from "./walk";
+import { isInsideRoot } from "./walk";
 import * as vscode from "vscode";
+import { realpathSync } from "fs";
 import { ArchiveAccounting, emptyArchiveAccounting, hasArchiveActivity, mergeArchiveAccounting } from "./archive";
 import { scanText, maskFindings, Finding } from "./scanner";
 import {
@@ -233,7 +235,8 @@ function extensionVersion(context: vscode.ExtensionContext): string {
   return (context.extension?.packageJSON?.version as string) ?? "unknown";
 }
 
-async function scanDocument(document: vscode.TextDocument) {
+/** Exported for tests only: the extension host reaches it through the document events above. */
+export async function scanDocument(document: vscode.TextDocument) {
   if (document.uri.scheme !== "file") return;
 
   const threshold = setting<number>("entropyThreshold", 4.3);
@@ -265,11 +268,22 @@ async function scanDocument(document: vscode.TextDocument) {
     return;
   }
 
+  const verifiable = findings.filter((f) => isVerifiable(f.ruleId)).length;
+  // Only a file of the open workspace is ever sent; see workspaceFolderContaining.
+  // Its diagnostics above are unaffected either way.
+  if (verifiable > 0 && documentFolder(document) === undefined) {
+    log(
+      `SecretLoop: live verification is on (${describeOrigin("enableLiveVerification", verification.origin)}); ` +
+        `not checking ${verifiable} verifiable finding(s) in ${relPath}: outside every workspace folder.`
+    );
+    return;
+  }
+
   // Which branch was taken, and on whose authority. Without the origin, an
   // inherited user setting looks exactly like the shipped default.
   log(
     `SecretLoop: live verification is on (${describeOrigin("enableLiveVerification", verification.origin)}); ` +
-      `checking ${findings.filter((f) => isVerifiable(f.ruleId)).length} of ${findings.length} finding(s) in ${relPath}.`
+      `checking ${verifiable} of ${findings.length} finding(s) in ${relPath}.`
   );
 
   // Verification is async and network-bound; render initial diagnostics
@@ -296,6 +310,51 @@ async function scanDocument(document: vscode.TextDocument) {
 }
 
 /**
+ * The workspace folder a document really lives in, or undefined when it lives
+ * in none.
+ *
+ * Automatic verification sends a credential to its provider, so it is done only
+ * for a file of the workspace the user opened. Anything else the editor opens --
+ * a temporary file, a tool's transcript, a file of another project, any file in
+ * a window with no folder -- is still scanned and still gets its diagnostics,
+ * but nothing in it is sent, and no offer to turn verification on is made for
+ * it.
+ *
+ * Containment is by real path, under the rule the workspace scan already
+ * applies (isInsideRoot): a symlink inside a folder that resolves outside it is
+ * outside, and a path that cannot be resolved fails closed. Where path
+ * comparison is case-sensitive (macOS, Linux), so does a spelling the folder's
+ * own real path does not share, such as a case variant on a case-insensitive
+ * macOS volume; on Windows the comparison ignores case, as the filesystem does.
+ * Every folder of a multi-root workspace counts.
+ */
+export function workspaceFolderContaining(fsPath: string, folders: readonly string[]): string | undefined {
+  let real: string;
+  try {
+    real = realpathSync(fsPath);
+  } catch {
+    return undefined;
+  }
+  for (const folder of folders) {
+    let realFolder: string;
+    try {
+      realFolder = realpathSync(folder);
+    } catch {
+      continue;
+    }
+    const rel = path.relative(realFolder, real);
+    if (rel === "" || rel.startsWith("..") || path.isAbsolute(rel)) continue;
+    if (isInsideRoot(folder, rel)) return folder;
+  }
+  return undefined;
+}
+
+function documentFolder(document: vscode.TextDocument): string | undefined {
+  const folders = (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+  return workspaceFolderContaining(document.uri.fsPath, folders);
+}
+
+/**
  * Offers live verification the first time a scan turns up a credential that
  * could actually be checked.
  *
@@ -311,6 +370,12 @@ export interface PromptState {
   declinedThisSession: boolean;
   promptShown: boolean;
   declinedPermanently: boolean;
+  /**
+   * The document lies outside every workspace folder. Verification would not
+   * check it even if turned on, and "Enable" would turn it on everywhere and
+   * re-scan exactly this document -- so no offer is made for it.
+   */
+  outsideWorkspace?: boolean;
 }
 
 export type PromptSuppression =
@@ -319,6 +384,7 @@ export type PromptSuppression =
   | "already-prompted-this-session"
   | "declined-permanently"
   | "no-verifiable-finding"
+  | "outside-workspace"
   | "no-provider-name";
 
 export type PromptGate =
@@ -340,6 +406,7 @@ export function decideVerificationPrompt(findings: Finding[], state: PromptState
 
   const candidate = findings.find((f) => isVerifiable(f.ruleId));
   if (!candidate) return { show: false, reason: "no-verifiable-finding" };
+  if (state.outsideWorkspace) return { show: false, reason: "outside-workspace" };
 
   const provider = verificationProvider(candidate.ruleId);
   // Never ask permission to contact an unnamed party.
@@ -355,6 +422,8 @@ async function offerVerification(document: vscode.TextDocument, findings: Findin
     promptShown: verificationPromptShown,
     declinedPermanently:
       extensionContext?.globalState.get<boolean>(VERIFICATION_PROMPT_DECLINED_KEY) === true,
+    // Resolved only when a finding is verifiable: it touches the filesystem.
+    outsideWorkspace: findings.some((f) => isVerifiable(f.ruleId)) && documentFolder(document) === undefined,
   });
 
   if (!gate.show) {
