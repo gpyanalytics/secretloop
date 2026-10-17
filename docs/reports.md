@@ -743,8 +743,9 @@ this block.
 
 `credentialGroups` says which findings in the report carry the same credential,
 so a consumer can tell one credential copied into three files from three
-credentials without comparing values itself — which a redacted report would not
-let it do.
+credentials without comparing values or picking fingerprints apart — and for
+the rules whose fingerprint does not reveal it, without being able to tell at
+all (see [A group discloses equality](#a-group-discloses-equality) below).
 
 ```jsonc
 "credentialGroups": [
@@ -779,6 +780,11 @@ grouped:
 - **one value under two rules** — two different claims about the string — or
   one source text matched under two encodings.
 
+Where a rule captures only part of a credential — the password of a database
+connection string or of a basic-auth URL — the raw value is that part, so two
+accounts sharing one password are one group, exactly as the text report folds
+them into one entry.
+
 **A group needs two distinct occurrences.** An occurrence is one place in the
 scanned text: commit, file, line, column and span. A finding reported twice for
 one place is one occurrence: it makes no group and does not raise `occurrences`,
@@ -787,23 +793,41 @@ credential is referenced. A history report groups the same way: one credential i
 two commits is two occurrences.
 
 **Groups describe the report after filtering.** They are built from the findings
-the report emits — after the baseline, the allowlist, inline suppressions and
-`--fail-on` triage — so a member never names a finding the report omits, and an
-occurrence the baseline accepts neither appears in a group nor counts toward one.
+the report emits — after inline suppressions, the allowlist and the baseline have
+removed what they accept — so a member never names a finding the report omits,
+and an occurrence the baseline accepts neither appears in a group nor counts
+toward one. `--fail-on` removes nothing: it decides the exit code only.
 
 **The ids are positions, not identities.** `F` and `G` ids are assigned in the
 report's order, after sorting, and carry nothing from the credential. Scanning
-the same tree the same way gives the same ids, but adding, removing or reordering
-any finding can renumber the rest: one credential can be `G1` in one scan and `G3` in the
-next. Do not store them, compare them across reports, or treat either as a
-credential identity. The fingerprint is the per-occurrence identity, and
-`secretloop compare` reads neither ids nor groups.
+the same tree the same way on the same machine gives the same ids — the sort
+compares paths under the platform's locale rules — but adding, removing or
+reordering any finding can renumber the rest: one credential can be `G1` in one
+scan and `G3` in the next. Do not store them, compare them across reports, or
+treat either as a credential identity. The fingerprint is the per-occurrence
+identity, and `secretloop compare` reads neither ids nor groups.
 
-**A group discloses equality.** It holds no value, no part of one and no digest
-of one, with or without `--no-redact`. It does state that two findings carry the
-same credential, which a redacted report did not otherwise say — two different
-credentials can mask to the same text. Whoever can read a JSON report learns
-where each grouped credential was copied; handle the report accordingly.
+### A group discloses equality
+
+A group holds no value, no part of one and no digest of one, with or without
+`--no-redact`. What it does state is that two findings carry the same credential.
+
+**For most rules the report already said so.** A fingerprint built by the value
+strategy — the default — ends in a digest of the value, so two findings of one
+value under one rule share that digest in every file (see
+[The comparator](#the-comparator)); the redacted text report prints "N
+locations, same value" for the same pair. A group states the relationship
+outright instead of leaving it to be inferred.
+
+**For context-strategy rules it is new.** A rule whose fingerprint hashes the
+structure around the secret rather than the secret — connection strings,
+basic-auth URLs and the other context-strategy rules — gives two findings of one
+password different fingerprints, and two different passwords can mask to the
+same text. The text report has always folded such a pair into one entry, but
+nothing in a JSON report disclosed it; a group does.
+
+Whoever can read a JSON report learns where each grouped credential was copied;
+handle the report accordingly.
 
 **Descriptive, not comparison-bearing.** `schemaVersion` does not move: adding a
 descriptive field does not bump it (see the rule above), and nothing here decides

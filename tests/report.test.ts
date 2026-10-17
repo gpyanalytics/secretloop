@@ -609,7 +609,9 @@ test("10. finding and group ids are deterministic, in emitted order", () => {
   const input = [cred("b.env", 1, VALUE_C), cred("a.env", 1, VALUE_A), cred("d.env", 1, VALUE_C), cred("c.env", 1, VALUE_A)];
   const first = render(input, "json", opts);
   assert.strictEqual(render(input, "json", opts), first, "the same input renders the same report");
-  assert.strictEqual(render([...input].reverse(), "json", opts), first, "input order does not leak into ids");
+  // Distinct files: the sort orders them fully, so reversing the input changes nothing. Findings on one line keep
+  // the scanner's order, which is deterministic but not something this test reorders.
+  assert.strictEqual(render([...input].reverse(), "json", opts), first, "the sort, not the input order, decides the ids");
   const report: JsonReport = JSON.parse(first);
   assert.deepStrictEqual(report.findings.map((f) => `${f.id}:${f.file}`), ["F1:a.env", "F2:b.env", "F3:c.env", "F4:d.env"]);
   assert.deepStrictEqual(
@@ -627,7 +629,7 @@ test("11. references follow the emitted order after sorting, and a filtered-out 
   assert.strictEqual(report.findings[0].id, "F1");
   assert.deepStrictEqual(report.credentialGroups[0].findings, ["F1", "F2"]);
   assert.deepStrictEqual(membersOf(report, report.credentialGroups[0]).map((f) => f.file), ["z.env", "a.env"]);
-  // What the caller filtered out before rendering (baseline, allowlist, fail-on triage) is not in the report, so
+  // What was removed before rendering (inline suppression, the allowlist, the baseline) is not in the report, so
   // the credential it shared with a reported finding is no longer a group.
   assert.deepStrictEqual(json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_C)]).credentialGroups, []);
   assertReferencesResolve(report);
