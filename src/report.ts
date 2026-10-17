@@ -1,6 +1,7 @@
 import type { ComparisonMetadata } from "./report-metadata";
 import { Finding, UnknownReason, redactValue } from "./scanner";
 import { ArchiveAccounting, countOf } from "./archive";
+import { PKCS12_RULE_ID } from "./pkcs12";
 import type { OpenedFileChecks, CheckCounts } from "./walk";
 import { isFixturePath } from "./config";
 
@@ -541,12 +542,18 @@ function locationOf(f: Finding): string {
  *
  * Grouped by rule as well as value: the same string matching two rules is two
  * different claims about it, and merging them would report one.
+ *
+ * Never grouped: a PKCS#12 finding. Its value is not the credential but a
+ * synthesized description ("PKCS#12 keystore, N bytes, …"), so any two
+ * keystores of one size carry the same value, and "same value" would claim two
+ * different private keys are one. No content identity is derived here to
+ * compare them instead: each keystore stays its own entry.
  */
 function groupByValue(findings: Finding[]): Finding[][] {
   const groups = new Map<string, Finding[]>();
   const order: string[] = [];
-  for (const f of findings) {
-    const key = `${f.ruleId}\u0000${f.value}`;
+  for (const [i, f] of findings.entries()) {
+    const key = f.ruleId === PKCS12_RULE_ID ? `\u0001${i}` : `${f.ruleId}\u0000${f.value}`;
     const bucket = groups.get(key);
     if (bucket) bucket.push(f);
     else {
