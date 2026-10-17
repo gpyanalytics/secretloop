@@ -11,7 +11,10 @@ it against completeness.
 
 - **Working tree.** Files enumerated with `git ls-files --cached --others
   --exclude-standard` when git is available, so `.gitignore` is honoured;
-  otherwise a directory walk that skips `.git` and `node_modules`. Every path
+  otherwise a directory walk that skips `.git` and `node_modules` and lists a
+  symlink as one entry without walking through it (unreleased; before, it
+  followed directory links, so a link to `.` or `..` rescanned the tree or
+  never finished). Every path
   is checked to resolve inside the scan root, at enumeration and again at read:
   a committed symlink pointing outside the repository is dropped and counted,
   never followed.
@@ -109,7 +112,7 @@ sentence and the JSON `summary` carry:
 | `N file(s) not scanned — larger than maxFileSizeBytes` | oversized files |
 | `N file(s) not scanned — binary` | **New in 0.6.0.** A NUL byte in the first 8,000 bytes — intentionally out of scope, so it **does not** make the report incomplete. The bytes are read; the content is never scanned. Catches UTF-16/UTF-32 text too, and does not establish the file is secret-free |
 | `N file(s) not scanned — could not be read` | **New in 0.6.0.** The scan intended to read them and could not — permission, I/O, or a supported binary format it could not conclusively inspect |
-| `N path(s) not scanned — not a regular file` | **New in 0.6.0.** A directory, fifo, socket or device where a file was expected |
+| `N path(s) not scanned — not a regular file` | **New in 0.6.0.** A directory, fifo, socket or device where a file was expected, including a symlink to a directory inside the root (unreleased for a tree outside git, whose walk followed such links before) |
 | `N file(s) not scanned — gone before they could be read` | **New in 0.6.0.** Enumerated, then absent by the time the read reached them |
 | `N file(s) not scanned — replaced between inspection and read` | **New in 0.7.0.** The object the reader opened was not the object it had just inspected (device or inode differed). A positive observation of a substitution — outside content, or an inside file saved over the name in that instant; the check cannot tell which — and nothing is read from it. Counts against completeness |
 | `N file(s) excluded (symlinks resolving outside the scan root)` also counts, **new in 0.7.0**, a file whose opened descriptor the Linux kernel records as located outside the root at the check before its first read | Same clause and reason as the symlink case: the object is outside |

@@ -24,6 +24,16 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed: outside git, the scan no longer walks through directory symlinks.** When the root is not a git
+  repository, the CLI scan, the extension's workspace scan and the MCP server enumerate the tree themselves, and that
+  walk followed every directory link. A link to `.` scanned each file once per level until the OS refused the path
+  (33 times on macOS), two such links multiplied that until the scan never finished, and a link to `..` enumerated
+  the parent's tree and scanned the scan root again beneath it. The walk now lists a link without following it, as
+  `git ls-files` does: a directory link inside the root is counted as "not a regular file" (so the report is
+  incomplete, as it already was for a git-tracked directory link), one resolving outside is counted as "resolved
+  outside the scan root", a file link is read as before, and a broken link is still dropped. Real directories are
+  walked as before, and inside a git repository nothing changes. The change is in `src/walk.ts`. See
+  [what is scanned](docs/coverage.md#what-is-scanned).
 - **Fixed: files whose names git quotes are scanned and named correctly.** git C-quotes a name holding a non-ASCII
   character (under the default `core.quotePath`), a double quote, a backslash or a tab when it prints one name per
   line, and the quoted form (`"caf\303\251.js"`) names no file. In a git repository the CLI scan, the staged scan

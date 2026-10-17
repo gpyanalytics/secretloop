@@ -307,4 +307,88 @@ test("relativeEscapes reads the first segment with this platform's separator", (
   assert.strictEqual(relativeEscapes("..\\x"), process.platform === "win32");
 });
 
+suite("\ncontainment — the fallback walk lists a directory link and never walks it");
+
+/*
+ * Outside git, the walk enumerates the tree itself, and it followed every directory link: one link to `.` scanned
+ * each file once per level until the OS refused to resolve the path (33 times on macOS), two such links multiplied
+ * that until the scan never finished, and a link to `..` enumerated the parent's whole tree only to refuse it file by
+ * file. It now lists a directory reached through a link as one entry, as `git ls-files` does: inside the root it is
+ * "not a regular file", outside it is excluded as resolving outside the scan root. Real directories are walked as
+ * before, and file links are unchanged. The two-link case runs in a child process with a hard timeout, so the
+ * unchanged code fails the test instead of hanging the suite.
+ */
+const LINK_GENERIC = () => "pass" + 'word = "Qm7vR2xKp9Lw4Tz8Hc3N"\n';
+
+function dirLinkOrSkip(target: string, at: string): void {
+  try {
+    symlinkSync(target, at, "dir");
+  } catch (err: any) {
+    if (err?.code === "EPERM" || err?.code === "EACCES") skip("this account may not create directory symlinks");
+    throw err;
+  }
+}
+
+function boundedScan(dir: string): { status: number | null; report?: { findings: Array<{ file: string }>; summary: any; incomplete: boolean } } {
+  const r = spawnSync("node", [CLI, "scan", ".", "--format", "json", "--fail-on", "never"], {
+    cwd: dir,
+    encoding: "utf8",
+    timeout: 20000,
+    killSignal: "SIGKILL",
+    maxBuffer: 1 << 26,
+  });
+  return r.status === 0 ? { status: 0, report: JSON.parse(r.stdout) } : { status: r.status };
+}
+
+const scannedFiles = (r: { findings: Array<{ file: string }> }) => r.findings.map((f) => f.file).sort();
+
+test("a link to '.' is listed once and scanned nothing twice", () => {
+  withWorkspace((c) => {
+    writeFileSync(path.join(c.repo, "a.js"), LINK_GENERIC(), "utf8");
+    dirLinkOrSkip(".", path.join(c.repo, "self"));
+    const l = listFilesWithExclusions(c.repo, mergeConfig({}));
+    assert.deepStrictEqual([...l.files].sort(), ["a.js", "app.js", "self"], "the walk descended through the link");
+    const r = boundedScan(c.repo);
+    assert.strictEqual(r.status, 0, "the scan did not finish");
+    assert.deepStrictEqual(scannedFiles(r.report!), ["a.js"], "a file was scanned more than once");
+  });
+});
+
+test("two links to '.' do not hang the scan", () => {
+  withWorkspace((c) => {
+    writeFileSync(path.join(c.repo, "a.js"), LINK_GENERIC(), "utf8");
+    dirLinkOrSkip(".", path.join(c.repo, "s1"));
+    dirLinkOrSkip(".", path.join(c.repo, "s2"));
+    const r = boundedScan(c.repo);
+    assert.strictEqual(r.status, 0, "the scan did not finish within 20 s");
+    assert.deepStrictEqual(scannedFiles(r.report!), ["a.js"]);
+  });
+});
+
+test("a link to '..' is one exclusion, and nothing of the parent is enumerated", () => {
+  withWorkspace((c) => {
+    writeFileSync(path.join(c.repo, "a.js"), LINK_GENERIC(), "utf8");
+    dirLinkOrSkip("..", path.join(c.repo, "up"));
+    const l = listFilesWithExclusions(c.repo, mergeConfig({}));
+    assert.deepStrictEqual([...l.files].sort(), ["a.js", "app.js"]);
+    assert.strictEqual(l.outsideExcluded, 1, "the parent's files were enumerated and refused one by one");
+    const r = boundedScan(c.repo);
+    assert.match(r.report!.summary.scope, /1 file\(s\) excluded \(symlinks resolving outside the scan root\)/);
+    assert.deepStrictEqual(scannedFiles(r.report!), ["a.js"]);
+  });
+});
+
+test("a link to a real directory inside the root does not scan it a second time", () => {
+  withWorkspace((c) => {
+    mkdirSync(path.join(c.repo, "sub"), { recursive: true });
+    writeFileSync(path.join(c.repo, "sub", "x.js"), LINK_GENERIC(), "utf8");
+    dirLinkOrSkip("sub", path.join(c.repo, "lnk"));
+    const r = boundedScan(c.repo);
+    assert.strictEqual(r.status, 0);
+    assert.deepStrictEqual(scannedFiles(r.report!), ["sub/x.js"], "the linked directory was scanned again");
+    assert.strictEqual(r.report!.incomplete, true, "the unwalked link is disclosed, as git's listing of it is");
+    assert.ok(JSON.stringify(r.report!.summary.coverage?.limitations).includes("not a regular file"));
+  });
+});
+
 finish();
