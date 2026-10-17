@@ -7,11 +7,23 @@ does when it runs, so it was not released on its own. It will ship with the next
 one that changes SecretLoop's behaviour, unless a security or compatibility fix calls for an earlier release. That
 release's version number and date are not decided.*
 
+- **Added: the JSON report says which findings carry the same credential.** A new top-level `credentialGroups` array
+  lists each credential found in two or more places under one rule: the ids of its findings and how many distinct
+  places they cover. Every finding gains a report-local `id` (`F1`, `F2`, …), and `summary` gains
+  `credentialGroupCount` and `groupedFindingCount`. Findings are grouped by rule, encoding and raw value compared in
+  memory; no value, part of one or digest is written, and PKCS#12 findings are never grouped. The ids are positions
+  in one report, not identities, and change between scans. A group does disclose that two findings hold the same
+  credential. Between ordinary files, value-strategy fingerprints already revealed that; for archive members, whose
+  fingerprints also cover the container and member path, and for context-strategy findings (connection strings,
+  basic-auth URLs) the JSON report did not say it before. Additive: `schemaVersion` stays 5, every existing field
+  keeps its name, position and meaning, and the text report, SARIF, baselines, `compare` and MCP responses are
+  unchanged. The change is in `src/report.ts`;
+  `out/mcp.js` does not use it. See [credential groups](docs/reports.md#credential-groups).
 - **Fixed: the text report no longer calls two different PKCS#12 keystores "the same value".** A PKCS#12 finding's
   value is a description of the keystore (`PKCS#12 keystore, N bytes, private-key material present`), not the
   credential, so two different keystores of the same size were folded into one entry under "2 locations, same
-  value". Each keystore is now its own entry. Every other finding groups exactly as before, and JSON, SARIF,
-  fingerprints and baselines are unchanged. The change is in `src/report.ts`, so `out/cli.js` and `out/extension.js`
+  value". Each keystore is now its own entry. Every other finding groups exactly as before, and this fix leaves JSON,
+  SARIF, fingerprints and baselines unchanged. The change is in `src/report.ts`, so `out/cli.js` and `out/extension.js`
   no longer build byte-identical to 0.7.2; `out/mcp.js` does not use the text report.
 - **Packaged manifest changed.** `package.json`, which ships in both the npm package and the VSIX, is not identical
   to 0.7.2: its `test` script gains one entry at the end (#151).

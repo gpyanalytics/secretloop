@@ -2,6 +2,8 @@ import { render, sortFindings } from "../src/report";
 import { Finding } from "../src/scanner";
 import { PKCS12_RULE_ID } from "../src/pkcs12";
 import { test, suite, finish, assert } from "./harness";
+import { readFileSync } from "fs";
+import * as path from "path";
 
 suite("report.ts");
 
@@ -477,6 +479,222 @@ test("control: one value under two different rules stays two entries", () => {
   const value = "ghp_Q7mK2xVb9RtL4nWz8YcP1sDf6HjA3uEgT5oN";
   const out = render([finding({ value, file: "a.js" }), finding({ ruleId: "generic-api-key", value, file: "b.js" })], "text", opts);
   assert.ok(!out.includes("same value"), "two rules are two different claims about the string");
+});
+
+suite("\nreport.ts — credential groups in the JSON report");
+
+// The JSON report says which findings carry the same credential, so a consumer never has to compare values itself.
+// These values are synthetic and match no provider format: no detector runs here, so none is needed.
+interface JsonFinding { id: string; file: string | null; line: number; value: string; [key: string]: unknown }
+interface JsonGroup { id: string; ruleId: string; findings: string[]; occurrences: number }
+interface JsonReport {
+  summary: Record<string, unknown>;
+  findings: JsonFinding[];
+  credentialGroups: JsonGroup[];
+  [key: string]: unknown;
+}
+
+const VALUE_A = "fixture-value-A-0001";
+const VALUE_B = "fixture-value-B-0001"; // same length, first four and last four as VALUE_A: the masks are identical
+const VALUE_C = "fixture-value-C-0002";
+
+const cred = (file: string, line: number, value: string, overrides: Partial<Finding> = {}): Finding =>
+  finding({
+    ruleId: "generic-password",
+    description: "Hardcoded password",
+    severity: "high",
+    value,
+    file,
+    line,
+    column: 1,
+    startIndex: line * 100,
+    endIndex: line * 100 + value.length,
+    fingerprint: `${file}:generic-password:${String(line).padStart(16, "0")}`,
+    ...overrides,
+  });
+
+const json = (findings: Finding[], options = opts): JsonReport => JSON.parse(render(findings, "json", options));
+
+/** Every group member names a finding the report actually emits, and every finding id is unique. */
+function assertReferencesResolve(report: JsonReport): void {
+  const ids = report.findings.map((f) => f.id);
+  assert.strictEqual(new Set(ids).size, ids.length, "finding ids are unique");
+  for (const g of report.credentialGroups) {
+    for (const member of g.findings) assert.ok(ids.includes(member), `${g.id} names ${member}, which the report does not emit`);
+  }
+}
+
+const membersOf = (report: JsonReport, group: JsonGroup) =>
+  group.findings.map((id) => report.findings.find((f) => f.id === id)!);
+
+test("1. one credential in two files is one group of two findings", () => {
+  const report = json([cred("config/dev.env", 3, VALUE_A), cred("src/settings.ts", 12, VALUE_A)]);
+  assert.strictEqual(report.credentialGroups.length, 1);
+  const [g] = report.credentialGroups;
+  assert.strictEqual(g.id, "G1");
+  assert.strictEqual(g.ruleId, "generic-password");
+  assert.strictEqual(g.occurrences, 2);
+  assert.deepStrictEqual(membersOf(report, g).map((f) => f.file), ["config/dev.env", "src/settings.ts"]);
+  assertReferencesResolve(report);
+});
+
+test("2. one credential in three files is one group of three", () => {
+  const report = json([cred("config/dev.env", 3, VALUE_A), cred("src/settings.ts", 12, VALUE_A), cred("deploy/app.yml", 5, VALUE_A)]);
+  assert.strictEqual(report.credentialGroups.length, 1);
+  assert.strictEqual(report.credentialGroups[0].occurrences, 3);
+  assert.strictEqual(report.credentialGroups[0].findings.length, 3);
+  assertReferencesResolve(report);
+});
+
+test("3. the same rule with different values is not grouped", () => {
+  const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_C)]);
+  assert.deepStrictEqual(report.credentialGroups, []);
+});
+
+test("4. the same value under different rules is not grouped", () => {
+  const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_A, { ruleId: "generic-api-key" })]);
+  assert.deepStrictEqual(report.credentialGroups, [], "two rules are two different claims about the string");
+});
+
+test("4b. the same source text matched under different encodings is not grouped", () => {
+  const report = json([cred("a.env", 1, VALUE_A, { encoding: "base64" }), cred("b.env", 1, VALUE_A, { encoding: "hex" })]);
+  assert.deepStrictEqual(report.credentialGroups, [], "a different transform is a different decoded credential");
+});
+
+test("5. different values with identical redacted displays are not grouped", () => {
+  const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_B)]);
+  assert.strictEqual(report.findings[0].value, report.findings[1].value, "the two masks really are identical");
+  assert.deepStrictEqual(report.credentialGroups, [], "a matching mask is not a matching credential");
+});
+
+test("6. different PKCS#12 keystores of one displayed size are not grouped", () => {
+  const report = json([keystore("a/client.p12", "1111111111111111"), keystore("b/client.p12", "2222222222222222")]);
+  assert.deepStrictEqual(report.credentialGroups, [], "equal descriptions are not equal credentials");
+});
+
+test("7. findings with no reliable raw value are never grouped", () => {
+  // A keystore's value is a description, even when the fingerprints agree; an empty value identifies nothing.
+  const report = json([
+    keystore("a/client.p12", "3333333333333333"),
+    keystore("b/client.p12", "3333333333333333"),
+    cred("a.env", 1, ""),
+    cred("b.env", 1, ""),
+  ]);
+  assert.deepStrictEqual(report.credentialGroups, []);
+});
+
+test("8. a credential seen once has no group", () => {
+  const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_C)]);
+  assert.deepStrictEqual(report.credentialGroups, []);
+  assert.deepStrictEqual(report.findings.map((f) => f.id), ["F1", "F2"], "ungrouped findings still carry an id");
+});
+
+test("9. a duplicated occurrence does not inflate a group or make one", () => {
+  const once = cred("a.env", 1, VALUE_A);
+  assert.deepStrictEqual(json([once, { ...once }]).credentialGroups, [], "one occurrence reported twice is not two");
+  const report = json([once, { ...once }, cred("b.env", 4, VALUE_A)]);
+  assert.strictEqual(report.credentialGroups.length, 1);
+  assert.strictEqual(report.credentialGroups[0].occurrences, 2, "counts distinct occurrences, not findings");
+  assert.strictEqual(report.credentialGroups[0].findings.length, 3, "every emitted finding of the credential is a member");
+  assertReferencesResolve(report);
+});
+
+test("9b. one value twice on one line is two occurrences", () => {
+  const report = json([cred("a.env", 1, VALUE_A), cred("a.env", 1, VALUE_A, { column: 30, startIndex: 129, endIndex: 149 })]);
+  assert.strictEqual(report.credentialGroups.length, 1);
+  assert.strictEqual(report.credentialGroups[0].occurrences, 2);
+});
+
+test("10. finding and group ids are deterministic, in emitted order", () => {
+  const input = [cred("b.env", 1, VALUE_C), cred("a.env", 1, VALUE_A), cred("d.env", 1, VALUE_C), cred("c.env", 1, VALUE_A)];
+  const first = render(input, "json", opts);
+  assert.strictEqual(render(input, "json", opts), first, "the same input renders the same report");
+  // Distinct files: the sort orders them fully, so reversing the input changes nothing. Findings on one line keep
+  // the scanner's order, which is deterministic but not something this test reorders.
+  assert.strictEqual(render([...input].reverse(), "json", opts), first, "the sort, not the input order, decides the ids");
+  const report: JsonReport = JSON.parse(first);
+  assert.deepStrictEqual(report.findings.map((f) => `${f.id}:${f.file}`), ["F1:a.env", "F2:b.env", "F3:c.env", "F4:d.env"]);
+  assert.deepStrictEqual(
+    report.credentialGroups.map((g) => `${g.id}:${g.findings.join(",")}`),
+    ["G1:F1,F3", "G2:F2,F4"],
+    "groups are numbered by where their first member appears"
+  );
+});
+
+test("11. references follow the emitted order after sorting, and a filtered-out member leaves no orphan", () => {
+  // The live finding sorts first, so it is F1 whatever its input position.
+  const live = cred("z.env", 9, VALUE_A, { verifyStatus: "live" });
+  const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_C), live]);
+  assert.strictEqual(report.findings[0].file, "z.env");
+  assert.strictEqual(report.findings[0].id, "F1");
+  assert.deepStrictEqual(report.credentialGroups[0].findings, ["F1", "F2"]);
+  assert.deepStrictEqual(membersOf(report, report.credentialGroups[0]).map((f) => f.file), ["z.env", "a.env"]);
+  // What was removed before rendering (inline suppression, the allowlist, the baseline) is not in the report, so
+  // the credential it shared with a reported finding is no longer a group.
+  assert.deepStrictEqual(json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_C)]).credentialGroups, []);
+  assertReferencesResolve(report);
+});
+
+test("12. groups carry no value, no part of one, and no secret-derived identifier", () => {
+  for (const redact of [true, false]) {
+    const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_A)], { ...opts, redact });
+    const groups = JSON.stringify(report.credentialGroups);
+    for (const fragment of [VALUE_A, VALUE_A.slice(0, 4), VALUE_A.slice(-4), "fixture"]) {
+      assert.ok(!groups.includes(fragment), `credentialGroups disclosed "${fragment}" (redact=${redact})`);
+    }
+    for (const g of report.credentialGroups) {
+      assert.deepStrictEqual(Object.keys(g), ["id", "ruleId", "findings", "occurrences"], "a group holds nothing else");
+      assert.match(g.id, /^G[1-9]\d*$/);
+      for (const member of g.findings) assert.match(member, /^F[1-9]\d*$/);
+    }
+  }
+  // Positional, not derived: changing the credential leaves every id unchanged.
+  const one = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_A)]);
+  const other = json([cred("a.env", 1, VALUE_C), cred("b.env", 1, VALUE_C)]);
+  assert.deepStrictEqual(other.credentialGroups, one.credentialGroups);
+  assert.deepStrictEqual(other.findings.map((f) => f.id), one.findings.map((f) => f.id));
+});
+
+test("13. every existing JSON field keeps its name, position and value", () => {
+  const report = json([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_A)]);
+  assert.deepStrictEqual(Object.keys(report), ["tool", "summary", "findings", "credentialGroups"], "additions come last");
+  assert.deepStrictEqual(Object.keys(report.findings[0]), [
+    "ruleId", "description", "severity", "confidence", "verifyStatus", "verifyReason", "verifyDetail",
+    "file", "line", "commit", "fingerprint", "alsoMatched", "value", "id",
+  ]);
+  assert.deepStrictEqual(Object.keys(report.summary), [
+    "total", "scope", "scannedCount", "scopeNoun", "confirmedLive", "bySeverity", "byLiveness",
+    "credentialGroupCount", "groupedFindingCount",
+  ]);
+  assert.strictEqual(report.summary.total, 2, "total still counts findings, not groups");
+  assert.strictEqual(report.findings.length, 2, "grouping does not merge findings");
+  assert.strictEqual(report.summary.credentialGroupCount, 1);
+  assert.strictEqual(report.summary.groupedFindingCount, 2);
+  assert.strictEqual(report.findings[1].fingerprint, "b.env:generic-password:0000000000000001");
+});
+
+test("14. the text report still groups exactly as before and names no report-local id", () => {
+  const out = render([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_A)], "text", opts);
+  assert.match(out, /2 locations, same value:/);
+  assert.ok(!/\b[FG]1\b/.test(out) && !out.includes("credentialGroups"), "ids belong to the JSON report only");
+  assert.ok(!render([keystore("a/client.p12", "1"), keystore("b/client.p12", "2")], "text", opts).includes("same value"));
+});
+
+test("15. SARIF gains nothing, and the MCP server does not reach the JSON reporter", () => {
+  const sarif = render([cred("a.env", 1, VALUE_A), cred("b.env", 1, VALUE_A)], "sarif", opts);
+  assert.ok(!sarif.includes("credentialGroups") && !sarif.includes('"F1"') && !sarif.includes('"G1"'));
+  const src = (name: string) => readFileSync(path.join(__dirname, "..", "src", name), "utf8");
+  for (const name of ["mcp.ts", "mcp-core.ts"]) {
+    assert.ok(!/from "\.\/report"|import\("\.\/report"\)/.test(src(name)), `${name} now imports the reporter`);
+  }
+});
+
+test("16. an empty report has an empty group list and zero counts", () => {
+  const report = json([]);
+  assert.deepStrictEqual(report.findings, []);
+  assert.deepStrictEqual(report.credentialGroups, [], "present and empty: grouping ran and found nothing");
+  assert.strictEqual(report.summary.credentialGroupCount, 0);
+  assert.strictEqual(report.summary.groupedFindingCount, 0);
 });
 
 finish();

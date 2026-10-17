@@ -63,15 +63,23 @@ illustrative, not a claim about which release carries these fields.
     },
     "confirmedLive": 0,
     "bySeverity": {},
-    "byLiveness": {}
+    "byLiveness": {},
+    // Unreleased: see "Credential groups" below
+    "credentialGroupCount": 0,
+    "groupedFindingCount": 0
   },
 
-  "findings": [ /* unchanged */ ]
+  "findings": [ /* unchanged, plus one `id` per finding */ ],
+
+  // Unreleased: which findings carry the same credential
+  "credentialGroups": []
 }
 ```
 
-**The findings array is untouched.** Its fields, their order and the fingerprint
-are exactly what they were; `column` remains internal and does not appear here.
+**The findings array keeps every field it had.** Their names, their order and the
+fingerprint are exactly what they were; each finding gains one field after them,
+`id`, described under [Credential groups](#credential-groups). `column` remains
+internal and does not appear here.
 
 ## The rule that shapes everything: absent means unknown
 
@@ -729,10 +737,115 @@ check **refusal** makes the report `incomplete` and therefore ineligible,
 because the scan did not cover that file. The comparator reads nothing from
 this block.
 
+## Credential groups
+
+**Unreleased.** On `main` after 0.7.2; no published release emits these fields.
+
+`credentialGroups` says which findings in the report carry the same credential,
+so a consumer can tell one credential copied into three files from three
+credentials without comparing values or picking fingerprints apart — and for
+the findings whose fingerprint does not reveal it, without being able to tell at
+all (see [A group discloses equality](#a-group-discloses-equality) below).
+
+```jsonc
+"credentialGroups": [
+  { "id": "G1", "ruleId": "generic-password", "findings": ["F1", "F3", "F4"], "occurrences": 3 }
+]
+```
+
+| field | meaning |
+|---|---|
+| `id` | `G1`, `G2`, … numbered by where the group's first member appears in `findings` |
+| `ruleId` | the rule every member was reported under |
+| `findings` | the members' finding `id`s, in report order; each names a finding this report emits |
+| `occurrences` | how many distinct places in the scanned text the members cover |
+
+Every finding carries an `id` — `F1`, `F2`, … its position in `findings` —
+grouped or not. `summary.credentialGroupCount` is the number of groups and
+`summary.groupedFindingCount` the number of findings that belong to one.
+`credentialGroups` is always present; empty means no credential was found in two
+places.
+
+**Same credential means the same rule, the same raw value and the same encoding
+transform**, compared in memory while the report is rendered. Nothing that can be
+equal for two different credentials takes part: not the masked value, its length,
+the fingerprint or its digest, the provider or the verification status. Never
+grouped:
+
+- **a PKCS#12 finding.** Its value is a description of the keystore
+  (`PKCS#12 keystore, N bytes, private-key material present`), which any two
+  keystores of one size share. No content identity is derived to compare
+  keystores instead, so even byte-identical keystores stay apart;
+- **a finding with an empty value**, which identifies nothing;
+- **one value under two rules** — two different claims about the string — or
+  one source text matched under two encodings.
+
+Where a rule captures only part of a credential — the password of a database
+connection string or of a basic-auth URL — the raw value is that part, so two
+accounts sharing one password are one group, exactly as the text report folds
+them into one entry.
+
+**A group needs two distinct occurrences.** An occurrence is one place in the
+scanned text: commit, file, line, column and span. A finding reported twice for
+one place is one occurrence: it makes no group and does not raise `occurrences`,
+though it is still listed in `findings`, so every emitted finding of a grouped
+credential is referenced. A history report groups the same way: one credential in
+two commits is two occurrences.
+
+**Groups describe the report after filtering.** They are built from the findings
+the report emits — after inline suppressions, the allowlist and the baseline have
+removed what they accept — so a member never names a finding the report omits,
+and an occurrence the baseline accepts neither appears in a group nor counts
+toward one. `--fail-on` removes nothing: it decides the exit code only.
+
+**The ids are positions, not identities.** `F` and `G` ids are assigned in the
+report's order, after sorting, and carry nothing from the credential. Scanning
+the same tree the same way on the same machine gives the same ids — the sort
+compares paths under the platform's locale rules — but adding, removing or
+reordering any finding can renumber the rest: one credential can be `G1` in one
+scan and `G3` in the next. Do not store them, compare them across reports, or
+treat either as a credential identity. The fingerprint is the per-occurrence
+identity, and `secretloop compare` reads neither ids nor groups.
+
+**Descriptive, not comparison-bearing.** `schemaVersion` does not move: adding a
+descriptive field does not bump it (see the rule above), and nothing here decides
+eligibility. SARIF, the text report, the baseline format and the MCP server's
+responses are unchanged.
+
+### A group discloses equality
+
+A group holds no value, no part of one and no digest of one, with or without
+`--no-redact`. What it does state is that two findings carry the same credential.
+
+**For most findings in ordinary files the report already said so.** A
+fingerprint built by the value strategy — the default — ends in a digest of the
+value, so two findings of one value under one rule in two ordinary files share
+that digest (see [The comparator](#the-comparator)); the redacted text report
+prints "N locations, same value" for the same pair. A group states the
+relationship outright instead of leaving it to be inferred.
+
+**For archive members it is new.** A finding inside an archive is fingerprinted
+with its container and member path hashed in alongside the value, so it and any
+other finding of the same credential — another member, or an ordinary file —
+have different digests. Nothing in a JSON report showed that they match; a group
+does.
+
+**For context-strategy rules it is new.** A rule whose fingerprint hashes the
+structure around the secret rather than the secret — connection strings,
+basic-auth URLs and the other context-strategy rules — gives two findings of one
+password different fingerprints, and two different passwords can mask to the
+same text. The text report has always folded such a pair into one entry, but
+nothing in a JSON report disclosed it; a group does.
+
+Whoever can read a JSON report learns where each grouped credential was copied;
+handle the report accordingly.
+
 ## Compatibility
 
 - **Additive.** Every pre-existing field keeps its name, position and meaning.
-  No consumer that reads `tool`, `summary` or `findings` needs to change.
+  No consumer that reads `tool`, `summary` or `findings` needs to change. The
+  unreleased credential-group fields — `credentialGroups`, each finding's `id`
+  and the two `summary` counts — come after every field that was there before.
 - **Older reports stay readable.** A report produced before this metadata
   existed parses exactly as it always did. It is simply **ineligible for
   comparison**, because the fields a comparison requires are absent — and absent

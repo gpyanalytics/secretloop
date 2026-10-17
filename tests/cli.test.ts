@@ -12,7 +12,7 @@ import {
 import { checkNodeVersion, MIN_NODE } from "../src/node-guard";
 import { Finding } from "../src/scanner";
 import { test, suite, finish, assert } from "./harness";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
@@ -792,6 +792,88 @@ test("--include-entropy is distinct from mask's --entropy", () => {
   assert.strictEqual(parseArgs(["mask", "--entropy"]).includeEntropy, false);
   assert.ok(HELP.includes("--include-entropy"), "the scan flag is undocumented");
   assert.ok(HELP.includes("mask ONLY:"), "mask's --entropy no longer names its scope");
+});
+
+suite("cli.ts — credential groups in the JSON report, end to end");
+
+/**
+ * The built CLI, a real scan and the real JSON path. Both values are generic high-entropy strings matching no provider
+ * format, assembled here so the literal never sits in source; only the generic tier reports them, and nothing is
+ * verified.
+ */
+const GROUPED_A = "Zk9pQ2xR8mLt" + "W3vXyB7nD1sF4jH6uK0eA5";
+const GROUPED_B = "Qm4tR7vXc2Lp" + "W9nBy5KdF8sJ1hU6eA3zG0";
+
+interface GroupedReport {
+  schemaVersion: number;
+  summary: { total: number; credentialGroupCount: number; groupedFindingCount: number };
+  findings: Array<{ id: string; file: string; ruleId: string }>;
+  credentialGroups: Array<{ id: string; ruleId: string; findings: string[]; occurrences: number }>;
+}
+
+function scanGrouped(dir: string, extra: string[] = []): { report: GroupedReport; stdout: string } {
+  const res = spawnSync(
+    "node",
+    [CLI_PATH, "scan", ".", "--format", "json", "--fail-on", "never", "--include-entropy", ...extra],
+    { encoding: "utf8", cwd: dir }
+  );
+  assert.strictEqual(res.status, 0, `exit ${res.status}: ${res.stderr}`);
+  return { report: JSON.parse(res.stdout) as GroupedReport, stdout: res.stdout };
+}
+
+function plant(dir: string, rel: string, value: string): void {
+  mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true });
+  writeFileSync(path.join(dir, rel), `value = "${value}"\n`, "utf8");
+}
+
+const filesOf = (report: GroupedReport, ids: string[]) => ids.map((id) => report.findings.find((f) => f.id === id)?.file);
+
+test("one credential in three files is one group naming the three findings the report emits", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-groups-"));
+  try {
+    plant(dir, "config/dev.js", GROUPED_A);
+    plant(dir, "src/settings.js", GROUPED_A);
+    plant(dir, "deploy/app.js", GROUPED_A);
+    plant(dir, "other.js", GROUPED_B);
+    const { report, stdout } = scanGrouped(dir);
+    assert.strictEqual(report.summary.total, 4, "every occurrence is still its own finding");
+    assert.strictEqual(report.schemaVersion, 5, "an additive descriptive field does not move the schema version");
+    assert.strictEqual(report.credentialGroups.length, 1, "the second credential appears once and has no group");
+    const [g] = report.credentialGroups;
+    assert.strictEqual(g.id, "G1");
+    assert.strictEqual(g.ruleId, "generic-high-entropy");
+    assert.strictEqual(g.occurrences, 3);
+    assert.deepStrictEqual(filesOf(report, g.findings), ["config/dev.js", "deploy/app.js", "src/settings.js"]);
+    assert.strictEqual(report.summary.credentialGroupCount, 1);
+    assert.strictEqual(report.summary.groupedFindingCount, 3);
+    assert.ok(!stdout.includes(GROUPED_A) && !stdout.includes(GROUPED_B), "a raw value reached the report");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a baselined occurrence leaves the group, and the group names only findings still reported", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-groups-"));
+  const store = mkdtempSync(path.join(tmpdir(), "secretloop-groups-baseline-"));
+  const baseline = path.join(store, "baseline.json");
+  try {
+    plant(dir, "config/dev.js", GROUPED_A);
+    const write = spawnSync("node", [CLI_PATH, "scan", ".", "--include-entropy", "--write-baseline", baseline], {
+      encoding: "utf8",
+      cwd: dir,
+    });
+    assert.strictEqual(write.status, 0, `exit ${write.status}: ${write.stderr}`);
+    plant(dir, "src/settings.js", GROUPED_A);
+    plant(dir, "deploy/app.js", GROUPED_A);
+    const { report } = scanGrouped(dir, ["--baseline", baseline]);
+    assert.deepStrictEqual(report.findings.map((f) => f.file), ["deploy/app.js", "src/settings.js"], "the baseline applied");
+    assert.strictEqual(report.credentialGroups.length, 1);
+    assert.strictEqual(report.credentialGroups[0].occurrences, 2, "the accepted occurrence is not counted");
+    assert.deepStrictEqual(filesOf(report, report.credentialGroups[0].findings), ["deploy/app.js", "src/settings.js"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(store, { recursive: true, force: true });
+  }
 });
 
 finish();
