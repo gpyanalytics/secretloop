@@ -527,7 +527,9 @@ function locationOf(f: Finding): string {
 /**
  * Occurrences of one credential, collapsed into one entry.
  *
- * Purely a rendering concern, and confined to the text report on purpose. One
+ * Purely a rendering concern of the text report. (The JSON report states the
+ * relationship as data instead, without merging anything: see
+ * credentialGroupsOf, whose notion of "same credential" is stricter.) One
  * leaked value copied into forty files is one thing to rotate, and printing it
  * forty times buries the other findings underneath it — on the real-noise
  * corpus the single worst value accounts for 43 of the occurrences in the
@@ -598,7 +600,76 @@ function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): s
   return out;
 }
 
+/**
+ * Findings in one JSON report that carry the same credential.
+ *
+ * The machine-readable counterpart of the text report's "N locations, same
+ * value", so a consumer can tell one leaked credential copied into three files
+ * from three credentials without comparing values itself -- which a redacted
+ * report would not let it do, and which an unredacted one should not need.
+ *
+ * Members are named by the report-local finding ids (`F1`, …) and groups are
+ * numbered `G1`, … by where their first member appears. Both are positions in
+ * THIS report: they carry nothing from the credential, and the same credential
+ * gets a different id in the next scan whenever anything before it changes.
+ * They are not identities and must not be stored as such; the fingerprint is.
+ *
+ * Same credential means exactly: the same rule, the same encoding transform and
+ * the same raw value, compared in memory and never written out. No masked form,
+ * length, fingerprint or digest takes part, because each of those can be equal
+ * for two different credentials. Two kinds of finding are never grouped:
+ * - a PKCS#12 finding, whose value is a synthesized description of the keystore
+ *   ("PKCS#12 keystore, N bytes, …") that any two keystores of one size share;
+ * - a finding with an empty value, which identifies nothing.
+ *
+ * A group needs two distinct occurrences. An occurrence is a place in the
+ * scanned text -- commit, file, line, column and span -- so a finding reported
+ * twice for one place makes no group, and does not inflate `occurrences` in a
+ * group it belongs to. Every emitted finding of a grouped credential is listed,
+ * the duplicate included, so no emitted finding of it is left unreferenced.
+ *
+ * Built from the findings being rendered, after the caller's baseline and
+ * triage and after sorting, so every member names a finding this report emits.
+ */
+interface CredentialGroup {
+  id: string;
+  ruleId: string;
+  findings: string[];
+  occurrences: number;
+}
+
+function credentialGroupsOf(findings: Finding[], ids: string[]): CredentialGroup[] {
+  // Insertion order is first-member order, which is what numbers the groups.
+  const byCredential = new Map<string, number[]>();
+  for (const [i, f] of findings.entries()) {
+    if (f.ruleId === PKCS12_RULE_ID || f.value === "") continue;
+    const key = `${f.ruleId}\u0000${f.encoding ?? ""}\u0000${f.value}`;
+    const members = byCredential.get(key);
+    if (members) members.push(i);
+    else byCredential.set(key, [i]);
+  }
+  const groups: CredentialGroup[] = [];
+  for (const members of byCredential.values()) {
+    const occurrences = new Set(members.map((i) => occurrenceOf(findings[i]))).size;
+    if (occurrences < 2) continue;
+    groups.push({
+      id: `G${groups.length + 1}`,
+      ruleId: findings[members[0]].ruleId,
+      findings: members.map((i) => ids[i]),
+      occurrences,
+    });
+  }
+  return groups;
+}
+
+function occurrenceOf(f: Finding): string {
+  return [f.commit ?? "", f.file ?? "", f.line, f.column ?? "", f.startIndex, f.endIndex].join("\u0000");
+}
+
 function renderJson(findings: Finding[], options: ReportOptions): string {
+  // Report-local, positional and secret-free; see credentialGroupsOf.
+  const ids = findings.map((_, i) => `F${i + 1}`);
+  const credentialGroups = credentialGroupsOf(findings, ids);
   return JSON.stringify(
     {
       tool: "secretloop",
@@ -630,8 +701,10 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
           unknown: findings.filter((f) => f.verifyStatus === "unknown").length,
           unchecked: findings.filter((f) => f.verifyStatus === undefined).length,
         },
+        credentialGroupCount: credentialGroups.length,
+        groupedFindingCount: credentialGroups.reduce((n, g) => n + g.findings.length, 0),
       },
-      findings: findings.map((f) => ({
+      findings: findings.map((f, i) => ({
         ruleId: f.ruleId,
         description: f.description,
         severity: f.severity,
@@ -650,7 +723,9 @@ function renderJson(findings: Finding[], options: ReportOptions): string {
         // Rules that matched the same span and yielded to this one.
         alsoMatched: f.alsoMatched ?? null,
         value: displayValue(f, options.redact),
+        id: ids[i],
       })),
+      credentialGroups,
     },
     null,
     2
