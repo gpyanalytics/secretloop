@@ -832,7 +832,7 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
           locations: [
             {
               physicalLocation: {
-                artifactLocation: { uri: f.source ? f.source.container : f.file ?? "unknown" },
+                artifactLocation: { uri: sarifUri(f.source ? f.source.container : f.file ?? "unknown") },
                 region: { startLine: Math.max(1, f.line), ...sarifColumns(f) },
               },
               ...(f.source
@@ -849,6 +849,31 @@ function renderSarif(findings: Finding[], options: ReportOptions): string {
     ],
   };
   return JSON.stringify(sarif, null, 2);
+}
+
+/**
+ * A scan-root-relative path as the URI reference SARIF requires (RFC 3986).
+ *
+ * Written verbatim, a name named another file once a consumer resolved it: `#`
+ * starts a fragment and `?` a query, `%` an escape, a backslash is a separator
+ * to WHATWG parsers, and a space, a control or a non-ASCII character makes the
+ * reference invalid. Each `/`-separated segment is percent-encoded as UTF-8,
+ * keeping literal what RFC 3986 allows in a path segment, so an ordinary name is
+ * unchanged. A `:` is encoded in the first segment only, where it would read as
+ * a scheme. A lone surrogate, which a Windows name can hold and which
+ * encodeURIComponent refuses, becomes U+FFFD. The fingerprint is not derived
+ * from this, so alert identity does not move.
+ */
+function sarifUri(rel: string): string {
+  const wellFormed = rel.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, "\uFFFD");
+  return wellFormed
+    .split("/")
+    .map((segment, i) =>
+      encodeURIComponent(segment).replace(/%(24|26|2B|2C|3B|3D|40|3A)/g, (escape, hex: string) =>
+        hex === "3A" && i === 0 ? escape : decodeURIComponent(escape),
+      ),
+    )
+    .join("/");
 }
 
 /**

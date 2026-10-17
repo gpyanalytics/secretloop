@@ -24,6 +24,17 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed: SARIF locations name the right file when a path holds `#`, `?`, `%`, a space or other special
+  characters.** `artifactLocation.uri` is a URI reference, and it carried the path verbatim, so a consumer resolving
+  it reached another file or none: `#` began a fragment and `?` a query (`x#1.js` read as `x`), `%` an escape, a
+  backslash was a separator to WHATWG parsers, and a space, a control or a non-ASCII character made the reference
+  invalid. Each path segment is now percent-encoded as UTF-8 with `/` kept (`my dir/a#1.js` is
+  `my%20dir/a%231.js`); the characters RFC 3986 allows in a path stay literal, so ordinary names, including `@`,
+  `+` and parentheses, are written exactly as before, and a `:` is encoded only in the first segment. An archive
+  member's container is encoded the same way; its logical location keeps the real names. Fingerprints, and so alert
+  identity in code scanning, do not change; JSON, text, baselines and `compare` are unchanged. Only the CLI writes
+  SARIF; the change is in `src/report.ts`, so `out/cli.js` changes, and `out/extension.js` changes bytes without
+  producing SARIF. See [SARIF](docs/integrations.md#sarif).
 - **Fixed: outside git, the scan no longer walks through directory symlinks.** When the root is not a git
   repository, the CLI scan, the extension's workspace scan and the MCP server enumerate the tree themselves, and that
   walk followed every directory link. A link to `.` scanned each file once per level until the OS refused the path
