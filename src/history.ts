@@ -177,6 +177,28 @@ export class InvalidRevRangeError extends Error {
   }
 }
 
+/**
+ * A path as git prints it in a patch header, with git's C quoting undone.
+ *
+ * git quotes a path holding a non-ASCII byte (under the default
+ * core.quotePath), a double quote, a backslash or a control character:
+ * `"b/caf\303\251.js"`. Read verbatim, history filed the content of such a file
+ * under that string -- a path naming no file, and a fingerprint no working-tree
+ * scan could ever match. Octal escapes are bytes of the UTF-8 name, so they are
+ * collected as bytes and decoded once. An unquoted path is returned unchanged.
+ */
+export function unquoteGitPath(p: string): string {
+  if (p.length < 2 || !p.startsWith('"') || !p.endsWith('"')) return p;
+  const named: Record<string, number> = { a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 };
+  const bytes: number[] = [];
+  for (const m of p.slice(1, -1).matchAll(/\\([0-7]{3}|[abtnvfr"\\])|[^\\]+|\\/gu)) {
+    if (m[1] === undefined) bytes.push(...Buffer.from(m[0], "utf8"));
+    else if (m[1].length === 3) bytes.push(parseInt(m[1], 8));
+    else bytes.push(named[m[1]]);
+  }
+  return Buffer.from(bytes).toString("utf8");
+}
+
 export function validateRevRange(value: unknown): string | null {
   if (typeof value !== "string" || value.length === 0) {
     return "a revision range must be a non-empty string. Omit it to scan all history.";
@@ -508,7 +530,7 @@ export class LogPatchParser {
     // `diff --git`, which is what closes the hunk below.
     if (!this.inHunk && line.startsWith("+++ ")) {
       this.flush();
-      const p = line.slice(4).trim();
+      const p = unquoteGitPath(line.slice(4).trim());
       this.currentFile = p === "/dev/null" ? null : p.replace(/^b\//, "");
       if (this.currentFile) {
         const reason = classifyPath(this.currentFile, this.config);

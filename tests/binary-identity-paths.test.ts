@@ -275,25 +275,28 @@ test("SCANNER: the FALLBACK walk hands binaryIdentity a /-separated path on THIS
   });
 });
 
-test("SCANNER: git enumeration refuses a backslash-named file and reports incomplete", () => {
+test("SCANNER: git enumeration forwards a backslash-named file's real name, and the identity withholds", () => {
   if (!POSIX) skip("a file named dir\\file.png cannot exist on win32; the case did not run");
   withDir((dir) => {
     gitInit(dir);
     writeBinary(path.join(dir, "dir\\file.png"));
     const d = json(dir);
-    // git quotes a path containing a backslash -- `"dir\\file.png"` -- whatever
-    // core.quotePath is set to, so the enumeration is handed a path that does
-    // not exist, the containment guard refuses it, and that refusal is a
-    // coverage limitation. The file never reaches the binary classifier.
-    assert.strictEqual(d.incomplete, true, "the refusal marks coverage incomplete");
-    assert.ok(
-      JSON.stringify(d.summary.coverage?.limitations ?? []).length > 2,
-      "the limitation is disclosed"
-    );
+    // The git listing is read NUL-terminated, so it hands over the real name,
+    // as the fallback walk always did. (Read line by line, git C-quoted it as
+    // `"dir\\file.png"`, a path naming no file, which the containment guard
+    // refused as outside the root.) The file is a binary exclusion now, and the
+    // identity refuses the name it cannot represent: the whole digest is
+    // withheld, exactly as on the fallback route below.
+    assert.strictEqual(d.binaryDigest, undefined, "the ambiguous exclusion withholds the digest entirely");
     assert.notStrictEqual(
       d.binaryDigest,
       "binary:740fbb683ea4351d",
       "it must never carry the identity of dir/file.png"
+    );
+    assert.strictEqual(d.incomplete, false, "a binary exclusion is not a coverage failure");
+    assert.ok(
+      !JSON.stringify(d.summary.coverage?.limitations ?? []).includes("outside the scan root"),
+      "the real file is no longer reported as resolved outside the root"
     );
   });
 });

@@ -1,4 +1,6 @@
-import { isTracked } from "../src/walk";
+import { isTracked, listFilesWithExclusions, getStagedFiles } from "../src/walk";
+import { mergeConfig } from "../src/config";
+import { unquoteGitPath } from "../src/history";
 import { test, suite, finish, assert } from "./harness";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
@@ -123,6 +125,82 @@ test("outside a git repository the answer is unknown, not untracked", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+suite("\nwalk.ts — file names git quotes");
+
+/*
+ * git C-quotes a path it prints one per line when the path holds a byte it considers special: anything outside ASCII
+ * (under the default core.quotePath), a double quote, a backslash, a tab. Read line by line, the quoted form —
+ * `"caf\303\251.js"` — names no file, so the scan dropped it and counted it as "resolved outside the scan root",
+ * and history filed its content under the quoted string. Windows forbids `"`, tab and `\` in a name, so there
+ * only the non-ASCII case can exist.
+ */
+const QUOTED_NAMES = process.platform === "win32" ? ["café.js"] : ["café.js", 'quo"te.js', "back\\slash.js", "tab\tname.js"];
+const ALL_NAMES = ["plain.js", ...QUOTED_NAMES].sort();
+const QUOTED_LINE = () => "pass" + 'word = "Qm7vR2xKp9Lw4Tz8Hc3N"\n';
+const WALK_CLI = path.join(__dirname, "..", "out", "cli.js");
+
+function withQuotedRepo(fn: (dir: string, git: (...args: string[]) => void) => void): void {
+  withRepo((dir, git) => {
+    for (const n of ALL_NAMES) writeFileSync(path.join(dir, n), QUOTED_LINE(), "utf8");
+    fn(dir, git);
+  });
+}
+
+function cliJson(dir: string, ...args: string[]): { findings: Array<{ file: string }>; incomplete: boolean; summary: any } {
+  const r = spawnSync("node", [WALK_CLI, ...args, "--format", "json", "--fail-on", "never"], { cwd: dir, encoding: "utf8" });
+  assert.strictEqual(r.status, 0, r.stderr);
+  return JSON.parse(r.stdout);
+}
+
+const filesOf = (j: { findings: Array<{ file: string }> }) => [...new Set(j.findings.map((f) => f.file))].sort();
+
+test("unquoteGitPath reads git's C quoting back to the real name", () => {
+  assert.strictEqual(unquoteGitPath('"b/caf\\303\\251.js"'), "b/café.js");
+  assert.strictEqual(unquoteGitPath('"b/quo\\"te.js"'), 'b/quo"te.js');
+  assert.strictEqual(unquoteGitPath('"b/back\\\\slash.js"'), "b/back\\slash.js");
+  assert.strictEqual(unquoteGitPath('"b/tab\\tname.js"'), "b/tab\tname.js");
+  assert.strictEqual(unquoteGitPath("b/plain.js"), "b/plain.js", "an unquoted path is returned as it is");
+  assert.strictEqual(unquoteGitPath('"b/\\a\\b\\f\\n\\r\\v"'), "b/\u0007\b\f\n\r\u000b");
+});
+
+test("the git-backed listing names every file, quoted or not, and excludes none", () => {
+  withQuotedRepo((dir, git) => {
+    git("add", "-A");
+    const l = listFilesWithExclusions(dir, mergeConfig({}));
+    assert.deepStrictEqual([...l.files].sort(), ALL_NAMES);
+    assert.strictEqual(l.outsideExcluded, 0, "a quoted name was counted as outside the scan root");
+  });
+});
+
+test("the staged list names every staged file, quoted or not", () => {
+  withQuotedRepo((dir, git) => {
+    git("add", "-A");
+    const staged = getStagedFiles(dir);
+    assert.ok("files" in staged, JSON.stringify(staged));
+    assert.deepStrictEqual([...(staged as { files: string[] }).files].sort(), ALL_NAMES);
+  });
+});
+
+test("the CLI scan and staged scan report quoted names and stay complete", () => {
+  withQuotedRepo((dir, git) => {
+    git("add", "-A");
+    for (const cmd of [["staged"], ["scan", "."]]) {
+      const j = cliJson(dir, ...cmd);
+      assert.deepStrictEqual(filesOf(j), ALL_NAMES, `${cmd[0]} missed a quoted name`);
+      assert.strictEqual(j.incomplete, false, `${cmd[0]}: ${JSON.stringify(j.summary.coverage?.limitations)}`);
+    }
+  });
+});
+
+test("a history scan files each finding under the real name, not git's quoted form", () => {
+  withQuotedRepo((dir, git) => {
+    git("add", "-A");
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "x");
+    const j = cliJson(dir, "history");
+    assert.deepStrictEqual(filesOf(j), ALL_NAMES, `history paths: ${JSON.stringify(filesOf(j))}`);
+  });
 });
 
 finish();

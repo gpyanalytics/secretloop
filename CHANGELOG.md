@@ -24,6 +24,16 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed: files whose names git quotes are scanned and named correctly.** git C-quotes a name holding a non-ASCII
+  character (under the default `core.quotePath`), a double quote, a backslash or a tab when it prints one name per
+  line, and the quoted form (`"caf\303\251.js"`) names no file. In a git repository the CLI scan, the staged scan
+  (so the pre-commit hook), the extension's workspace scan and the MCP server skipped such files and counted them as
+  "resolved outside the scan root", marking the report incomplete; history scanned them but filed each finding under
+  the quoted string. The listings now read git's NUL-terminated output, and history decodes the quoting, so these
+  files are scanned and every finding carries the real path. A history finding in such a file therefore gets a
+  different fingerprint, because its path was wrong before. Windows forbids `"`, tab and `\` in a name, so there
+  only the non-ASCII case occurs. The change is in `src/walk.ts` and `src/history.ts`. See
+  [what the scan discloses](docs/coverage.md#what-the-scan-discloses).
 - **Fixed: files and folders whose names begin with `..` are scanned.** A top-level `..env` or `..cfg/` was treated
   as a path out of the scan root, because containment tested `rel.startsWith("..")`: the CLI, the extension's
   workspace scan and the MCP server skipped it, counted it as "resolved outside the scan root" (described as a
