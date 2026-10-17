@@ -162,6 +162,8 @@ const SPECIAL: Array<[string, string]> = [
   ["back\\slash.js", "back%5Cslash.js"],
   ["tab\tname.js", "tab%09name.js"],
   ["new\nline.js", "new%0Aline.js"],
+  ["br[1]|{x}.js", "br%5B1%5D%7C%7Bx%7D.js"],
+  ["q\"<>^`.js", "q%22%3C%3E%5E%60.js"],
   ["a:b.js", "a%3Ab.js"],
   ["dir/a:b.js", "dir/a:b.js"],
   ["dir name/sub#/f?.js", "dir%20name/sub%23/f%3F.js"],

@@ -102,9 +102,9 @@ URI reference: every segment is percent-encoded as UTF-8 and `/` kept, so
 `my dir/a#1.js` is written `my%20dir/a%231.js`. The characters RFC 3986 allows
 in a path segment stay literal, so an ordinary name is written as it is, and a
 `:` is encoded only in the first segment, where it would read as a scheme
-(unreleased; before, the path was written verbatim, and a name holding `#`, `?`,
-`%`, a space, a backslash or a non-ASCII character resolved to another file or
-to none). Partial fingerprints are not derived from the URI.
+(unreleased; before, the path was written verbatim: a name holding `#`, `?`, `%`
+or a backslash resolved to another file, and one holding a space, a control or a
+non-ASCII character was not a valid URI reference). Partial fingerprints are not derived from the URI.
 An archive-member result names the archive as the physical artifact and the
 member as a logical location, with the line relative to the member, and the
 invocation properties carry the archive accounting. This has shipped since
