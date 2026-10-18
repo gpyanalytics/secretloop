@@ -40,6 +40,15 @@ comparison metadata are new in 0.6.0 and are not present in 0.5.1.
 | `--entropy` | mask only | Also mask generic high-entropy strings in the piped stream. Off by default, which is the opposite of a scan. |
 | `--no-redact` | scan, staged, history | Print full secret values. Dangerous in CI logs. |
 
+The text report shows file names and values as text, never as terminal input
+(unreleased): a control character, DEL, a C1 control, a bidi formatting
+character, a line or paragraph separator or a lone surrogate in a name, a value or
+a verification detail is printed as a visible escape such as `\x1b`, `\x0a` or
+`\u202e`, so a crafted name cannot colour or move the cursor, rewrite a line, or
+print lines of its own. Ordinary names, including non-ASCII ones and backslashes,
+print as they are. The JSON and SARIF reports keep the real bytes; copy a
+fingerprint for a baseline from the JSON report when the text shows an escape.
+
 `--include-entropy`, `--include-fixtures`, `--include-generated`,
 `--key-context` and `--include-api-document-entropy` are raise-only: a flag can
 turn something on for one run, never off. The project file decides the
