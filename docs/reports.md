@@ -13,8 +13,9 @@ compared.
 reports are `schemaVersion` 5. This metadata and the `compare` command are **new
 in 0.6.0**: 0.5.1 emits no comparison metadata and has no `compare` command, so
 nothing on this page describes what 0.5.1 does. A section marked **Unreleased**
-describes `main` after 0.7.2, which no published release emits yet. The `toolVersion` value in the example below is
-illustrative, not a claim about which release carries these fields.
+describes `main` after 0.7.2, which no published release emits yet. The
+`toolVersion` value in the example below is illustrative, not a claim about
+which release carries these fields.
 
 ## Shape
 
