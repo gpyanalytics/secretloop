@@ -24,28 +24,29 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
-- **Fixed: history names every file exactly, whatever its spaces and whatever prefix git is configured to write.** git ends a
-  diff header with a tab when the name holds a space, and history trimmed the header to drop it, which also dropped a
-  name's own trailing spaces: a finding in `trailing.js ` was filed under `trailing.js`, a different file and a
-  different fingerprint, and a file whose name is only spaces was not attributed at all. Separately, the path prefix git
-  writes is configuration: with `diff.noprefix` set, `b/x.js` was reported as `x.js` and a leading space was lost. The
-  history scan now pins git's prefixes on its own command line and removes only git's tab. Affected history findings
-  get their correct path, and so a different fingerprint; other history findings are unchanged. The CLI `history`, the
-  MCP server's history scan and the editor's history command all read through it. The change is in `src/history.ts`,
-  so `out/cli.js`, `out/mcp.js` and `out/extension.js` change.
+- **Fixed: history names every file exactly, whatever its spaces and whatever prefix git is configured to write.**
+  git ends a diff header with a tab when the name holds a space, and history trimmed the header to drop it, which
+  also dropped a name's own trailing spaces: a finding in `trailing.js ` was filed under `trailing.js`, a different
+  file and a different fingerprint, and a file whose name is only spaces was not attributed at all. Separately, the
+  path prefix git writes is configuration: with `diff.noprefix` set, `b/x.js` was reported as `x.js` and a leading
+  space was lost. The history scan now pins git's prefixes on its own command line and removes only git's tab.
+  Affected history findings get their correct path, and so a different fingerprint; other history findings are
+  unchanged. The CLI `history`, the MCP server's history scan and the editor's history command all read through it.
+  The change is in `src/history.ts`, so `out/cli.js`, `out/mcp.js` and `out/extension.js` change.
 - **Fixed (security hardening): the text report cannot be driven by a file name.** File names, matched values and
   verification details were printed raw, so a crafted name holding ESC could drive the terminal (colour, cursor,
   window title), CR or a bidi override could rewrite what was shown, and a newline printed lines of its own: a forged
   `[critical]` block that read exactly like a real finding, in a terminal, the pre-commit hook's output or a CI log.
-  This applied to `scan`, `staged` and `history` (on the git route since names git quotes became reachable, and on
-  a tree outside git before that) and to the editor's text report. C0 and C1 controls, DEL, bidi formatting
-  characters, line and paragraph separators and lone surrogates are now printed as visible escapes (`\x1b`,
-  `\x0a`, `\u202e`), and a name or detail that would begin a line with `::` or `##`, or holds `##vso[` or `##[`, has
-  that character escaped so a CI runner cannot read the line as a workflow or logging command (a GitHub Actions
-  `::group::` folding the real findings away, a forged `::error` annotation, `::stop-commands::`, an Azure Pipelines
-  `##vso[`). Ordinary names print as they did. JSON, SARIF, baselines and fingerprints are unchanged; for a
-  name that shows an escape, take its fingerprint from the JSON report. The change is in `src/report.ts`, so
-  `out/cli.js` and `out/extension.js` change. See [the CLI reference](docs/cli.md#options).
+  This applied to `scan`, `staged` and `history` (on the git route since names git quotes became reachable, and on a
+  tree outside git before that) and to the editor's text report. C0 and C1 controls, DEL, bidi formatting characters,
+  line and paragraph separators and lone surrogates are now printed as visible escapes (`\x1b`, `\x0a`, `\u202e`). A
+  name or detail that would begin a line with `::` or `##` has that character escaped, and so does the first `#` of
+  `##vso[` or `##[` anywhere in an escaped name, value, detail or fingerprint line, so that GitHub Actions and Azure
+  Pipelines cannot read the line as a workflow or logging command (a `::group::` folding the real findings away, a
+  forged `::error` annotation, `::stop-commands::`, a `##vso[` command). Other CI systems' log commands are not
+  covered. Ordinary names print as they did. JSON, SARIF, baselines and fingerprints are unchanged; for a name that
+  shows an escape, take its fingerprint from the JSON report. The change is in `src/report.ts`, so `out/cli.js` and
+  `out/extension.js` change. See [the CLI reference](docs/cli.md#options).
 - **Fixed: SARIF locations name the right file when a path holds `#`, `?`, `%`, a space or other special
   characters.** `artifactLocation.uri` is a URI reference, and it carried the path verbatim, so a consumer resolving
   it reached another file or none: `#` began a fragment and `?` a query (`x#1.js` read as `x`), `%` an escape, a
@@ -83,13 +84,13 @@ release's version number and date are not decided.*
   symlink) and marked the report incomplete; the staged scans (`secretloop staged`, so the pre-commit hook, and the
   extension's **Scan Staged Files**) refused a staged `..env` the same way; the MCP server also refused a `..data`
   directory under an allowed root, and the editor did not verify a workspace `..env`. Each of these now scans the
-  file, and with live verification on the extension verifies it like any other workspace file. A relative path now leaves the root only when its first segment
-  is exactly `..`, or it is absolute. Real `../` escapes and symlinks resolving outside are still excluded, and a
-  path that cannot be resolved still fails closed. Nested names such as `sub/..env` were never affected. In reports,
-  such files now produce findings and no longer make the report incomplete; `scopeDigest` does not change (a
-  working-tree scan's identity is its selection mode, not its file list), and `binaryDigest` changes if one of
-  these files is binary. The change is in `src/walk.ts`, `src/mcp-core.ts` and `src/extension.ts`, so `out/cli.js`,
-  `out/mcp.js` and `out/extension.js` all change. See
+  file, and with live verification on the extension verifies it like any other workspace file. A relative path now
+  leaves the root only when its first segment is exactly `..`, or it is absolute. Real `../` escapes and symlinks
+  resolving outside are still excluded, and a path that cannot be resolved still fails closed. Nested names such as
+  `sub/..env` were never affected. In reports, such files now produce findings and no longer make the report
+  incomplete; `scopeDigest` does not change (a working-tree scan's identity is its selection mode, not its file
+  list), and `binaryDigest` changes if one of these files is binary. The change is in `src/walk.ts`,
+  `src/mcp-core.ts` and `src/extension.ts`, so `out/cli.js`, `out/mcp.js` and `out/extension.js` all change. See
   [what the scan discloses](docs/coverage.md#what-the-scan-discloses).
 - **Added: the JSON report says which findings carry the same credential.** A new top-level `credentialGroups` array
   lists each credential found in two or more places under one rule: the ids of its findings and how many distinct

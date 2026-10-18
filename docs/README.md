@@ -62,7 +62,7 @@ are listed in the [changelog](../CHANGELOG.md).
 
 ## What's in main and what's published
 
-Release status, current as of **2026-10-13**. This page is repository-only: it
+Release status, current as of **2026-10-18**. This page is repository-only: it
 is not shipped in the npm package or the VS Code extension, so it can carry
 status that would go stale inside a published artifact.
 

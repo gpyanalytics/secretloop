@@ -9,10 +9,11 @@ implemented and documented under [The comparator](#the-comparator) below, and it
 admits **working-tree reports only**: a history or staged report is refused, not
 compared.
 
-**Status: shipped in 0.6.0.** npm, Open VSX and the VS Code Marketplace all serve
-**0.6.0**. This metadata and the `compare` command are **new in 0.6.0**: 0.5.1
-emits no comparison metadata and has no `compare` command, so nothing on this page
-describes what 0.5.1 does. The `toolVersion` value in the example below is
+**Status:** npm, Open VSX and the VS Code Marketplace all serve **0.7.2**, whose
+reports are `schemaVersion` 5. This metadata and the `compare` command are **new
+in 0.6.0**: 0.5.1 emits no comparison metadata and has no `compare` command, so
+nothing on this page describes what 0.5.1 does. A section marked **Unreleased**
+describes `main` after 0.7.2, which no published release emits yet. The `toolVersion` value in the example below is
 illustrative, not a claim about which release carries these fields.
 
 ## Shape

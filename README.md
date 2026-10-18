@@ -5,8 +5,10 @@
 SecretLoop is a secret scanner with three interfaces on one engine: a **command-line tool** for
 repositories, pre-commit hooks and CI; a **VS Code extension** that turns findings into diagnostics with
 quick-fixes; and an **MCP server** that lets an AI assistant work with findings without ever seeing a raw
-value. Scans run on your machine. The only network request SecretLoop ever makes is a verification of one
-supported credential against that credential's own provider, and only after you ask for it.
+value. Scans run on your machine. Two features can reach the network, and neither runs on its own: verifying a
+supported credential with its own provider, and rotating one when you ask (Slack revocation, or an AWS key with
+admin credentials you stored). [SECURITY.md](https://github.com/gpyanalytics/secretloop/blob/main/SECURITY.md)
+says what leaves the machine and how to keep it there.
 A GPY Analytics product.
 
 This README describes SecretLoop **0.7.2**. The [changelog](https://github.com/gpyanalytics/secretloop/blob/main/CHANGELOG.md)

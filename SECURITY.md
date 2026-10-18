@@ -30,7 +30,11 @@ has a separate control on each of three surfaces:
 
 Turning the editor setting on matters more than it looks — verification then
 runs as part of the ordinary on-save scan rather than as a separate action you
-take each time, and the extension may offer to enable it in a prompt.
+take each time, and the extension may offer to enable it in a prompt. On `main`
+after 0.7.2 (unreleased), the extension verifies only files inside the open
+workspace: a document outside every workspace folder is still scanned, but
+nothing in it is sent and no prompt is offered; published 0.7.2 does not have
+this limit.
 
 The third surface is the one to check if an AI coding agent is connected. An
 assistant can *ask* for a verification, but it cannot grant one: the first call
@@ -187,8 +191,8 @@ every other repository-authored fragment.
 
 The latest published release, and only that one. There are no long-term
 support branches — fixes ship forward, so a fix lands in the next release
-rather than as a patch to an older one. This document ships with **SecretLoop
-0.6.0**; check what you are running with `secretloop --version`, or the version
+rather than as a patch to an older one. The current release is **SecretLoop
+0.7.2**; check what you are running with `secretloop --version`, or the version
 on the extension's listing, and upgrade before reporting an issue against an
 older one.
 
