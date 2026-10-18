@@ -146,7 +146,9 @@ release's version number and date are not decided.*
   bundles build byte-identical with either version.
 - **Tests:** unit tests for the CI diagnostic sanitizer, `tests/fixtures/win-acl-sanitize.js` (#151). The
   `suppression-accountability` and `api-document-scope` tests now remove the temporary directories they create;
-  before, each full run left 14 behind (#153).
+  before, each full run left 14 behind (#153). Regression tests now pin that a history report counts one credential
+  committed twice as two occurrences of one group, that MCP responses carry no credential groups and SARIF results no
+  report-local ids, and that a Windows junction is listed, never walked, like a directory symlink.
 - **CI:** the Windows two-account and exFAT jobs mask machine-local account SIDs in the job log and print the
   sanitizer's role labels instead (#152).
 - **Release process:** the RELEASING.md §5 security review now triggers on every `src/consent*.ts` file, not only
