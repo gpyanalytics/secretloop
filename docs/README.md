@@ -103,8 +103,8 @@ git a scan lists a directory symlink instead of walking through it
 percent-encodes the path so it names the right file
 ([SARIF](integrations.md#sarif)), and the text report prints control and bidi
 characters in names and values as visible escapes ([options](cli.md#options)),
-and history names a file exactly, spaces included, whatever the git
-configuration. The first two are in `src/report.ts`, the
+and history names a file exactly, spaces included, whatever prefix git is
+configured to write. The first two are in `src/report.ts`, the
 third in `src/extension.ts`, the fourth in `src/walk.ts`, `src/mcp-core.ts` and
 `src/extension.ts`, the fifth in `src/walk.ts` and `src/history.ts`, the sixth
 in `src/walk.ts`, the seventh and eighth in `src/report.ts`, and the ninth in

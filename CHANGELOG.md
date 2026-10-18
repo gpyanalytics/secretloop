@@ -24,7 +24,7 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
-- **Fixed: history names every file exactly, whatever its spaces and whatever the git configuration.** git ends a
+- **Fixed: history names every file exactly, whatever its spaces and whatever prefix git is configured to write.** git ends a
   diff header with a tab when the name holds a space, and history trimmed the header to drop it, which also dropped a
   name's own trailing spaces: a finding in `trailing.js ` was filed under `trailing.js`, a different file and a
   different fingerprint, and a file whose name is only spaces was not attributed at all. Separately, the path prefix git

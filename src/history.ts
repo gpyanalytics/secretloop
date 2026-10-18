@@ -258,8 +258,8 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
     "--no-color",
     "--full-history",
     // The parser reads `+++ b/<path>`, and the prefix is configuration:
-    // `diff.noprefix` drops it, so `b/x.js` arrived as `b/x.js` and lost its
-    // directory. Pinned here, where configuration cannot reach it.
+    // `diff.noprefix` drops it, so `b/x.js` arrived with no prefix and stripping
+    // `b/` lost its directory. Pinned here, where configuration cannot reach it.
     "--src-prefix=a/",
     "--dst-prefix=b/",
     `--format=${LOG_FORMAT}`,

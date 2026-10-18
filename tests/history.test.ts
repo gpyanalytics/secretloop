@@ -830,7 +830,9 @@ suite("\nhistory.ts — the file a header names, exactly");
  * names, so those cases run where such names can exist.
  */
 const POSIX_NAMES = ["trailing.js ", "   ", " leading.js", "dir /x.js", "two  spaces.js"];
-const EVERY_NAME = ["plain.js", "b/x.js", " leading.js", "dir /x.js"];
+// Portable to Windows (no component ends in a space or a dot); "caf\u00e9 x.js" is quoted by git and ends its header
+// with a tab, so the tab must go before the quotes are read.
+const EVERY_NAME = ["plain.js", "b/x.js", " leading.js", "my dir/x.js", "caf\u00e9 x.js"];
 
 async function historyFiles(dir: string): Promise<string[]> {
   const findings = await scanHistory({ config: mergeConfig({}), repoRoot: dir });
