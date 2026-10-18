@@ -24,6 +24,17 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed (security hardening): the editor's Output channel cannot be driven by a file name.** The **SecretLoop**
+  Output channel prints a document's workspace-relative path, the workspace root and error messages, and printed them
+  raw: a file named with a newline wrote a line of its own that read exactly like the extension's ("SecretLoop: sent
+  1 credential(s) to ...", "live verification is off"), and ESC, CR or a bidi override rewrote what a line showed.
+  Every Output-channel line now takes the text report's escaping (`\x1b`, `\x0a`, the first `#` of `##vso[`);
+  ordinary lines are unchanged. Notifications are not changed: they are workbench pop-ups, not Output-channel lines,
+  but some do carry repository-controlled text raw — the `secretloop.envFilePath` name a workspace's settings can
+  choose, an `allowValues` pattern quoted in a configuration error, git's stderr in a history error — and escaping
+  them is a separate follow-up. Display only: detection, reports, fingerprints, consent and verification are
+  unchanged. The change is in `src/extension.ts` (and an export in `src/report.ts`); only `out/extension.js` changes.
+  See [the verification prompt](docs/vscode.md#the-verification-prompt).
 - **Fixed: history names every file exactly, whatever its spaces and whatever prefix git is configured to write.**
   git ends a diff header with a tab when the name holds a space, and history trimmed the header to drop it, which
   also dropped a name's own trailing spaces: a finding in `trailing.js ` was filed under `trailing.js`, a different

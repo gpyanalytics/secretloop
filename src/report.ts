@@ -560,6 +560,15 @@ function shown(text: string): string {
   return text.replace(ACTIVE_TEXT, escaped).replace(LOG_COMMAND, escaped);
 }
 
+/**
+ * The text report's escaping, for another place that prints repository text: the
+ * editor's Output channel. Same characters, same visible escapes, so a name looks
+ * the same wherever SecretLoop shows it.
+ */
+export function escapeForDisplay(text: string): string {
+  return shown(text);
+}
+
 /** shown(), for text that begins a printed line: a leading `::` or `##` is not left to start it. */
 function shownAtLineStart(text: string): string {
   return shown(text).replace(LINE_COMMAND, (_, space: string, c: string) => space + escaped(c));

@@ -19,6 +19,7 @@ import {
   stagedPaths,
   openBuffers,
   PromptState,
+  outputLine,
 } from "../src/extension";
 import { Finding, UnknownReason } from "../src/scanner";
 import { mergeConfig } from "../src/config";
@@ -1347,6 +1348,52 @@ test("Windows: an open buffer whose drive letter differs only in case is inside"
     setOpenDocuments([openBuffer(flipped, "y\n")]);
     assert.deepStrictEqual([...openBuffers(ws).keys()], ["app.js"]);
   });
+});
+
+suite("\nextension.ts — an Output-channel line shows repository text, it never acts on it");
+
+/*
+ * The SecretLoop Output channel prints a document's workspace-relative path, the workspace root and error messages,
+ * and printed them raw. A file named with a newline wrote a line of its own -- "SecretLoop: sent 1 credential(s) to
+ * ..." or "live verification is off" read exactly like the extension's own -- and ESC, CR or a bidi override rewrote
+ * what the line showed. Every line now goes through the text report's escaping before it is appended, so control and
+ * bidi characters show as visible escapes; ordinary lines are byte-identical.
+ */
+const ACTIVE_LINE = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]/;
+
+for (const [label, relPath, shown] of [
+  ["ESC", "a\u001b[2Kb.js", "a\\x1b[2Kb.js"],
+  ["CR", "a\rSecretLoop: live verification is off.js", "a\\x0dSecretLoop: live verification is off.js"],
+  ["LF", "a\nSecretLoop: sent 1 credential(s) to github from x.js", "a\\x0aSecretLoop: sent 1 credential(s) to github from x.js"],
+  ["tab", "a\tb.js", "a\\x09b.js"],
+  ["a CI command after a newline", "a\n::stop-commands::x.js", "a\\x0a::stop-commands::x.js"],
+  ["an Azure Pipelines command", "##vso[task.setvariable variable=x]y.js", "\\x23#vso[task.setvariable variable=x]y.js"],
+  ["a bidi override", "rlo\u202eexe.js", "rlo\\u202eexe.js"],
+] as Array<[string, string, string]>) {
+  test(`${label} in a path is shown escaped, on one line`, () => {
+    const line = outputLine(`SecretLoop: ${relPath} is an API description document; scanned without generic entropy.`);
+    assert.ok(!ACTIVE_LINE.test(line), `an active character reached the Output channel (${label})`);
+    assert.ok(!line.includes("\n") && !line.includes("\r"), "the line was split");
+    assert.ok(!/##(vso)?\[/i.test(line), "an Azure Pipelines command survived");
+    assert.strictEqual(line, `SecretLoop: ${shown} is an API description document; scanned without generic entropy.`);
+  });
+}
+
+test("an ordinary line, non-ASCII and spaces included, is appended exactly as written", () => {
+  for (const msg of [
+    "SecretLoop: workspace scan covered 3 file(s) under /home/u/café project.",
+    "SecretLoop: live verification is on (user setting); checking 1 of 2 finding(s) in src/app.ts.",
+    "SecretLoop: sent 1 credential(s) to github from dir name/a b.js.",
+  ]) {
+    assert.strictEqual(outputLine(msg), msg);
+  }
+});
+
+test("every Output-channel line goes through outputLine", () => {
+  const src = readFileSync(path.join(__dirname, "..", "src", "extension.ts"), "utf8");
+  const appends = src.match(/\.appendLine\(/g) ?? [];
+  assert.strictEqual(appends.length, 1, "a second appendLine call bypasses the one escaping sink");
+  assert.match(src, /function log\(message: string\): void \{\s*output\?\.appendLine\(outputLine\(message\)\);/, "log() appends without escaping");
 });
 
 finish();
