@@ -257,6 +257,11 @@ export function scanHistory(options: HistoryScanOptions): Promise<Finding[]> {
     "--unified=0",
     "--no-color",
     "--full-history",
+    // The parser reads `+++ b/<path>`, and the prefix is configuration:
+    // `diff.noprefix` drops it, so `b/x.js` arrived with no prefix and stripping
+    // `b/` lost its directory. Pinned here, where configuration cannot reach it.
+    "--src-prefix=a/",
+    "--dst-prefix=b/",
     `--format=${LOG_FORMAT}`,
   ];
   if (options.maxCommits) args.push(`-n${options.maxCommits}`);
@@ -530,7 +535,12 @@ export class LogPatchParser {
     // `diff --git`, which is what closes the hunk below.
     if (!this.inHunk && line.startsWith("+++ ")) {
       this.flush();
-      const p = unquoteGitPath(line.slice(4).trim());
+      // git ends the header with a tab when the name holds a space; that tab is
+      // all there is to remove. Trimming also took a name's own trailing spaces
+      // (`trailing.js ` filed under `trailing.js`) and left a name of spaces as
+      // `b/`. A name that itself ends in a tab is quoted, so it cannot be this.
+      const header = line.slice(4);
+      const p = unquoteGitPath(header.endsWith("\t") ? header.slice(0, -1) : header);
       this.currentFile = p === "/dev/null" ? null : p.replace(/^b\//, "");
       if (this.currentFile) {
         const reason = classifyPath(this.currentFile, this.config);

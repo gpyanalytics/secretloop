@@ -7,7 +7,7 @@ import {
 } from "../src/history";
 import { defaultConfig, mergeConfig } from "../src/config";
 import { test, suite, finish, assert, skip } from "./harness";
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { spawnSync } from "child_process";
 import * as path from "path";
@@ -818,5 +818,53 @@ test("the CLI turns the refusal into exit 2 and names the flag", async () => {
     assert.strictEqual(res.stdout, "", "a refused scan printed a report");
   });
 });
+
+suite("\nhistory.ts — the file a header names, exactly");
+
+/*
+ * git appends a tab to a `+++` header when the name holds a space, and the header was trimmed to drop it -- which also
+ * dropped a name's own trailing spaces (`trailing.js ` was filed under `trailing.js`, a different file) and turned a
+ * name of spaces into `b/`, so its content was never attributed at all. And the prefix git writes is configuration:
+ * with `diff.noprefix` set, `b/x.js` arrived as `b/x.js` with no prefix and the parser stripped the directory. The
+ * prefixes are now pinned on the command line and only git's own tab is removed. Windows strips trailing spaces from
+ * names, so those cases run where such names can exist.
+ */
+const POSIX_NAMES = ["trailing.js ", "   ", " leading.js", "dir /x.js", "two  spaces.js"];
+// Portable to Windows (no component ends in a space or a dot); "caf\u00e9 x.js" is quoted by git and ends its header
+// with a tab, so the tab must go before the quotes are read.
+const EVERY_NAME = ["plain.js", "b/x.js", " leading.js", "my dir/x.js", "caf\u00e9 x.js"];
+
+async function historyFiles(dir: string): Promise<string[]> {
+  const findings = await scanHistory({ config: mergeConfig({}), repoRoot: dir });
+  return [...new Set(findings.map((f) => f.file as string))].sort();
+}
+
+function commitNames(dir: string, git: (...a: string[]) => void, names: string[]): void {
+  for (const n of names) {
+    const full = path.join(dir, n);
+    mkdirSync(path.dirname(full), { recursive: true });
+    writeFileSync(full, `const t = "${TOKEN}";\n`);
+  }
+  git("add", "-A");
+  git("commit", "-qm", "names");
+}
+
+test("a name's own spaces survive: trailing, leading, inner, and a name of spaces", async () => {
+  if (process.platform === "win32") skip("Windows strips trailing spaces from file names");
+  await withRepo(async (dir, git) => {
+    commitNames(dir, git, ["plain.js", ...POSIX_NAMES]);
+    assert.deepStrictEqual(await historyFiles(dir), ["plain.js", ...POSIX_NAMES].sort());
+  });
+});
+
+for (const [key, value] of [["diff.noprefix", "true"], ["diff.mnemonicPrefix", "true"]]) {
+  test(`with ${key}=${value} in the repository's config, every path is still the real one`, async () => {
+    await withRepo(async (dir, git) => {
+      git("config", key, value);
+      commitNames(dir, git, EVERY_NAME);
+      assert.deepStrictEqual(await historyFiles(dir), [...EVERY_NAME].sort());
+    });
+  });
+}
 
 finish();
