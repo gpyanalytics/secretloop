@@ -37,7 +37,7 @@ import { listFilesWithExclusions, filterGenerated, getStagedFiles, findRepoRoot,
 } from "./walk";
 import { scanFiles } from "./workspace";
 import { scanHistory, isGitRepo, InvalidRevRangeError } from "./history";
-import { render, OutputFormat, sortFindings, UNKNOWN_REASONS, describeScope } from "./report";
+import { render, OutputFormat, sortFindings, UNKNOWN_REASONS, describeScope, escapeForDisplay } from "./report";
 import { verifyFindings } from "./verify";
 
 /**
@@ -843,7 +843,7 @@ async function main(): Promise<void> {
   // nothing to say about a transform.
   const argError = args.errors?.[0];
   if (argError) {
-    process.stderr.write(`secretloop: ${argError}\n`);
+    process.stderr.write(`secretloop: ${escapeForDisplay(argError)}\n`);
     process.exitCode = 2;
     return;
   }
@@ -867,7 +867,7 @@ async function main(): Promise<void> {
 
   const usageError = validateArgs(args);
   if (usageError) {
-    process.stderr.write(`secretloop: ${usageError}\n`);
+    process.stderr.write(`secretloop: ${escapeForDisplay(usageError)}\n`);
     process.exitCode = 2;
     return;
   }
@@ -876,7 +876,7 @@ async function main(): Promise<void> {
   // simply is not a git repository — it returns the path it was given for both.
   const rootError = validateRoot(args.root);
   if (rootError) {
-    process.stderr.write(`secretloop: ${rootError}\n`);
+    process.stderr.write(`secretloop: ${escapeForDisplay(rootError)}\n`);
     process.exitCode = 2;
     return;
   }
@@ -992,7 +992,7 @@ async function main(): Promise<void> {
       // the message names the flag the person typed rather than the parameter
       // the scanner calls it -- the guard is shared, the vocabulary is not.
       if (err instanceof InvalidRevRangeError) {
-        process.stderr.write(`secretloop: --rev-range ${err.revRange} was refused: ${err.message}\n`);
+        process.stderr.write(`secretloop: ${escapeForDisplay(`--rev-range ${err.revRange} was refused: ${err.message}`)}\n`);
         process.exitCode = 2;
         return;
       }
@@ -1026,7 +1026,7 @@ async function main(): Promise<void> {
       // pre-commit hook exits on this code path and a 0 here lets the commit
       // through on a scan that never ran.
       if ("error" in staged) {
-        process.stderr.write(`secretloop: ${staged.error}\n`);
+        process.stderr.write(`secretloop: ${escapeForDisplay(staged.error)}\n`);
         process.exitCode = 2;
         return;
       }
@@ -1553,7 +1553,12 @@ async function runApproveInner(
 // this module for a unit test would scan the cwd and set the process exit code.
 if (require.main === module) {
   main().catch((err) => {
-    process.stderr.write(`secretloop: ${err?.message ?? err}\n`);
+    // Every error that reaches here can quote outside text -- a repository's
+    // .secretloop.json (an invalid allowValues pattern), a path, an OS message
+    // -- on its way to a terminal, the pre-commit hook's output or a CI log.
+    // Shown through the text report's escaping, so it cannot drive the terminal
+    // or print lines of its own; the wording and the exit code are unchanged.
+    process.stderr.write(`secretloop: ${escapeForDisplay(String(err?.message ?? err))}\n`);
     process.exitCode = 2;
   });
 }

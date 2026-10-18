@@ -53,6 +53,12 @@ Ordinary names, including non-ASCII ones and backslashes, print as they are. The
 JSON and SARIF reports keep the real name; copy a fingerprint for a baseline
 from the JSON report when the text shows an escape.
 
+Error messages on stderr are shown the same way (unreleased): a message that
+quotes outside text — an invalid `allowValues` pattern from a repository's
+`.secretloop.json`, a `--path` or `--rev-range` value, git's stderr from the
+staged listing — prints its control and bidi characters as escapes, on one line,
+with the same wording and exit code.
+
 `--include-entropy`, `--include-fixtures`, `--include-generated`,
 `--key-context` and `--include-api-document-entropy` are raise-only: a flag can
 turn something on for one run, never off. The project file decides the

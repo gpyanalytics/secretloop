@@ -86,11 +86,11 @@ fix, credential groups in the JSON report, workspace containment for the
 editor's live verification and staged scan, a fix for names that begin with
 `..`, a fix for file names git quotes, a fix for directory symlinks outside git,
 a fix for SARIF locations, text-report hardening against crafted file names, a
-fix for file names in history, Output-channel hardening against crafted file
-names, a development-dependency fix, CI log
-hygiene, tests, and a wider release security-review rule
+fix for file names in history, Output-channel and CLI error-message hardening
+against crafted file names and repository text, a development-dependency fix,
+CI log hygiene, tests, and a wider release security-review rule
 ([decision 0008](decisions/0008-consent-review-scope.md)).
-The first ten change what SecretLoop does when it runs: the text report no
+The first eleven change what SecretLoop does when it runs: the text report no
 longer calls two different PKCS#12 keystores "the same value", the JSON report
 now says which findings carry the same credential
 ([credential groups](reports.md#credential-groups)), the VS Code extension no
@@ -106,12 +106,12 @@ percent-encodes the path so it names the right file
 characters in names and values as visible escapes ([options](cli.md#options)),
 history names a file exactly, spaces included, whatever prefix git is
 configured to write, and the editor's Output channel escapes file names the same
-way as the text report. The first two are in `src/report.ts`, the
+way as the text report, and so do the CLI's error messages. The first two are in `src/report.ts`, the
 third in `src/extension.ts`, the fourth in `src/walk.ts`, `src/mcp-core.ts` and
 `src/extension.ts`, the fifth in `src/walk.ts` and `src/history.ts`, the sixth
 in `src/walk.ts`, the seventh and eighth in `src/report.ts`, the ninth in
-`src/history.ts`, and the tenth in `src/extension.ts` (with an export in
-`src/report.ts`), so `out/cli.js`,
+`src/history.ts`, the tenth in `src/extension.ts` (with an export in
+`src/report.ts`), and the eleventh in `src/cli.ts`, so `out/cli.js`,
 `out/mcp.js` and `out/extension.js` all no longer build byte-identical to 0.7.2.
 Until the text-report fix, none of it changed what SecretLoop does when it runs.
 The packaged
