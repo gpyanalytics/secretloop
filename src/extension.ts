@@ -25,7 +25,7 @@ import {
 } from "./rotate";
 import { installPrecommitHook, uninstallPrecommitHook, refreshHookVersionStamp } from "./hooks";
 import { setting, resolveSetting, describeOrigin, SETTINGS_NAMESPACE } from "./settings";
-import { UNKNOWN_REASONS, describeScope, describeOpenedFileChecks } from "./report";
+import { UNKNOWN_REASONS, describeScope, describeOpenedFileChecks, escapeForDisplay } from "./report";
 import { ScannedFile, scanFiles, scanWorkspaceScan } from "./workspace";
 import { verifyScannedFiles } from "./workspace-verify";
 import * as path from "path";
@@ -71,7 +71,19 @@ let startupNoticeShown = false;
 let output: vscode.OutputChannel | undefined;
 
 function log(message: string): void {
-  output?.appendLine(message);
+  output?.appendLine(outputLine(message));
+}
+
+/**
+ * One Output-channel line, as appended. The lines carry a document's
+ * workspace-relative path, the workspace root and error messages, and were
+ * appended raw: a file named with a newline wrote a line of its own that read
+ * exactly like the extension's ("SecretLoop: sent 1 credential(s) to ..."), and
+ * ESC, CR or a bidi override rewrote what a line showed. Every line now takes
+ * the text report's escaping; an ordinary line is unchanged. Display only.
+ */
+export function outputLine(message: string): string {
+  return escapeForDisplay(message);
 }
 
 export function activate(context: vscode.ExtensionContext) {

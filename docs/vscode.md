@@ -182,6 +182,11 @@ transmitted. Results are cached in memory for five minutes, keyed by a SHA-256
 of the value, and every provider call is abandoned after five seconds; a
 timed-out check is unknown, never "not a secret".
 
+A line that carries a file name, the workspace root or an error message shows
+control and bidi characters as visible escapes (`\x1b`, `\x0a`), as the text
+report does (unreleased), so a crafted file name cannot write a line of its own
+or rewrite one; ordinary lines are unchanged.
+
 ## Staged-file warnings
 
 With `secretloop.blockCommitOnSecret` on, Source Control shows one warning that
