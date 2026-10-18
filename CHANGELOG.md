@@ -24,6 +24,15 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed: history names every file exactly, whatever its spaces and whatever the git configuration.** git ends a
+  diff header with a tab when the name holds a space, and history trimmed the header to drop it, which also dropped a
+  name's own trailing spaces: a finding in `trailing.js ` was filed under `trailing.js`, a different file and a
+  different fingerprint, and a file whose name is only spaces was not attributed at all. Separately, the path prefix git
+  writes is configuration: with `diff.noprefix` set, `b/x.js` was reported as `x.js` and a leading space was lost. The
+  history scan now pins git's prefixes on its own command line and removes only git's tab. Affected history findings
+  get their correct path, and so a different fingerprint; other history findings are unchanged. The CLI `history`, the
+  MCP server's history scan and the editor's history command all read through it. The change is in `src/history.ts`,
+  so `out/cli.js`, `out/mcp.js` and `out/extension.js` change.
 - **Fixed (security hardening): the text report cannot be driven by a file name.** File names, matched values and
   verification details were printed raw, so a crafted name holding ESC could drive the terminal (colour, cursor,
   window title), CR or a bidi override could rewrite what was shown, and a newline printed lines of its own: a forged
