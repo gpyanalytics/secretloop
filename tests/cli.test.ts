@@ -11,7 +11,7 @@ import {
 } from "../src/cli";
 import { checkNodeVersion, MIN_NODE } from "../src/node-guard";
 import { Finding } from "../src/scanner";
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
@@ -874,6 +874,162 @@ test("a baselined occurrence leaves the group, and the group names only findings
     rmSync(dir, { recursive: true, force: true });
     rmSync(store, { recursive: true, force: true });
   }
+});
+
+suite("\ncli.ts — an error message shows repository text, it never acts on it");
+
+/*
+ * Errors reach stderr -- a terminal, the pre-commit hook's output, a CI log -- and several carried outside text raw:
+ * main()'s catch printed a configuration error that quotes a repository's .secretloop.json (an invalid allowValues
+ * pattern), the root check printed the path it was given, the staged scan printed git's stderr, and argument and
+ * --rev-range refusals echoed what was typed. ESC drove the terminal, a bidi override rewrote the line and a newline
+ * printed lines of its own (a CI command, a fake "secretloop:" line). Each is now shown through the text report's
+ * escaping; the message, its wording and the exit code are otherwise unchanged.
+ */
+const C = (n: number) => String.fromCharCode(n);
+const ESC = C(27), RLO = C(0x202e), LF = "\n";
+const HOSTILE = "x" + ESC + "[31mRED" + RLO + LF + "::stop-commands::tok" + LF + "secretloop: No secrets found";
+
+function activeIn(text: string): boolean {
+  for (const ch of text) {
+    const n = ch.charCodeAt(0);
+    if ((n < 0x20 && n !== 0x0a) || (n >= 0x7f && n <= 0x9f) || n === 0x61c || n === 0x200e || n === 0x200f ||
+        (n >= 0x202a && n <= 0x202e) || (n >= 0x2066 && n <= 0x2069) || n === 0x2028 || n === 0x2029) return true;
+  }
+  return false;
+}
+
+function cliIn(cwd: string, args: string[], env: NodeJS.ProcessEnv = process.env) {
+  return spawnSync("node", [CLI_PATH, ...args], { cwd, encoding: "utf8", env, timeout: 60000 });
+}
+
+/** stderr says what it said before, once, with nothing a terminal or CI runner would act on. */
+function assertShownOnce(stderr: string, mustContain: string, what: string): void {
+  assert.ok(!activeIn(stderr), `${what}: an active character reached stderr`);
+  const lines = stderr.split("\n").filter((l) => l.length > 0);
+  assert.strictEqual(lines.length, 1, `${what}: the message printed ${lines.length} lines`);
+  assert.ok(lines[0].startsWith("secretloop: "), `${what}: ${JSON.stringify(lines[0])}`);
+  assert.ok(lines[0].includes(mustContain), `${what}: the message lost its wording`);
+  assert.ok(!lines.some((l) => /^\s*::/.test(l)), `${what}: a line starts as a CI workflow command`);
+}
+
+function withDir(fn: (dir: string) => void): void {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-stderr-"));
+  try {
+    fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const gitIn = (dir: string, ...a: string[]) =>
+  spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", ...a], { cwd: dir, encoding: "utf8" });
+
+test("a repository's invalid allowValues pattern is shown escaped by scan and by staged, exit 2", () => {
+  withDir((dir) => {
+    writeFileSync(path.join(dir, ".secretloop.json"), JSON.stringify({ allowValues: ["(" + HOSTILE] }), "utf8");
+    writeFileSync(path.join(dir, "a.js"), "const ok = 1;\n", "utf8");
+    gitIn(dir, "init", "-q");
+    gitIn(dir, "add", "-A");
+    for (const cmd of [["scan", "."], ["staged"]]) {
+      const r = cliIn(dir, [...cmd, "--fail-on", "never"]);
+      assert.strictEqual(r.status, 2, `${cmd[0]} exit`);
+      assertShownOnce(r.stderr, "is not a valid regular expression", cmd[0]);
+      assert.ok(r.stderr.includes("\\x1b[31mRED\\u202e"), `${cmd[0]}: the pattern is not shown escaped`);
+    }
+  });
+});
+
+test("a --path that does not exist is shown escaped, exit 2", () => {
+  withDir((dir) => {
+    const r = cliIn(dir, ["scan", "--path", path.join(dir, "no" + HOSTILE), "--fail-on", "never"]);
+    assert.strictEqual(r.status, 2);
+    assertShownOnce(r.stderr, "does not exist.", "rootError");
+  });
+});
+
+test("an argument error and a refused --rev-range echo what was typed escaped, exit 2", () => {
+  withDir((dir) => {
+    gitIn(dir, "init", "-q");
+    const bad = cliIn(dir, ["scan", "--format", "json" + HOSTILE]);
+    assert.strictEqual(bad.status, 2);
+    assertShownOnce(bad.stderr, "is not a known format", "argError");
+    const range = cliIn(dir, ["history", "--rev-range", "main" + HOSTILE]);
+    assert.strictEqual(range.status, 2);
+    assertShownOnce(range.stderr, "was refused", "--rev-range");
+  });
+});
+
+test("git's stderr from the staged listing is shown escaped, exit 2", () => {
+  if (process.platform === "win32") skip("a shell-script git stand-in is POSIX only");
+  withDir((dir) => {
+    const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    assert.ok(realGit, "git not found");
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    // Stands in for git only for the staged listing, writing hostile text to stderr; every other call is real git.
+    writeFileSync(path.join(bin, "git"), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = "--cached" ]; then printf '%s' "$SECRETLOOP_TEST_STDERR" >&2; exit 128; fi; done\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+    const repo = path.join(dir, "repo");
+    mkdirSync(repo);
+    gitIn(repo, "init", "-q");
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, SECRETLOOP_TEST_STDERR: "fatal: " + HOSTILE };
+    const r = cliIn(repo, ["staged", "--fail-on", "never"], env);
+    assert.strictEqual(r.status, 2);
+    assertShownOnce(r.stderr, "git could not list staged files: fatal: x", "staged.error");
+  });
+});
+
+test("a committed baseline's own version field and name are shown escaped in the outdated notice", () => {
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "a.js"), "const ok = 1;\n", "utf8");
+    const baseline = path.join(dir, "baseline.json");
+    writeFileSync(baseline, JSON.stringify({ version: "1" + HOSTILE, fingerprints: [] }), "utf8");
+    const r = cliIn(dir, ["scan", ".", "--baseline", baseline, "--fail-on", "never"]);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assertShownOnce(r.stderr, "baseline and this is version", "baseline notice");
+  });
+});
+
+test("an ordinary multi-line git error is kept whole, on one line, its breaks shown as \\x0a", () => {
+  if (process.platform === "win32") skip("a shell-script git stand-in is POSIX only");
+  withDir((dir) => {
+    const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, "git"), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = "--cached" ]; then printf '%s' "$SECRETLOOP_TEST_STDERR" >&2; exit 128; fi; done\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+    const repo = path.join(dir, "repo");
+    mkdirSync(repo);
+    gitIn(repo, "init", "-q");
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, SECRETLOOP_TEST_STDERR: "fatal: a\nhint: b\n" };
+    const r = cliIn(repo, ["staged", "--fail-on", "never"], env);
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stderr, "secretloop: git could not list staged files: fatal: a\\x0ahint: b\n");
+  });
+});
+
+test("a --output and a --write-baseline path are echoed escaped", () => {
+  if (process.platform === "win32") skip("Windows forbids control characters in file names");
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "a.js"), "pass" + 'word = "Qm7vR2xKp9Lw4Tz8Hc3N"\n', "utf8");
+    const name = "r" + ESC + "[2K" + RLO + ".txt";
+    const out = cliIn(dir, ["scan", ".", "--output", path.join(dir, name)]);
+    assert.strictEqual(out.status, 1, out.stderr);
+    assert.ok(!activeIn(out.stderr), "the --output path reached stderr raw");
+    assert.ok(out.stderr.includes("r\\x1b[2K\\u202e.txt"), "the --output path is not shown escaped");
+    const wb = cliIn(dir, ["scan", ".", "--write-baseline", path.join(dir, "b" + ESC + ".json")]);
+    assert.strictEqual(wb.status, 0, wb.stderr);
+    assert.ok(!activeIn(wb.stdout), "the --write-baseline path reached stdout raw");
+    assert.ok(wb.stdout.includes("b\\x1b.json"), "the --write-baseline path is not shown escaped");
+  });
+});
+
+test("an ordinary error is printed exactly as before", () => {
+  withDir((dir) => {
+    const missing = path.join(dir, "plain-missing");
+    const r = cliIn(dir, ["scan", "--path", missing, "--fail-on", "never"]);
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stderr, `secretloop: ${missing} does not exist.\n`);
+  });
 });
 
 finish();
