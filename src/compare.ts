@@ -309,11 +309,12 @@ const SEVERITIES = new Set(["critical", "high", "medium", "low"]);
  * them printed it. Measured on the success path, which is worse -- an eligible
  * comparison that leaks.
  *
- * The fingerprint is already validated (shape, length, no control characters)
- * and is already printed, because it is the identity. Deriving the display
- * fields from it means the comparator echoes exactly ONE untrusted string per
- * finding instead of four, and the location it shows is guaranteed to be the
- * one it matched on rather than a parallel claim that may disagree.
+ * The fingerprint is checked for length and shape; its path is not inspected,
+ * and neither the path nor the fingerprint is ever printed. Deriving the
+ * display fields from the rule and digest it was matched on means the
+ * comparator shows only closed-shape values per finding, and what it shows is
+ * guaranteed to belong to the identity it matched rather than to a parallel
+ * claim that may disagree.
  *
  * Shape is `<path>:<ruleId>:<16 hex>`, split from the RIGHT because a path may
  * itself contain colons.

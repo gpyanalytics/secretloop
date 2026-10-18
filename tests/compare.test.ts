@@ -295,6 +295,15 @@ test("matching on an unusual path stays exact: a tab and a space are different f
   assert.strictEqual(r.added.length, 1, "the two fingerprints were normalised into one");
 });
 
+test("matching on an unusual path stays exact: a bidi override, NUL or ESC is not stripped", () => {
+  const C = (n: number) => String.fromCharCode(n);
+  for (const n of [0x202e, 0, 27]) {
+    const r = cmp(report({}, [finding(`a${C(n)}b.js:github-token:${hex("7")}`)]), report({}, [finding(`ab.js:github-token:${hex("7")}`)]));
+    assert.strictEqual(r.comparable, true);
+    assert.strictEqual(r.added.length, 1, `char ${n} was stripped from the matching key`);
+  }
+});
+
 test("a control character outside the path -- in the rule or the digest -- is still refused", () => {
   const C = (n: number) => String.fromCharCode(n);
   for (const fp of [`app.js:git${C(27)}hub-token:${hex("7")}`, `app.js:github-token:${hex("7").slice(0, 15)}${C(9)}`, `app.js:github-token${C(10)}:${hex("7")}`]) {

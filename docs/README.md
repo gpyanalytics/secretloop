@@ -108,7 +108,7 @@ report prints control and bidi characters in names and values as visible escapes
 whatever prefix git is configured to write, and the editor's Output channel
 escapes file names the same way as the text report, and so do the CLI's error
 messages, and `compare` accepts reports whose fingerprints hold a tab or another
-control character. The first two are in `src/report.ts`, the third in
+control or bidi character. The first two are in `src/report.ts`, the third in
 `src/extension.ts`, the fourth in `src/walk.ts`, `src/mcp-core.ts` and
 `src/extension.ts`, the fifth in `src/walk.ts` and `src/history.ts`, the sixth
 in `src/walk.ts`, the seventh and eighth in `src/report.ts`, the ninth in
