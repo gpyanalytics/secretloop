@@ -24,6 +24,13 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed: `compare` accepts reports of repositories with unusual file names.** A fingerprint whose path held a tab,
+  a newline, another control character or a bidi override was refused as `malformed-finding-identity`, so two
+  reports of a repository with a single tab-named file could never be compared. The path is matched on and never
+  printed (the comparator shows only rule id, digest, line and severity), so it is now accepted as documented and
+  matched exactly; a control character in the rule id or the digest is still refused, and nothing from the path
+  reaches output. Fingerprints, reports and eligibility rules are otherwise unchanged. The change is in
+  `src/compare.ts`; only `out/cli.js` changes. See [the comparator](docs/reports.md#the-comparator).
 - **Fixed (security hardening): CLI error messages cannot be driven by repository text.** Errors on stderr — a
   terminal, the pre-commit hook's output, a CI log — carried outside text raw: an invalid `allowValues` pattern from
   a repository's `.secretloop.json` (printed by `scan` and by `staged`, so by the pre-commit hook of anyone who

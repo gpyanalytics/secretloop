@@ -267,17 +267,42 @@ test("`findings` that is not an array is an input error, not an empty report", (
 // ---------------------------------------------------------------------------
 suite("\ncompare (unit) — untrusted input");
 
-test("a hostile FINGERPRINT is rejected outright, not scrubbed", () => {
-  // The fingerprint is the matching key, so scrubbing it would silently change
-  // which findings match. Rejecting keeps matching exact and output safe, and
-  // fails conservatively: the pair is refused rather than quietly compared.
-  const nasty = "\u0000\u001b[31mRED\u202e/dtth.exe";
-  const r = cmp(report(), report({}, [finding(`${nasty}:rule:${hex("7")}`)]));
-  assert.strictEqual(r.comparable, false, "a fingerprint carrying control characters must be refused");
-  assert.ok(codes(r).includes("malformed-finding-identity"));
-  const out = renderText(r) + renderJson(r);
-  for (const ch of ["\u0000", "\u001b", "\u202e"]) {
-    assert.ok(!out.includes(ch), `${JSON.stringify(ch)} must not reach output`);
+test("an unusual PATH in a fingerprint is accepted and matched, and never reaches output", () => {
+  // The path is never shown (see the presentation policy in docs/reports.md): matching uses the full raw fingerprint
+  // and output carries only ruleId, digest, line and severity. A fingerprint whose path holds a tab, a newline,
+  // ESC, NUL or a bidi override is a real file's identity -- SecretLoop writes such fingerprints for such names --
+  // so it is matched exactly, not refused, and none of it can reach the comparator's output.
+  const C = (n: number) => String.fromCharCode(n);
+  const odd = "tab" + C(9) + "name" + C(10) + C(0) + C(27) + "[31mRED" + C(0x202e) + "/dtth.exe";
+  const fp = `${odd}:github-token:${hex("7")}`;
+  const same = cmp(report({}, [finding(fp)]), report({}, [finding(fp)]));
+  assert.strictEqual(same.comparable, true, `refused: ${JSON.stringify(codes(same))}`);
+  assert.strictEqual(same.added.length, 0);
+  const added = cmp(report(), report({}, [finding(fp)]));
+  assert.strictEqual(added.comparable, true);
+  assert.strictEqual(added.added.length, 1);
+  assert.strictEqual(added.added[0].ruleId, "github-token");
+  assert.strictEqual(added.added[0].digest, hex("7"));
+  const out = renderText(same) + renderJson(same) + renderText(added) + renderJson(added);
+  for (const n of [0, 9, 27, 0x202e]) assert.ok(!out.includes(C(n)), `char ${n} reached output`);
+  assert.ok(!out.includes("dtth.exe") && !out.includes("tab"), "the path reached output");
+});
+
+test("matching on an unusual path stays exact: a tab and a space are different files", () => {
+  const C = (n: number) => String.fromCharCode(n);
+  const r = cmp(report({}, [finding(`a${C(9)}b.js:github-token:${hex("7")}`)]), report({}, [finding(`a b.js:github-token:${hex("7")}`)]));
+  assert.strictEqual(r.comparable, true);
+  assert.strictEqual(r.added.length, 1, "the two fingerprints were normalised into one");
+});
+
+test("a control character outside the path -- in the rule or the digest -- is still refused", () => {
+  const C = (n: number) => String.fromCharCode(n);
+  for (const fp of [`app.js:git${C(27)}hub-token:${hex("7")}`, `app.js:github-token:${hex("7").slice(0, 15)}${C(9)}`, `app.js:github-token${C(10)}:${hex("7")}`]) {
+    const r = cmp(report(), report({}, [finding(fp)]));
+    assert.strictEqual(r.comparable, false, `accepted ${JSON.stringify(fp)}`);
+    assert.ok(codes(r).includes("malformed-finding-identity"), JSON.stringify(codes(r)));
+    const out = renderText(r) + renderJson(r);
+    for (const n of [9, 27]) assert.ok(!out.includes(C(n)), `char ${n} reached output`);
   }
 });
 
@@ -1137,6 +1162,23 @@ function repo(dir: string): void {
 
 const scanTo = (dir: string, out: string, mode = "scan") =>
   cli([mode, "--path", dir, "--format", "json", "-o", out, "--fail-on", "never"]);
+
+test("two scans of a repository holding a tab-named file compare (exit 0), and the name never reaches output", () => {
+  if (process.platform === "win32") skip("Windows forbids a tab in a file name");
+  withDir((dir) => {
+    repo(dir);
+    const name = "tab" + String.fromCharCode(9) + "name.js";
+    writeFileSync(path.join(dir, name), `const t = "${token()}";\n`);
+    writeFileSync(path.join(dir, "app.js"), `const t = "${token()}";\n`);
+    const A = path.join(dir, "A.json"), B = path.join(dir, "B.json");
+    assert.strictEqual(scanTo(dir, A).status, 0);
+    assert.strictEqual(scanTo(dir, B).status, 0);
+    const r = cli(["compare", A, B]);
+    assert.strictEqual(r.status, 0, `compare refused the pair: ${r.stdout}${r.stderr}`);
+    assert.ok(!(r.stdout + r.stderr).includes(String.fromCharCode(9)), "a tab reached compare's output");
+    assert.ok(!(r.stdout + r.stderr).includes("tab"), "the path reached compare's output");
+  });
+});
 
 test("documented exit codes: 0 nothing new, 1 new findings, 2 bad input, 3 incomparable", () => {
   withDir((dir) => {

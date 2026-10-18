@@ -107,19 +107,6 @@ const FINGERPRINT_DIGEST = /^[0-9a-f]{16}$/;
 const MAX_FINGERPRINT_CHARS = 4096;
 
 /**
- * Control characters, DEL, and the bidirectional overrides that let text render
- * as something other than what it is.
- *
- * Checked on the FINGERPRINT AT INTAKE rather than scrubbed on the way out,
- * because the fingerprint is the matching key: scrubbing it would silently
- * change which findings match each other. Rejecting instead keeps matching
- * exact and keeps the output safe, and it fails in the conservative direction —
- * a report carrying such a fingerprint is refused, not quietly compared.
- */
-// eslint-disable-next-line no-control-regex
-const UNSAFE_CHARS = /[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
-
-/**
  * Field-specific validity, exactly as `docs/reports.md` states it. A shared
  * shape is not enough: `root` and `scopeDigest` carry different prefixes, and a
  * bare 16-hex string is valid for a config digest and invalid for a scope one.
@@ -606,7 +593,13 @@ function refOf(
   const fp = f.fingerprint;
   if (typeof fp !== "string") return bad("structure");
   if (fp.length === 0 || fp.length > MAX_FINGERPRINT_CHARS) return bad("structure");
-  if (UNSAFE_CHARS.test(fp)) return bad("structure");
+  // No check on the path's characters. The path is arbitrary text that is
+  // matched on and never shown (see the presentation policy in
+  // docs/reports.md): a fingerprint whose path holds a tab, a newline, ESC or a
+  // bidi override is a real file's identity -- the scanner writes such
+  // fingerprints for such names -- so refusing it refused every comparison of
+  // that repository. The rule and the digest, the parts that can be shown, are
+  // checked by parseFingerprint and against the supported rules below.
   const line = typeof f.line === "number" && Number.isFinite(f.line) ? f.line : null;
   // Location comes from the fingerprint, not from the report's own fields --
   // see locationOf. `severity` is admitted only from the scanner's own set, so
