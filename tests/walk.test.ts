@@ -203,4 +203,40 @@ test("a history scan files each finding under the real name, not git's quoted fo
   });
 });
 
+suite("\nwalk.ts — names that would drive a terminal, through the CLI");
+
+/*
+ * End to end: real files whose names hold ESC, a newline followed by a forged finding block, CR and a bidi override,
+ * scanned, staged and committed, through the text report of `scan`, `staged` and `history`. Windows forbids the
+ * control characters in a name, so there only the bidi case is created.
+ */
+const ACTIVE_NAMES = process.platform === "win32"
+  ? ["rlo\u202eexe.js"]
+  : ["esc\u001b[31mRED\u001b[0m.js", "nl\n  [critical] FORGED (forged-rule)\n    x.js", "cr\rover.js", "rlo\u202eexe.js", "::group::x.js"];
+const ACTIVE_BYTES = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
+
+function cliText(dir: string, ...args: string[]): string {
+  const r = spawnSync("node", [WALK_CLI, ...args, "--fail-on", "never"], { cwd: dir, encoding: "utf8", timeout: 60000 });
+  assert.strictEqual(r.status, 0, r.stderr);
+  return r.stdout;
+}
+
+test("scan, staged and history text reports carry no active character and no forged line", () => {
+  withRepo((dir, git) => {
+    for (const n of ["plain.js", ...ACTIVE_NAMES]) writeFileSync(path.join(dir, n), QUOTED_LINE(), "utf8");
+    git("add", "-A");
+    const reports: Array<[string, string]> = [["staged", cliText(dir, "staged")], ["scan", cliText(dir, "scan", ".")]];
+    git("-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false", "commit", "-q", "-m", "x");
+    reports.push(["history", cliText(dir, "history")]);
+    for (const [cmd, out] of reports) {
+      assert.ok(!ACTIVE_BYTES.test(out), `${cmd}: an active character reached the text report`);
+      assert.ok(!out.split("\n").some((l) => l.includes("FORGED") && !l.includes("\\x0a")), `${cmd}: a forged line was printed`);
+      assert.ok(out.includes("rlo\\u202eexe.js:1"), `${cmd}: the bidi name is not shown escaped`);
+      assert.ok(!out.split("\n").some((l) => /^\s*::/.test(l)), `${cmd}: a line starts as a CI workflow command`);
+    }
+    // the machine-readable report still names the real files
+    assert.deepStrictEqual(filesOf(cliJson(dir, "scan", ".")), ["plain.js", ...ACTIVE_NAMES].sort());
+  });
+});
+
 finish();

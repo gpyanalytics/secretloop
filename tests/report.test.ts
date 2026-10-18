@@ -697,4 +697,113 @@ test("16. an empty report has an empty group list and zero counts", () => {
   assert.strictEqual(report.summary.groupedFindingCount, 0);
 });
 
+suite("\nreport.ts — the text report shows a name, it never lets the name drive the terminal");
+
+/*
+ * A file name, and a matched value, are the repository's bytes, and the text report printed them raw. A name holding
+ * ESC drove the terminal (colour, cursor, title), CR or a bidi override rewrote what was shown, and a newline printed
+ * lines of its own -- a forged "[critical]" block indistinguishable from a real finding. Every such character is now
+ * shown as a visible escape (`\x1b`, `\n`, `\u202e`), so the report keeps one line per thing it prints and the name
+ * stays findable. JSON and SARIF keep the real bytes: they are data, escaped by their own formats.
+ */
+const HOSTILE: Array<[string, string]> = [
+  ["esc\u001b[31mRED\u001b[0m.js", "esc\\x1b[31mRED\\x1b[0m.js"],
+  ["osc\u001b]0;title\u0007.js", "osc\\x1b]0;title\\x07.js"],
+  ["nl\n  [critical] FORGED (forged-rule)\n    x.js", "nl\\x0a  [critical] FORGED (forged-rule)\\x0a    x.js"],
+  ["cr\rover.js", "cr\\x0dover.js"],
+  ["tab\tname.js", "tab\\x09name.js"],
+  ["del\u007f.js", "del\\x7f.js"],
+  ["c1\u009b31m.js", "c1\\x9b31m.js"],
+  ["rlo\u202eexe.js", "rlo\\u202eexe.js"],
+  ["iso\u2066x\u2069.js", "iso\\u2066x\\u2069.js"],
+  ["lrm\u200e.js", "lrm\\u200e.js"],
+  ["alm\u061c.js", "alm\\u061c.js"],
+  ["ls\u2028ps\u2029.js", "ls\\u2028ps\\u2029.js"],
+  ["lone\ud800.js", "lone\\ud800.js"],
+  ["low\udc00.js", "low\\udc00.js"],
+];
+// Anything a terminal acts on, other than the line breaks the report itself writes.
+const ACTIVE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+
+function textFor(file: string, extra: Partial<Finding> = {}): string {
+  return render([finding({ file, fingerprint: `${file}:github-token:deadbeefdeadbeef`, ...extra })], "text", opts);
+}
+
+for (const [name, shown] of HOSTILE) {
+  test(`a name shown as ${shown} takes as many lines as an ordinary name`, () => {
+    const out = textFor(name);
+    assert.ok(!ACTIVE.test(out), `an active character reached the text report for ${shown}`);
+    assert.strictEqual(out.split("\n").length, textFor("plain.js").split("\n").length, "the name printed lines of its own");
+    assert.ok(out.includes(`  ${shown}:7\n`), `location line for ${shown}`);
+    assert.ok(out.includes(`fingerprint: ${shown}:github-token:deadbeefdeadbeef`), "fingerprint line");
+  });
+}
+
+test("no forged block survives: the only [critical] line is the real one", () => {
+  const out = textFor("nl\n  [critical] FORGED (forged-rule)\n    x.js");
+  assert.deepStrictEqual(out.split("\n").filter((l) => /^\s*\[critical\]/.test(l)), ["  [critical] GitHub Personal Access Token (github-token)"]);
+});
+
+test("a history location and every member of a same-value group are shown the same way", () => {
+  const a = finding({ file: "a\u001b[2Jx.js", commit: "0123456789abcdef", fingerprint: "a\u001b[2Jx.js:github-token:1111111111111111" });
+  const b = finding({ file: "b\nFORGED.js", fingerprint: "b\nFORGED.js:github-token:2222222222222222" });
+  const out = render([a, b], "text", opts);
+  assert.ok(!ACTIVE.test(out), JSON.stringify(out));
+  assert.ok(out.includes("a\\x1b[2Jx.js:7 (commit 01234567)"));
+  assert.ok(out.includes("b\\x0aFORGED.js:7"));
+  assert.ok(!out.split("\n").some((l) => l.startsWith("FORGED")), "the newline printed a line");
+});
+
+test("a confirmed-dead entry shows its location the same way", () => {
+  const out = render([finding({ file: "d\u001b[8m.js", verifyStatus: "dead" })], "text", opts);
+  assert.ok(!ACTIVE.test(out), JSON.stringify(out));
+  assert.ok(out.includes("d\\x1b[8m.js:7"));
+});
+
+test("a value and a verification detail are shown the same way, redacted or not", () => {
+  const value = "ghp_\u001b[31m6C7e42F292c6912E7710c838347Ae178B\u001b";
+  for (const redact of [true, false]) {
+    const out = render([finding({ value, verifyDetail: "detail\u001b]0;x\u0007\nFORGED" })], "text", { ...opts, redact });
+    assert.ok(!ACTIVE.test(out), `redact=${redact}: ${JSON.stringify(out)}`);
+    assert.ok(!out.split("\n").some((l) => l.startsWith("FORGED")), "the detail printed a line");
+  }
+  assert.ok(render([finding({ value })], "text", { ...opts, redact: false }).includes("ghp_\\x1b[31m6C7e42F292c6912E7710c838347Ae178B\\x1b"));
+});
+
+test("a name cannot start a printed line as a CI workflow command", () => {
+  // GitHub Actions reads a line that starts with `::` (after whitespace) as a workflow command -- a group that folds
+  // the real findings away, a forged annotation, `::stop-commands::` -- and Azure Pipelines reads `##vso[` and `##[`.
+  const CI_COMMAND_LINE = /^\s*(::|##)/;
+  const names = ["::group::x.js", "  ::error file=src/app.ts::No secrets found.js", " ::warning::x.js", "##[error]x.js", "##vso[task.setvariable variable=x]y.js"];
+  const single = names.map((n) => textFor(n));
+  const grouped = render(names.map((n) => finding({ file: n, fingerprint: `${n}:github-token:deadbeefdeadbeef` })), "text", opts);
+  const dead = render(names.map((n) => finding({ file: n, verifyStatus: "dead" })), "text", opts);
+  const detail = render([finding({ verifyDetail: "::stop-commands::x" })], "text", opts);
+  for (const out of [...single, grouped, dead, detail]) {
+    for (const line of out.split("\n")) assert.ok(!CI_COMMAND_LINE.test(line), `a line starts as a CI command: ${JSON.stringify(line)}`);
+    assert.ok(!/##(vso)?\[/i.test(out), "an Azure Pipelines command survives inside a line");
+  }
+  assert.ok(single[0].includes("  \\x3a:group::x.js:7\n"), JSON.stringify(single[0]));
+  assert.ok(single[3].includes("\\x23#[error]x.js:7"), JSON.stringify(single[3]));
+});
+
+test("ordinary names, including non-ASCII, spaces, quotes and backslashes, are shown exactly as they are", () => {
+  for (const name of ["src/app.ts", "café/naïve.js", "dir name/a b.js", 'quo"te.js', "back\\slash.js", "日本/設定.js", "emoji😀.js"]) {
+    const out = textFor(name);
+    assert.ok(out.includes(`  ${name}:7\n`), `${JSON.stringify(name)}: ${JSON.stringify(out)}`);
+    assert.ok(out.includes(`fingerprint: ${name}:github-token:deadbeefdeadbeef`));
+  }
+});
+
+test("JSON and SARIF keep the real name; only the text report escapes it", () => {
+  const name = "esc\u001b[31mRED\u001b[0m.js";
+  const f = finding({ file: name, fingerprint: `${name}:github-token:deadbeefdeadbeef` });
+  const j = JSON.parse(render([f], "json", opts));
+  assert.strictEqual(j.findings[0].file, name);
+  assert.strictEqual(j.findings[0].fingerprint, `${name}:github-token:deadbeefdeadbeef`);
+  const s = JSON.parse(render([f], "sarif", opts));
+  assert.strictEqual(s.runs[0].results[0].locations[0].physicalLocation.artifactLocation.uri, "esc%1B%5B31mRED%1B%5B0m.js");
+  assert.strictEqual(s.runs[0].results[0].partialFingerprints["secretloopFingerprint/v2"], `${name}:github-token:deadbeefdeadbeef`);
+});
+
 finish();

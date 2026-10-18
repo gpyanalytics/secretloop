@@ -520,8 +520,49 @@ function groupByReason(findings: Finding[]): Array<[UnknownReason, Finding[]]> {
 
 function locationOf(f: Finding): string {
   return f.commit
-    ? `${f.file}:${f.line} (commit ${f.commit.slice(0, 8)})`
-    : `${f.file ?? "<text>"}:${f.line}`;
+    ? `${shownAtLineStart(f.file ?? "")}:${f.line} (commit ${f.commit.slice(0, 8)})`
+    : `${f.file === undefined ? "<text>" : shownAtLineStart(f.file)}:${f.line}`;
+}
+
+/**
+ * Repository text as the text report prints it: anything a terminal acts on
+ * becomes a visible escape.
+ *
+ * A file name and a matched value are the repository's bytes. Printed raw, a
+ * name holding ESC drove the terminal (colour, cursor, window title), CR or a
+ * bidi override rewrote what was shown, and a newline printed lines of its own
+ * -- a forged "[critical]" block that read exactly like a real finding, in a
+ * terminal or a CI log. C0 and C1 controls, DEL, the bidi formatting
+ * characters, the line and paragraph separators and a lone surrogate are
+ * written `\x1b`, `\x0a`, `\u202e`: escaped rather than stripped, so two names
+ * stay two names and the one shown can still be found. Everything else, a
+ * backslash included, is shown as it is, so an ordinary name prints unchanged.
+ * Display only: JSON and SARIF carry the real name, in their own encodings,
+ * and fingerprints are computed before this.
+ *
+ * A CI log is read as well as shown. Azure Pipelines acts on `##vso[` and
+ * `##[`, so their first `#` is escaped wherever it appears; GitHub Actions acts
+ * on a line that starts with `::` after whitespace, which shownAtLineStart
+ * covers for the text that begins a line.
+ */
+const ACTIVE_TEXT =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+
+const LOG_COMMAND = /#(?=#(?:vso)?\[)/gi;
+const LINE_COMMAND = /^(\s*)([:#])(?=\2)/;
+
+function escaped(c: string): string {
+  const code = c.charCodeAt(0);
+  return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
+}
+
+function shown(text: string): string {
+  return text.replace(ACTIVE_TEXT, escaped).replace(LOG_COMMAND, escaped);
+}
+
+/** shown(), for text that begins a printed line: a leading `::` or `##` is not left to start it. */
+function shownAtLineStart(text: string): string {
+  return shown(text).replace(LINE_COMMAND, (_, space: string, c: string) => space + escaped(c));
 }
 
 /**
@@ -585,8 +626,8 @@ function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): s
     for (const occurrence of group) out.push(`${indent}    ${locationOf(occurrence)}`);
   }
 
-  out.push(`${indent}  value: ${displayValue(f, options.redact)}`);
-  if (f.verifyDetail) out.push(`${indent}  ${f.verifyDetail}`);
+  out.push(`${indent}  value: ${shown(displayValue(f, options.redact))}`);
+  if (f.verifyDetail) out.push(`${indent}  ${shownAtLineStart(f.verifyDetail)}`);
   // Suppressed only when EVERY occurrence is in a fixture path. One credential
   // in src/ and tests/ is one entry here, and it still needs moving -- so the
   // group errs toward giving the advice.
@@ -595,7 +636,7 @@ function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): s
   // baseline entry is per occurrence, so showing only the first would leave
   // someone unable to accept the rest.
   for (const occurrence of group) {
-    if (occurrence.fingerprint) out.push(`${indent}  fingerprint: ${occurrence.fingerprint}`);
+    if (occurrence.fingerprint) out.push(`${indent}  fingerprint: ${shown(occurrence.fingerprint)}`);
   }
   return out;
 }

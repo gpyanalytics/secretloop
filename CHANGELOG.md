@@ -24,6 +24,19 @@ release's version number and date are not decided.*
   `out/cli.js` and `out/mcp.js` do not include it. See
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
+- **Fixed (security hardening): the text report cannot be driven by a file name.** File names, matched values and
+  verification details were printed raw, so a crafted name holding ESC could drive the terminal (colour, cursor,
+  window title), CR or a bidi override could rewrite what was shown, and a newline printed lines of its own: a forged
+  `[critical]` block that read exactly like a real finding, in a terminal, the pre-commit hook's output or a CI log.
+  This applied to `scan`, `staged` and `history` (on the git route since names git quotes became reachable, and on
+  a tree outside git before that) and to the editor's text report. C0 and C1 controls, DEL, bidi formatting
+  characters, line and paragraph separators and lone surrogates are now printed as visible escapes (`\x1b`,
+  `\x0a`, `\u202e`), and a name or detail that would begin a line with `::` or `##`, or holds `##vso[` or `##[`, has
+  that character escaped so a CI runner cannot read the line as a workflow or logging command (a GitHub Actions
+  `::group::` folding the real findings away, a forged `::error` annotation, `::stop-commands::`, an Azure Pipelines
+  `##vso[`). Ordinary names print as they did. JSON, SARIF, baselines and fingerprints are unchanged; for a
+  name that shows an escape, take its fingerprint from the JSON report. The change is in `src/report.ts`, so
+  `out/cli.js` and `out/extension.js` change. See [the CLI reference](docs/cli.md#options).
 - **Fixed: SARIF locations name the right file when a path holds `#`, `?`, `%`, a space or other special
   characters.** `artifactLocation.uri` is a URI reference, and it carried the path verbatim, so a consumer resolving
   it reached another file or none: `#` began a fragment and `?` a query (`x#1.js` read as `x`), `%` an escape, a
