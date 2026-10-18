@@ -979,6 +979,50 @@ test("git's stderr from the staged listing is shown escaped, exit 2", () => {
   });
 });
 
+test("a committed baseline's own version field and name are shown escaped in the outdated notice", () => {
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "a.js"), "const ok = 1;\n", "utf8");
+    const baseline = path.join(dir, "baseline.json");
+    writeFileSync(baseline, JSON.stringify({ version: "1" + HOSTILE, fingerprints: [] }), "utf8");
+    const r = cliIn(dir, ["scan", ".", "--baseline", baseline, "--fail-on", "never"]);
+    assert.strictEqual(r.status, 0, r.stderr);
+    assertShownOnce(r.stderr, "baseline and this is version", "baseline notice");
+  });
+});
+
+test("an ordinary multi-line git error is kept whole, on one line, its breaks shown as \\x0a", () => {
+  if (process.platform === "win32") skip("a shell-script git stand-in is POSIX only");
+  withDir((dir) => {
+    const realGit = spawnSync("sh", ["-c", "command -v git"], { encoding: "utf8" }).stdout.trim();
+    const bin = path.join(dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(path.join(bin, "git"), `#!/bin/sh\nfor a in "$@"; do if [ "$a" = "--cached" ]; then printf '%s' "$SECRETLOOP_TEST_STDERR" >&2; exit 128; fi; done\nexec "${realGit}" "$@"\n`, { mode: 0o755 });
+    const repo = path.join(dir, "repo");
+    mkdirSync(repo);
+    gitIn(repo, "init", "-q");
+    const env = { ...process.env, PATH: `${bin}${path.delimiter}${process.env.PATH}`, SECRETLOOP_TEST_STDERR: "fatal: a\nhint: b\n" };
+    const r = cliIn(repo, ["staged", "--fail-on", "never"], env);
+    assert.strictEqual(r.status, 2);
+    assert.strictEqual(r.stderr, "secretloop: git could not list staged files: fatal: a\\x0ahint: b\n");
+  });
+});
+
+test("a --output and a --write-baseline path are echoed escaped", () => {
+  if (process.platform === "win32") skip("Windows forbids control characters in file names");
+  withDir((dir) => {
+    writeFileSync(path.join(dir, "a.js"), "pass" + 'word = "Qm7vR2xKp9Lw4Tz8Hc3N"\n', "utf8");
+    const name = "r" + ESC + "[2K" + RLO + ".txt";
+    const out = cliIn(dir, ["scan", ".", "--output", path.join(dir, name)]);
+    assert.strictEqual(out.status, 1, out.stderr);
+    assert.ok(!activeIn(out.stderr), "the --output path reached stderr raw");
+    assert.ok(out.stderr.includes("r\\x1b[2K\\u202e.txt"), "the --output path is not shown escaped");
+    const wb = cliIn(dir, ["scan", ".", "--write-baseline", path.join(dir, "b" + ESC + ".json")]);
+    assert.strictEqual(wb.status, 0, wb.stderr);
+    assert.ok(!activeIn(wb.stdout), "the --write-baseline path reached stdout raw");
+    assert.ok(wb.stdout.includes("b\\x1b.json"), "the --write-baseline path is not shown escaped");
+  });
+});
+
 test("an ordinary error is printed exactly as before", () => {
   withDir((dir) => {
     const missing = path.join(dir, "plain-missing");

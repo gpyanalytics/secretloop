@@ -25,13 +25,16 @@ release's version number and date are not decided.*
   [the verification prompt](docs/vscode.md#the-verification-prompt) and
   [staged-file warnings](docs/vscode.md#staged-file-warnings).
 - **Fixed (security hardening): CLI error messages cannot be driven by repository text.** Errors on stderr — a
-  terminal, the pre-commit hook's output, a CI log — carried outside text raw: an invalid `allowValues` pattern from a
-  repository's `.secretloop.json` (printed by `scan` and by `staged`, so by the pre-commit hook of anyone who clones
-  the repository), the `--path` the root check was given, git's stderr from the staged listing, and the value an
-  argument or `--rev-range` refusal echoed. ESC drove the terminal, a bidi override rewrote the line, and a newline
-  printed lines of its own, such as a CI command or a fake `secretloop:` line. These messages now take the text
-  report's escaping; their wording and exit codes are unchanged, and ordinary messages print as before. The change
-  is in `src/cli.ts`; only `out/cli.js` changes. See [the CLI reference](docs/cli.md#options).
+  terminal, the pre-commit hook's output, a CI log — carried outside text raw: an invalid `allowValues` pattern from
+  a repository's `.secretloop.json` (printed by `scan` and by `staged`, so by the pre-commit hook of anyone who
+  clones the repository), a committed baseline's own name and `version` field in the "outdated baseline" notice, the
+  `--path` the root check was given, git's stderr from the staged listing, the value an argument or `--rev-range`
+  refusal echoed, and the `--output` and `--write-baseline` paths the CLI repeats. ESC drove the terminal, a bidi
+  override rewrote the line, and a newline printed lines of its own, such as a CI command or a fake `secretloop:`
+  line. These messages now take the text report's escaping, with their wording and exit codes unchanged. A
+  single-line message prints as before; a multi-line one, such as git's own several-line errors, now prints on one
+  line with its breaks shown as `\x0a` (and tabs as `\x09`). The change is in `src/cli.ts`; only `out/cli.js`
+  changes. See [the CLI reference](docs/cli.md#options).
 - **Fixed (security hardening): the editor's Output channel cannot be driven by a file name.** The **SecretLoop**
   Output channel prints a document's workspace-relative path, the workspace root and error messages, and printed them
   raw: a file named with a newline wrote a line of its own that read exactly like the extension's ("SecretLoop: sent

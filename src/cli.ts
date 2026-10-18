@@ -1091,7 +1091,9 @@ async function main(): Promise<void> {
     const loaded = loadBaseline(args.baseline);
     // An outdated baseline matches nothing. Saying so is the difference between
     // "the tool broke" and "regenerate this file".
-    if (loaded.outdated) process.stderr.write(`secretloop: ${loaded.notice}\n`);
+    // The notice quotes the file's name and its own `version` field, both the
+    // repository's when the baseline is committed.
+    if (loaded.outdated) process.stderr.write(`secretloop: ${escapeForDisplay(loaded.notice ?? "")}\n`);
     // A baseline entry nobody can read is an accepted finding that quietly
     // stopped being accepted. Named by position, one per line, never fatal, and
     // carrying nothing out of the file: the diagnostic says which entry, and the
@@ -1099,7 +1101,7 @@ async function main(): Promise<void> {
     // dropped for the same reason -- it is the one line of this that a CI log
     // does not need.
     for (const diagnostic of loaded.diagnostics) {
-      process.stderr.write(`secretloop: ${diagnostic}\n`);
+      process.stderr.write(`secretloop: ${escapeForDisplay(diagnostic)}\n`);
     }
   }
 
@@ -1124,7 +1126,7 @@ async function main(): Promise<void> {
       "utf8"
     );
     process.stdout.write(
-      `secretloop: wrote ${fingerprints.length} fingerprint(s) to ${args.writeBaseline}.\n` +
+      `secretloop: wrote ${fingerprints.length} fingerprint(s) to ${escapeForDisplay(args.writeBaseline)}.\n` +
         `Future scans will ignore these; new findings still fail.\n`
     );
     return;
@@ -1214,7 +1216,7 @@ async function main(): Promise<void> {
     ];
     if (args.output) {
       lines.push(
-        `  Report written to ${args.output}. ` +
+        `  Report written to ${escapeForDisplay(args.output)}. ` +
           "Use --fail-on never for a report-only run."
       );
     }
