@@ -612,6 +612,10 @@ that arbitrary text contains no secret** — a credential-shaped path passes eve
 pattern a display filter could apply. Rather than claim otherwise, the
 comparator does not print it. Such a path is **accepted internally**: it matches
 normally, is never rejected for its contents, and simply never reaches output.
+That includes a path holding a tab, a newline, another control character or a
+bidi override, which the scanner writes for such file names (unreleased; through
+0.7.2 such a fingerprint was refused as `malformed-finding-identity`, so a
+repository with one tab-named file could not be compared at all).
 It is not detected, and nothing here claims it was.
 
 **A rule id must be a member of the supported set, not merely grammatical.** The
