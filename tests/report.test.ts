@@ -720,6 +720,7 @@ const HOSTILE: Array<[string, string]> = [
   ["alm\u061c.js", "alm\\u061c.js"],
   ["ls\u2028ps\u2029.js", "ls\\u2028ps\\u2029.js"],
   ["lone\ud800.js", "lone\\ud800.js"],
+  ["low\udc00.js", "low\\udc00.js"],
 ];
 // Anything a terminal acts on, other than the line breaks the report itself writes.
 const ACTIVE = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
@@ -767,6 +768,23 @@ test("a value and a verification detail are shown the same way, redacted or not"
     assert.ok(!out.split("\n").some((l) => l.startsWith("FORGED")), "the detail printed a line");
   }
   assert.ok(render([finding({ value })], "text", { ...opts, redact: false }).includes("ghp_\\x1b[31m6C7e42F292c6912E7710c838347Ae178B\\x1b"));
+});
+
+test("a name cannot start a printed line as a CI workflow command", () => {
+  // GitHub Actions reads a line that starts with `::` (after whitespace) as a workflow command -- a group that folds
+  // the real findings away, a forged annotation, `::stop-commands::` -- and Azure Pipelines reads `##vso[` and `##[`.
+  const CI_COMMAND_LINE = /^\s*(::|##)/;
+  const names = ["::group::x.js", "  ::error file=src/app.ts::No secrets found.js", " ::warning::x.js", "##[error]x.js", "##vso[task.setvariable variable=x]y.js"];
+  const single = names.map((n) => textFor(n));
+  const grouped = render(names.map((n) => finding({ file: n, fingerprint: `${n}:github-token:deadbeefdeadbeef` })), "text", opts);
+  const dead = render(names.map((n) => finding({ file: n, verifyStatus: "dead" })), "text", opts);
+  const detail = render([finding({ verifyDetail: "::stop-commands::x" })], "text", opts);
+  for (const out of [...single, grouped, dead, detail]) {
+    for (const line of out.split("\n")) assert.ok(!CI_COMMAND_LINE.test(line), `a line starts as a CI command: ${JSON.stringify(line)}`);
+    assert.ok(!/##(vso)?\[/i.test(out), "an Azure Pipelines command survives inside a line");
+  }
+  assert.ok(single[0].includes("  \\x3a:group::x.js:7\n"), JSON.stringify(single[0]));
+  assert.ok(single[3].includes("\\x23#[error]x.js:7"), JSON.stringify(single[3]));
 });
 
 test("ordinary names, including non-ASCII, spaces, quotes and backslashes, are shown exactly as they are", () => {

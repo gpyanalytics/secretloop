@@ -212,7 +212,7 @@ suite("\nwalk.ts — names that would drive a terminal, through the CLI");
  */
 const ACTIVE_NAMES = process.platform === "win32"
   ? ["rlo\u202eexe.js"]
-  : ["esc\u001b[31mRED\u001b[0m.js", "nl\n  [critical] FORGED (forged-rule)\n    x.js", "cr\rover.js", "rlo\u202eexe.js"];
+  : ["esc\u001b[31mRED\u001b[0m.js", "nl\n  [critical] FORGED (forged-rule)\n    x.js", "cr\rover.js", "rlo\u202eexe.js", "::group::x.js"];
 const ACTIVE_BYTES = /[\u0000-\u0009\u000b-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/;
 
 function cliText(dir: string, ...args: string[]): string {
@@ -232,6 +232,7 @@ test("scan, staged and history text reports carry no active character and no for
       assert.ok(!ACTIVE_BYTES.test(out), `${cmd}: an active character reached the text report`);
       assert.ok(!out.split("\n").some((l) => l.includes("FORGED") && !l.includes("\\x0a")), `${cmd}: a forged line was printed`);
       assert.ok(out.includes("rlo\\u202eexe.js:1"), `${cmd}: the bidi name is not shown escaped`);
+      assert.ok(!out.split("\n").some((l) => /^\s*::/.test(l)), `${cmd}: a line starts as a CI workflow command`);
     }
     // the machine-readable report still names the real files
     assert.deepStrictEqual(filesOf(cliJson(dir, "scan", ".")), ["plain.js", ...ACTIVE_NAMES].sort());

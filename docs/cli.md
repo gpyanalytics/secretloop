@@ -45,9 +45,13 @@ The text report shows file names and values as text, never as terminal input
 character, a line or paragraph separator or a lone surrogate in a name, a value or
 a verification detail is printed as a visible escape such as `\x1b`, `\x0a` or
 `\u202e`, so a crafted name cannot colour or move the cursor, rewrite a line, or
-print lines of its own. Ordinary names, including non-ASCII ones and backslashes,
-print as they are. The JSON and SARIF reports keep the real bytes; copy a
-fingerprint for a baseline from the JSON report when the text shows an escape.
+print lines of its own. Nor can it be read as a CI log command: a name or detail
+that would begin a line with `::` (GitHub Actions) or `##` has that character
+escaped (`\x3a`, `\x23`), and so does the first `#` of `##vso[` or `##[` (Azure
+Pipelines) anywhere in the text. Ordinary names, including non-ASCII ones and
+backslashes, print as they are. The JSON and SARIF reports keep the real name;
+copy a fingerprint for a baseline from the JSON report when the text shows an
+escape.
 
 `--include-entropy`, `--include-fixtures`, `--include-generated`,
 `--key-context` and `--include-api-document-entropy` are raise-only: a flag can

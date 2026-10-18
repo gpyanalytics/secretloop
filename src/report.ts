@@ -520,8 +520,8 @@ function groupByReason(findings: Finding[]): Array<[UnknownReason, Finding[]]> {
 
 function locationOf(f: Finding): string {
   return f.commit
-    ? `${shown(f.file ?? "")}:${f.line} (commit ${f.commit.slice(0, 8)})`
-    : `${f.file === undefined ? "<text>" : shown(f.file)}:${f.line}`;
+    ? `${shownAtLineStart(f.file ?? "")}:${f.line} (commit ${f.commit.slice(0, 8)})`
+    : `${f.file === undefined ? "<text>" : shownAtLineStart(f.file)}:${f.line}`;
 }
 
 /**
@@ -537,17 +537,32 @@ function locationOf(f: Finding): string {
  * written `\x1b`, `\x0a`, `\u202e`: escaped rather than stripped, so two names
  * stay two names and the one shown can still be found. Everything else, a
  * backslash included, is shown as it is, so an ordinary name prints unchanged.
- * Display only: JSON and SARIF carry the real bytes, escaped by their own
- * formats, and fingerprints are computed before this.
+ * Display only: JSON and SARIF carry the real name, in their own encodings,
+ * and fingerprints are computed before this.
+ *
+ * A CI log is read as well as shown. Azure Pipelines acts on `##vso[` and
+ * `##[`, so their first `#` is escaped wherever it appears; GitHub Actions acts
+ * on a line that starts with `::` after whitespace, which shownAtLineStart
+ * covers for the text that begins a line.
  */
 const ACTIVE_TEXT =
   /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
 
+const LOG_COMMAND = /#(?=#(?:vso)?\[)/gi;
+const LINE_COMMAND = /^(\s*)([:#])(?=\2)/;
+
+function escaped(c: string): string {
+  const code = c.charCodeAt(0);
+  return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
+}
+
 function shown(text: string): string {
-  return text.replace(ACTIVE_TEXT, (c) => {
-    const code = c.charCodeAt(0);
-    return code < 0x100 ? `\\x${code.toString(16).padStart(2, "0")}` : `\\u${code.toString(16).padStart(4, "0")}`;
-  });
+  return text.replace(ACTIVE_TEXT, escaped).replace(LOG_COMMAND, escaped);
+}
+
+/** shown(), for text that begins a printed line: a leading `::` or `##` is not left to start it. */
+function shownAtLineStart(text: string): string {
+  return shown(text).replace(LINE_COMMAND, (_, space: string, c: string) => space + escaped(c));
 }
 
 /**
@@ -612,7 +627,7 @@ function formatGroup(group: Finding[], options: ReportOptions, indent = "  "): s
   }
 
   out.push(`${indent}  value: ${shown(displayValue(f, options.redact))}`);
-  if (f.verifyDetail) out.push(`${indent}  ${shown(f.verifyDetail)}`);
+  if (f.verifyDetail) out.push(`${indent}  ${shownAtLineStart(f.verifyDetail)}`);
   // Suppressed only when EVERY occurrence is in a fixture path. One credential
   // in src/ and tests/ is one entry here, and it still needs moving -- so the
   // group errs toward giving the advice.

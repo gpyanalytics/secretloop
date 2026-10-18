@@ -31,7 +31,10 @@ release's version number and date are not decided.*
   This applied to `scan`, `staged` and `history` (on the git route since names git quotes became reachable, and on
   a tree outside git before that) and to the editor's text report. C0 and C1 controls, DEL, bidi formatting
   characters, line and paragraph separators and lone surrogates are now printed as visible escapes (`\x1b`,
-  `\x0a`, `\u202e`). Ordinary names print as they did. JSON, SARIF, baselines and fingerprints are unchanged; for a
+  `\x0a`, `\u202e`), and a name or detail that would begin a line with `::` or `##`, or holds `##vso[` or `##[`, has
+  that character escaped so a CI runner cannot read the line as a workflow or logging command (a GitHub Actions
+  `::group::` folding the real findings away, a forged `::error` annotation, `::stop-commands::`, an Azure Pipelines
+  `##vso[`). Ordinary names print as they did. JSON, SARIF, baselines and fingerprints are unchanged; for a
   name that shows an escape, take its fingerprint from the JSON report. The change is in `src/report.ts`, so
   `out/cli.js` and `out/extension.js` change. See [the CLI reference](docs/cli.md#options).
 - **Fixed: SARIF locations name the right file when a path holds `#`, `?`, `%`, a space or other special
