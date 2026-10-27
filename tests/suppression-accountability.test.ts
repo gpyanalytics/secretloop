@@ -316,6 +316,27 @@ function loadBaselineFrom(contents: unknown): ReturnType<typeof loadBaseline> {
   }
 }
 
+test("a lab that cannot be removed is reported on POSIX by name and error code only", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-cleanup-probe-"));
+  const reported: string[] = [];
+  try {
+    const refused = (target: string): void => {
+      throw Object.assign(new Error(`EACCES: refused ${target}`), { code: "EACCES" });
+    };
+    removeLab(dir, refused, (line) => reported.push(line));
+    if (process.platform === "win32") {
+      assert.deepStrictEqual(reported, [], "Windows keeps its transient-lock tolerance: a refused removal is silent");
+    } else {
+      assert.strictEqual(reported.length, 1, "a POSIX cleanup failure is reported, not swallowed");
+      assert.ok(reported[0].includes("EACCES"), "the error code is reported");
+      assert.ok(reported[0].includes(path.basename(dir)), "the lab is named by its basename");
+      assert.ok(!reported[0].includes(dir), "the full path is not printed");
+    }
+  } finally {
+    removeLab(dir);
+  }
+});
+
 test("a released baseline of bare strings loads exactly as before", () => {
   const loaded = loadBaselineFrom({ version: 2, fingerprints: ["a.py:rule:abc"] });
   assert.deepStrictEqual([...loaded.fingerprints], ["a.py:rule:abc"]);
