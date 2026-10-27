@@ -320,8 +320,10 @@ function removeLab(
     return true;
   } catch (err) {
     if (process.platform !== "win32") {
-      const code = (err as NodeJS.ErrnoException).code ?? "unknown";
-      report(`suppression-accountability: could not remove test lab ${path.basename(dir)} (${code})`);
+      const code = (err as NodeJS.ErrnoException | undefined)?.code ?? "unknown";
+      report(
+        `suppression-accountability: could not remove test lab ${path.basename(dir)} (${code})`
+      );
     }
     return false;
   }
