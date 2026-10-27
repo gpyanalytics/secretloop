@@ -1,4 +1,4 @@
-import { mkdtempSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
 import { tmpdir } from "os";
 import * as path from "path";
@@ -289,18 +289,41 @@ test("honorInlineDirectives: false still honours nothing", () => {
 
 suite("\nsuppression accountability — baseline entries");
 
+/** One removal of a lab directory. The real one is `rmSync`; a test may pass a refusal in its place. */
+type Remove = (dir: string) => void;
+
+const removeDirectory: Remove = (dir) =>
+  rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+
+const writeStderrLine = (line: string): void => {
+  process.stderr.write(`${line}\n`);
+};
+
 /**
  * Removes a lab directory this file created. Every lab here was left behind in the OS temp
  * directory on each run until this existed. The bounded retries cover a transient Windows lock
  * (EBUSY / EPERM from an indexer or scanner, or a child that has only just exited); a lab that
  * still cannot be removed is left where the OS temp cleaner will find it, rather than turning a
  * passing test into a failure or replacing the error a failing one threw.
+ *
+ * On POSIX a refused removal is reported by the lab's basename and the error code, never the full
+ * path or the message, which can carry one. On Windows it stays silent, because a lock there is
+ * the expected case. Returns whether the lab is gone.
  */
-function removeLab(dir: string): void {
+function removeLab(
+  dir: string,
+  remove: Remove = removeDirectory,
+  report: (line: string) => void = writeStderrLine
+): boolean {
   try {
-    rmSync(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
-  } catch {
-    // left for the OS temp cleaner; see above
+    remove(dir);
+    return true;
+  } catch (err) {
+    if (process.platform !== "win32") {
+      const code = (err as NodeJS.ErrnoException).code ?? "unknown";
+      report(`suppression-accountability: could not remove test lab ${path.basename(dir)} (${code})`);
+    }
+    return false;
   }
 }
 
@@ -335,6 +358,14 @@ test("a lab that cannot be removed is reported on POSIX by name and error code o
   } finally {
     removeLab(dir);
   }
+});
+
+test("a lab that is removed is not reported", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "secretloop-cleanup-probe-"));
+  const reported: string[] = [];
+  assert.strictEqual(removeLab(dir, undefined, (line) => reported.push(line)), true);
+  assert.deepStrictEqual(reported, []);
+  assert.strictEqual(existsSync(dir), false, "the lab is gone");
 });
 
 test("a released baseline of bare strings loads exactly as before", () => {
