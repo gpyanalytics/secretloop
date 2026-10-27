@@ -1409,6 +1409,22 @@ test("an MCP scan of a git repository reports a non-ASCII file name", () => {
 });
 
 // ---------------------------------------------------------------------------
+suite("\nmcp-core — regression: credential groups stay out of MCP responses");
+
+test("a scan whose credential sits in two files answers without credential groups or report-local ids", () => {
+  // docs/reports.md: the MCP server's responses are unchanged by credential groups.
+  const t = tokens(1)[0];
+  const dir = repo("groups-not-in-mcp", { "a.js": `const t = "${t}";\n`, "b.js": `const t = "${t}";\n` });
+  resetSessions();
+  const p = payload(toolScan({ path: dir }));
+  const text = JSON.stringify(p);
+  assert.ok(text.includes("github-token"), "the scan found nothing, so the check below would prove nothing");
+  assert.strictEqual((p.findings ?? []).length, 2, "both copies of the credential should be reported");
+  assert.ok(!text.includes("credentialGroup"), "a credential group reached an MCP response");
+  assert.ok(!text.includes("groupedFindingCount"), "a group count reached an MCP response");
+  assert.ok(!/"id":"F\d+"/.test(text), "a report-local finding id reached an MCP response");
+});
+
 suite("mcp-core — cleanup");
 
 test("cleanup", () => {

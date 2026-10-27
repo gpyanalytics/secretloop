@@ -806,4 +806,29 @@ test("JSON and SARIF keep the real name; only the text report escapes it", () =>
   assert.strictEqual(s.runs[0].results[0].partialFingerprints["secretloopFingerprint/v2"], `${name}:github-token:deadbeefdeadbeef`);
 });
 
+suite("\nreport.ts — regression: credential groups in history reports and in SARIF");
+
+test("a history report counts one credential committed twice as two occurrences in one group", () => {
+  // docs/reports.md: "A history report groups the same way: one credential in two commits is two occurrences."
+  const a = finding({ commit: "1111111111111111111111111111111111111111", fingerprint: "src/app.ts:github-token:aaaaaaaaaaaaaaaa" });
+  const b = finding({ commit: "2222222222222222222222222222222222222222", fingerprint: "src/app.ts:github-token:aaaaaaaaaaaaaaaa" });
+  const j = JSON.parse(render([a, b], "json", opts));
+  assert.strictEqual(j.credentialGroups.length, 1, JSON.stringify(j.credentialGroups));
+  assert.strictEqual(j.credentialGroups[0].occurrences, 2, "two commits were counted as one place");
+  assert.deepStrictEqual(j.credentialGroups[0].findings, ["F1", "F2"]);
+  assert.strictEqual(j.summary.credentialGroupCount, 1);
+  assert.strictEqual(j.summary.groupedFindingCount, 2);
+});
+
+test("SARIF carries no credential groups and no report-local ids", () => {
+  // docs/reports.md: groups are a JSON-report field; "SARIF, the text report, the baseline format and the MCP
+  // server's responses are unchanged."
+  const a = finding({ file: "a.js", fingerprint: "a.js:github-token:aaaaaaaaaaaaaaaa" });
+  const b = finding({ file: "b.js", fingerprint: "b.js:github-token:bbbbbbbbbbbbbbbb" });
+  const s = render([a, b], "sarif", opts);
+  assert.ok(!s.includes("credentialGroup"), "a credential group reached SARIF");
+  assert.ok(!s.includes("groupedFindingCount"), "a group count reached SARIF");
+  for (const r of JSON.parse(s).runs[0].results) assert.ok(!("id" in r), "a report-local finding id reached SARIF");
+});
+
 finish();

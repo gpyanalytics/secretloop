@@ -391,4 +391,28 @@ test("a link to a real directory inside the root does not scan it a second time"
   });
 });
 
+suite("\ncontainment — regression: the same holds for a Windows junction");
+
+/*
+ * PR #166's directory-link tests create "dir" symlinks, which need the symlink privilege on Windows and skip without
+ * it. A junction needs no privilege and is the common Windows link, and libuv reports it as a link. Elsewhere the
+ * "junction" type is ignored and a directory symlink is made, so this runs on every platform.
+ */
+test("a junction to '.' and one to '..' are each listed once, never walked", () => {
+  withWorkspace((c) => {
+    writeFileSync(path.join(c.repo, "a.js"), LINK_GENERIC(), "utf8");
+    symlinkSync(c.repo, path.join(c.repo, "self"), "junction");
+    symlinkSync(path.dirname(c.repo), path.join(c.repo, "up"), "junction");
+    const l = listFilesWithExclusions(c.repo, mergeConfig({}));
+    assert.deepStrictEqual([...l.files].sort(), ["a.js", "app.js", "self"], "the walk descended through a junction");
+    assert.strictEqual(l.outsideExcluded, 1, "the parent junction was not one exclusion");
+    const r = boundedScan(c.repo);
+    assert.strictEqual(r.status, 0, "the scan did not finish within 20 s");
+    assert.deepStrictEqual(scannedFiles(r.report!), ["a.js"], "a file was scanned through a junction");
+    assert.match(r.report!.summary.scope, /; 1 file\(s\) excluded \(symlinks resolving outside the scan root\)/);
+    assert.strictEqual(r.report!.incomplete, true, "the unwalked junction inside the root is not disclosed");
+    assert.ok(JSON.stringify(r.report!.summary.coverage?.limitations).includes("not a regular file"));
+  });
+});
+
 finish();
