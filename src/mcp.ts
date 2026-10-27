@@ -62,6 +62,34 @@ function packageVersion(): string {
 }
 
 /**
+ * Text for stderr that a terminal or a CI log only displays.
+ *
+ * The same characters as the text report's escapeForDisplay in src/report.ts —
+ * C0 and C1 controls, DEL, the bidi formatting characters, the line and
+ * paragraph separators, a lone surrogate, and the first `#` of an Azure
+ * Pipelines `##[` or `##vso[` — but every escape is a JSON `\u` escape, so an
+ * audit line stays JSON that reads back as what was sent. Copied rather than
+ * imported, for the reason given in src/mcp-core.ts; tests/mcp.test.ts checks
+ * the two escape the same characters.
+ */
+const ACTIVE_TEXT =
+  /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g;
+const LOG_COMMAND = /#(?=#(?:vso)?\[)/gi;
+
+function jsonEscaped(c: string): string {
+  return `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+}
+
+export function escapeForStderr(text: string): string {
+  return text.replace(ACTIVE_TEXT, jsonEscaped).replace(LOG_COMMAND, jsonEscaped);
+}
+
+/** The line printed when the server cannot start. */
+export function startupFailureLine(err: unknown): string {
+  return `secretloop-mcp: ${escapeForStderr(String((err as Error)?.message ?? err))}\n`;
+}
+
+/**
  * The audit trail, on stderr.
  *
  * The extension writes every decision it made to an Output channel because a
@@ -74,10 +102,14 @@ function packageVersion(): string {
  * arguments this server accepts are paths, globs, filters and fingerprints,
  * none of which is secret material; the results are reduced to counts before
  * they get here.
+ *
+ * Those arguments, the tool's name and a notification's method come from the
+ * client, and a refusal can quote a repository's .secretloop.json, so the JSON
+ * goes through escapeForStderr: still one line per event, still valid JSON.
  */
 function audit(event: string, detail: Record<string, unknown> = {}): void {
   process.stderr.write(
-    `secretloop-mcp ${new Date().toISOString()} ${event} ${JSON.stringify(detail)}\n`
+    `secretloop-mcp ${new Date().toISOString()} ${event} ${escapeForStderr(JSON.stringify(detail))}\n`
   );
 }
 
@@ -393,7 +425,7 @@ async function main(): Promise<void> {
 // module for a test must not open a transport on stdio.
 if (require.main === module) {
   main().catch((err) => {
-    process.stderr.write(`secretloop-mcp: ${err?.message ?? err}\n`);
+    process.stderr.write(startupFailureLine(err));
     process.exitCode = 1;
   });
 }

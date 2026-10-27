@@ -42,6 +42,17 @@ release's version number and date are not decided.*
   single-line message prints as before; a multi-line one, such as git's own several-line errors, now prints on one
   line with its breaks shown as `\x0a` (and tabs as `\x09`). The change is in `src/cli.ts`; only `out/cli.js`
   changes. See [the CLI reference](docs/cli.md#options).
+- **Fixed (security hardening): the MCP server's stderr cannot be driven by client or repository text.** The audit
+  trail on stderr logs each tool call's name and arguments, each refusal and each ignored notification as JSON, and
+  JSON escapes C0 controls but wrote DEL, C1 controls, the bidi formatting characters and the line and paragraph
+  separators as they were, in keys as well as values. The tool name, the arguments and a notification's method come
+  from the MCP client, and a refusal can quote a repository's `.secretloop.json`; a C1 control can drive some
+  terminals, and a bidi override or a line separator can rewrite or split what a log viewer shows. The line printed
+  when the server cannot start was not escaped at all. Both now escape the text report's characters, written as JSON
+  escapes (`\u009b`, `\u202e`, and the first `#` of `##vso[` or `##[` as `\u0023`), so each event is still
+  one line and its JSON reads back as what was sent; a line break keeps JSON's own `\n` in an audit line and shows
+  as `\u000a` on the startup line. stdout, the protocol, is unchanged. The change is in `src/mcp.ts`;
+  only `out/mcp.js` changes. See [the MCP server](docs/mcp.md#starting-it).
 - **Fixed (security hardening): the editor's Output channel cannot be driven by a file name.** The **SecretLoop**
   Output channel prints a document's workspace-relative path, the workspace root and error messages, and printed them
   raw: a file named with a newline wrote a line of its own that read exactly like the extension's ("SecretLoop: sent
