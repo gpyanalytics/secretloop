@@ -14,6 +14,8 @@ import { spawnSync } from "child_process";
 import * as path from "path";
 import { positiveSamples } from "./fixtures";
 import { describeScope as cliDescribeScope, validateRoot as cliValidateRoot } from "../src/cli";
+import { escapeForDisplay } from "../src/report";
+import { escapeForStderr, startupFailureLine } from "../src/mcp";
 import {
   AUTHORITY,
   HISTORY_FINDING_CAP,
@@ -1423,6 +1425,192 @@ test("a scan whose credential sits in two files answers without credential group
   assert.ok(!text.includes("credentialGroup"), "a credential group reached an MCP response");
   assert.ok(!text.includes("groupedFindingCount"), "a group count reached an MCP response");
   assert.ok(!/"id":"F\d+"/.test(text), "a report-local finding id reached an MCP response");
+});
+
+// ---------------------------------------------------------------------------
+/**
+ * The server's stderr: the audit trail and the startup failure.
+ *
+ * The audit line was JSON.stringify'd, which escapes C0 controls but writes DEL,
+ * C1 controls, the bidi formatting characters and the line separators as they
+ * are, in keys as well as values, and the tool name, its arguments and a
+ * notification's method all come from the client. A refusal's text, which can
+ * quote a repository's .secretloop.json, is logged there too. The startup line
+ * was not escaped at all. Both now go through escapeForStderr. The audit line
+ * exists only in a running server, so those tests run the built one, and they
+ * also check that what it writes on stdout, the protocol, did not change.
+ */
+suite("\nmcp — stderr diagnostics are escaped and stay one line per event");
+
+const MCP_PATH = path.join(__dirname, "..", "out", "mcp.js");
+const X = (n: number) => String.fromCharCode(n);
+// One character of each class the audit line wrote raw, ESC (which it always
+// escaped), and an Azure Pipelines command.
+const HOSTILE_MCP =
+  "a" + X(0x9b) + "2J" + X(0x7f) + "b" + X(0x202e) + "c" + X(0x2028) + "d" + X(0x1b) + "]0;t" + X(7) +
+  "e##vso[task.complete result=Succeeded]f";
+
+/** The first character a terminal or log viewer would act on, if any (a newline ends a line, so it is allowed). */
+function activeCode(text: string): number | undefined {
+  for (let i = 0; i < text.length; i++) {
+    const n = text.charCodeAt(i);
+    if (n >= 0xd800 && n <= 0xdbff) {
+      const next = text.charCodeAt(i + 1);
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        i++;
+        continue;
+      }
+      return n;
+    }
+    if ((n < 0x20 && n !== 0x0a) || (n >= 0x7f && n <= 0x9f) || n === 0x61c || n === 0x200e || n === 0x200f ||
+        (n >= 0x202a && n <= 0x202e) || (n >= 0x2066 && n <= 0x2069) || n === 0x2028 || n === 0x2029 ||
+        (n >= 0xdc00 && n <= 0xdfff)) return n;
+  }
+  return undefined;
+}
+
+const CI_COMMAND = /##(?:vso)?\[/i;
+
+function hex(n: number | undefined): string {
+  return n === undefined ? "none" : "U+" + n.toString(16).padStart(4, "0");
+}
+
+/** The JSON that follows the event name on an audit line. */
+function auditDetail(line: string): any {
+  return JSON.parse(line.slice(line.indexOf(" {") + 1));
+}
+
+const hostileRoot = path.join(ROOT, "root" + X(0x9b) + X(0x202e) + "x");
+const loneSurrogate = X(0xd800);
+const serverRun = (() => {
+  const messages = [
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "stderr-test", version: "0" } },
+    },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: HOSTILE_MCP, arguments: { path: HOSTILE_MCP } } },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: {
+        name: "secretloop_get_finding",
+        arguments: { fingerprint: HOSTILE_MCP, [HOSTILE_MCP]: HOSTILE_MCP, lone: loneSurrogate },
+      },
+    },
+    { jsonrpc: "2.0", method: "notifications/" + HOSTILE_MCP },
+  ];
+  // JSON.stringify writes the lone surrogate as an escape, so the pipe carries valid UTF-8.
+  const input = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+  return spawnSync(process.execPath, [MCP_PATH, hostileRoot], { cwd: ROOT, input, encoding: "utf8", timeout: 20000 });
+})();
+const stderrLines = (serverRun.stderr ?? "").split(/\r?\n/).filter((l) => l.length > 0);
+const eventLines = (event: string) => stderrLines.filter((l) => /^secretloop-mcp \S+ /.test(l) && l.includes(` ${event} {`));
+
+test("the server ran to the end of its input", () => {
+  assert.strictEqual(serverRun.error, undefined, `the server did not run: ${serverRun.error}`);
+  assert.strictEqual(serverRun.status, 0, `exit ${serverRun.status}, stderr: ${JSON.stringify(serverRun.stderr)}`);
+  assert.strictEqual(eventLines("tools/call").length, 2, "both calls should reach the handler and be audited");
+});
+
+test("every stderr line is one audit event, with nothing a terminal or a CI log would act on", () => {
+  for (const line of stderrLines) {
+    assert.match(line, /^secretloop-mcp( \S+ |: )/, `a stderr line is not a diagnostic: ${JSON.stringify(line)}`);
+  }
+  const stderr = serverRun.stderr ?? "";
+  assert.strictEqual(hex(activeCode(stderr)), "none", "an active character reached stderr");
+  assert.doesNotMatch(stderr, CI_COMMAND, "a CI log command reached stderr");
+  assert.strictEqual(eventLines("tools/result").length, 2, "each call should end in exactly one result line");
+  assert.strictEqual(eventLines("notification ignored").length, 1, "the notification should print one line");
+  assert.strictEqual(eventLines("ready").length, 1, "the ready line should print once");
+});
+
+test("each audit line's JSON reads back as exactly what the client and the launch line sent", () => {
+  const calls = eventLines("tools/call").map(auditDetail);
+  assert.deepStrictEqual(calls[0], { tool: HOSTILE_MCP, args: { path: HOSTILE_MCP } });
+  assert.deepStrictEqual(calls[1], {
+    tool: "secretloop_get_finding",
+    args: { fingerprint: HOSTILE_MCP, [HOSTILE_MCP]: HOSTILE_MCP, lone: loneSurrogate },
+  });
+  assert.deepStrictEqual(auditDetail(eventLines("notification ignored")[0]), { method: "notifications/" + HOSTILE_MCP });
+  const ready = auditDetail(eventLines("ready")[0]);
+  assert.ok(ready.allowedRoots.includes(path.resolve(hostileRoot)), `the launch root was not logged: ${JSON.stringify(ready)}`);
+  for (const result of eventLines("tools/result").map(auditDetail)) {
+    assert.strictEqual(result.ok, false, "both calls are refusals");
+    assert.strictEqual(typeof result.refused, "string");
+  }
+});
+
+test("stdout is unchanged: one JSON-RPC message per line, answering every request", () => {
+  const out = (serverRun.stdout ?? "").split(/\r?\n/).filter((l) => l.length > 0);
+  const messages = out.map((l) => JSON.parse(l));
+  assert.ok(!out.some((l) => l.startsWith("secretloop-mcp")), "a diagnostic reached stdout");
+  assert.deepStrictEqual(messages.map((m) => m.id).sort(), [1, 2, 3]);
+  for (const m of messages) assert.strictEqual(m.jsonrpc, "2.0");
+  const unknown = messages.find((m) => m.id === 2).result;
+  assert.strictEqual(unknown.isError, true);
+  assert.strictEqual(
+    unknown.content[0].text,
+    `SecretLoop could not answer this request.\n\nUnknown tool ${quoteUntrusted(HOSTILE_MCP)}.\n\n` +
+      "This is NOT a clean result — nothing was established about the repository."
+  );
+  assert.strictEqual(messages.find((m) => m.id === 3).result.isError, true);
+});
+
+test("escapeForStderr escapes exactly what the text report escapes, as JSON \\u escapes", () => {
+  // Copied rather than imported, like the helpers above; this is what keeps the two in step.
+  const mismatches: string[] = [];
+  for (let c = 0; c <= 0xffff; c++) {
+    const s = X(c);
+    const display = escapeForDisplay(s);
+    const stderr = escapeForStderr(s);
+    if (display === s) {
+      if (stderr !== s) mismatches.push(`${hex(c)} escaped here but not in the text report`);
+      continue;
+    }
+    if (stderr !== "\\u" + c.toString(16).padStart(4, "0")) mismatches.push(`${hex(c)} -> ${JSON.stringify(stderr)}`);
+    else if (parseInt(display.slice(2), 16) !== c) mismatches.push(`${hex(c)} the text report shows another character`);
+  }
+  assert.deepStrictEqual(mismatches.slice(0, 5), [], `${mismatches.length} mismatches`);
+});
+
+test("a CI log command is neutralised as the text report does it, in any case", () => {
+  for (const s of ["##[error]x", "##vso[task.setvariable variable=a]b", "##VSO[x]", "###[", "a##[b##vso[c", "#[", "# #["]) {
+    const neutralised = !CI_COMMAND.test(escapeForDisplay(s));
+    assert.strictEqual(!CI_COMMAND.test(escapeForStderr(s)), neutralised, `${JSON.stringify(s)} differs from the text report`);
+    assert.strictEqual(JSON.parse(escapeForStderr(JSON.stringify(s))), s, `${JSON.stringify(s)} did not read back`);
+  }
+});
+
+test("an escaped audit detail stays one line and parses back, for every class, in keys and values", () => {
+  for (const c of [0x00, 0x0a, 0x0d, 0x1b, 0x7f, 0x85, 0x9b, 0x9d, 0x61c, 0x200e, 0x202e, 0x2066, 0x2028, 0x2029, 0xd800, 0xdc00]) {
+    const detail = { ["k" + X(c)]: "v" + X(c) + "##vso[x]", list: [X(c)] };
+    const line = escapeForStderr(JSON.stringify(detail));
+    assert.strictEqual(hex(activeCode(line)), "none", `${hex(c)} reached the line`);
+    assert.ok(!line.includes("\n") && !CI_COMMAND.test(line), `${hex(c)}: ${JSON.stringify(line)}`);
+    assert.deepStrictEqual(JSON.parse(line), detail, `${hex(c)} did not read back`);
+  }
+});
+
+test("an ordinary audit detail is written unchanged, an astral character's surrogate pair included", () => {
+  const detail = {
+    tool: "secretloop_scan",
+    args: { path: "/work/repo", include: ["src/**", "#notes.md", "caf" + X(0xe9) + ".js"] },
+    note: "smile " + X(0xd83d) + X(0xde00),
+  };
+  assert.strictEqual(escapeForStderr(JSON.stringify(detail)), JSON.stringify(detail));
+});
+
+test("the startup failure line shows its message's control and bidi characters as escapes, on one line", () => {
+  const line = startupFailureLine(new Error("bad" + X(0x1b) + "]52;c;eA==" + X(7) + X(0x0d) + X(0x0a) + "::error::x" + X(0x202e)));
+  assert.ok(line.startsWith("secretloop-mcp: bad"), JSON.stringify(line));
+  assert.ok(line.endsWith("\n") && line.indexOf("\n") === line.length - 1, "the line has more than one line break");
+  assert.strictEqual(hex(activeCode(line)), "none", "an active character reached the line");
+  assert.ok(line.includes("\\u001b]52") && line.includes("\\u000a::error::"), JSON.stringify(line));
+  assert.strictEqual(startupFailureLine("plain"), "secretloop-mcp: plain\n");
 });
 
 suite("mcp-core — cleanup");

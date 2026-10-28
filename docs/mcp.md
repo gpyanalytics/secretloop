@@ -22,6 +22,17 @@ npx -y --package=secretloop secretloop-mcp [allowed-directory ...]
 stdio; stdout is the protocol and every diagnostic goes to stderr. Each
 invocation is logged there with its arguments and result counts, never a value.
 
+The tool name, the arguments and a notification's method come from the client,
+and a refusal can quote a repository's `.secretloop.json`, so stderr shows their
+control and bidi characters, line and paragraph separators and the first `#` of
+an Azure Pipelines `##vso[` or `##[` as escapes (unreleased): the characters the
+text report escapes, but written as JSON escapes, `\u009b` and `\u202e` where
+the CLI shows `\x9b` and `\u202e`. In an audit line a line break, a tab or ESC
+keeps JSON's own `\n`, `\t` or `\u001b`; each event stays one line, and the JSON
+after its name reads back as exactly what was sent. The line printed when the
+server cannot start is escaped the same way, a line break there showing as
+`\u000a` where the CLI shows `\x0a`.
+
 ## The five tools
 
 | tool | what it does |
