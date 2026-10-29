@@ -7,12 +7,14 @@ import {
   resolveConfigFile,
   loadConfig,
   loadConfigWithSource,
+  ConfigReadError,
   CONFIG_FILENAME,
 } from "../src/config";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, symlinkSync, writeFileSync, chmodSync, rmSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
-import { test, suite, finish, assert } from "./harness";
+import { test, suite, finish, assert, skip } from "./harness";
 
 suite("config.ts");
 
@@ -155,6 +157,156 @@ test("loadConfig still returns just the merged config", () => {
     writeFileSync(path.join(dir, CONFIG_FILENAME), JSON.stringify({ entropyPassEnabled: true }));
     assert.deepStrictEqual(loadConfig(dir), loadConfigWithSource(dir).config);
   } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A FIFO has no bytes to read: opening one for reading waits for a writer that
+// never comes. Each case runs in a child process under a hard timeout, so a hang
+// fails the assertion instead of stopping the test runner. READY is written
+// before the call, so a child that never started is reported as a harness fault
+// and not as the defect.
+const TS_NODE = require.resolve("ts-node/register/transpile-only");
+const CONFIG_MODULE = path.join(__dirname, "..", "src", "config.ts");
+
+function loadInChild(call: string): { started: boolean; hung: boolean; out: string } {
+  const script =
+    `const fs = require("fs"); const c = require(${JSON.stringify(CONFIG_MODULE)});` +
+    ` fs.writeSync(1, "READY\\n");` +
+    ` try { ${call}; fs.writeSync(1, "LOADED\\n"); }` +
+    ` catch (err) { fs.writeSync(1, "REFUSED: " + err.message + "\\n"); fs.writeSync(1, "CODE: " + err.code + "\\n"); }`;
+  const r = spawnSync(process.execPath, ["-r", TS_NODE, "-e", script], {
+    encoding: "utf8",
+    timeout: 15000,
+    killSignal: "SIGKILL",
+  });
+  const out = r.stdout ?? "";
+  const error = r.error as NodeJS.ErrnoException | undefined;
+  return { started: out.includes("READY"), hung: error?.code === "ETIMEDOUT", out };
+}
+
+test("loadConfig refuses a FIFO named .secretloop.json rather than waiting on it", () => {
+  if (process.platform === "win32") skip("FIFOs are POSIX; Windows has no named pipe at a config path");
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-fifo-"));
+  try {
+    execFileSync("mkfifo", [path.join(dir, CONFIG_FILENAME)], { stdio: "ignore", timeout: 5000 });
+    const r = loadInChild(`c.loadConfig(${JSON.stringify(dir)})`);
+    assert.ok(r.started, `the child never started; this is a harness fault, not the defect:\n${r.out}`);
+    assert.ok(!r.hung, "loadConfig blocked on a FIFO named .secretloop.json: the read never returned");
+    assert.ok(/^REFUSED: .*regular file/m.test(r.out), `expected a refusal, got:\n${r.out}`);
+    assert.ok(r.out.includes("CODE: not-regular\n"), `expected the not-regular code, got:\n${r.out}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("loadBaseline refuses a FIFO at the baseline path rather than waiting on it", () => {
+  if (process.platform === "win32") skip("FIFOs are POSIX; Windows has no named pipe at a baseline path");
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-base-fifo-"));
+  try {
+    const file = path.join(dir, "baseline.json");
+    execFileSync("mkfifo", [file], { stdio: "ignore", timeout: 5000 });
+    const r = loadInChild(`c.loadBaseline(${JSON.stringify(file)})`);
+    assert.ok(r.started, `the child never started; this is a harness fault, not the defect:\n${r.out}`);
+    assert.ok(!r.hung, "loadBaseline blocked on a FIFO at the baseline path: the read never returned");
+    assert.ok(/^REFUSED: .*regular file/m.test(r.out), `expected a refusal, got:\n${r.out}`);
+    assert.ok(r.out.includes("CODE: not-regular\n"), `expected the not-regular code, got:\n${r.out}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a symlink to a FIFO is refused as a FIFO is, without waiting on it", () => {
+  if (process.platform === "win32") skip("FIFOs are POSIX; Windows has no named pipe to link to");
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-symfifo-"));
+  try {
+    const fifo = path.join(dir, "target.fifo");
+    execFileSync("mkfifo", [fifo], { stdio: "ignore", timeout: 5000 });
+    symlinkSync(fifo, path.join(dir, CONFIG_FILENAME));
+    const r = loadInChild(`c.loadConfig(${JSON.stringify(dir)})`);
+    assert.ok(r.started, `the child never started; this is a harness fault, not the defect:\n${r.out}`);
+    assert.ok(!r.hung, "loadConfig blocked on a symlink to a FIFO: the read never returned");
+    assert.ok(
+      r.out.includes("REFUSED: Could not read configuration .secretloop.json: it is not a regular file."),
+      `expected the named refusal, got:\n${r.out}`
+    );
+    assert.ok(r.out.includes("CODE: not-regular\n"), `expected the not-regular code, got:\n${r.out}`);
+    assert.ok(!r.out.includes(dir), "the refusal names the absolute path");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a symlink to an ordinary JSON config still loads, and the parsed values are the file's", () => {
+  // Creating a symlink needs a privilege on Windows, so this is POSIX-only. The FIFO
+  // symlink test above is the negative case for the same link shape.
+  if (process.platform === "win32") skip("creating a symlink needs a privilege on Windows");
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-symjson-"));
+  try {
+    const target = path.join(dir, "shared-config.json");
+    writeFileSync(target, JSON.stringify({ entropyPassEnabled: true, maxFileSizeBytes: 12345 }));
+    symlinkSync(target, path.join(dir, CONFIG_FILENAME));
+    const { config, raw } = loadConfigWithSource(dir);
+    assert.deepStrictEqual(raw, { entropyPassEnabled: true, maxFileSizeBytes: 12345 });
+    assert.strictEqual(config.entropyPassEnabled, true);
+    assert.strictEqual(config.maxFileSizeBytes, 12345);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a directory at the config path is refused by name, without the absolute path", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-dir-"));
+  try {
+    mkdirSync(path.join(dir, CONFIG_FILENAME));
+    let caught: unknown;
+    try {
+      loadConfig(dir);
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught instanceof ConfigReadError, `expected a ConfigReadError, got: ${String(caught)}`);
+    const message = (caught as ConfigReadError).message;
+    assert.ok(
+      /^Could not read configuration \.secretloop\.json: it (is not a regular file|cannot be read)\.$/.test(message),
+      `unexpected message: ${message}`
+    );
+    assert.ok(!message.includes(dir), "the message names the absolute path");
+    // POSIX opens a directory and fstat refuses it, so not-regular. Windows may refuse
+    // the open instead, which is unreadable. Both are refusals; only the category varies.
+    const allowed = process.platform === "win32" ? ["unreadable", "not-regular"] : ["not-regular"];
+    assert.ok(allowed.includes((caught as ConfigReadError).code), `wrong error category: ${(caught as ConfigReadError).code}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("an unreadable config is refused by category, without the OS message or the path", () => {
+  if (process.platform === "win32") skip("file modes are not enforced the same way on Windows");
+  if (process.getuid?.() === 0) skip("root reads files regardless of their mode bits");
+  const dir = mkdtempSync(path.join(tmpdir(), "sl-cfg-eacces-"));
+  const file = path.join(dir, CONFIG_FILENAME);
+  try {
+    writeFileSync(file, "{}");
+    chmodSync(file, 0o000);
+    let caught: unknown;
+    try {
+      loadConfig(dir);
+    } catch (err) {
+      caught = err;
+    }
+    assert.ok(caught instanceof ConfigReadError, `expected a ConfigReadError, got: ${String(caught)}`);
+    assert.strictEqual((caught as ConfigReadError).code, "unreadable");
+    assert.strictEqual(
+      (caught as Error).message,
+      "Could not read configuration .secretloop.json: it cannot be read."
+    );
+  } finally {
+    try {
+      chmodSync(file, 0o600);
+    } catch {
+      // The file may not exist; the directory removal below does not need it.
+    }
     rmSync(dir, { recursive: true, force: true });
   }
 });

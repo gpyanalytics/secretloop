@@ -45,6 +45,14 @@ whole credentials out of `allowValues`.
 **`Could not parse .secretloop-baseline.json: …`** — the baseline file is
 corrupt. It is named so you know which file to fix.
 
+**`Could not read configuration .secretloop.json: it is not a regular file.`** — the path is a named pipe, a
+directory or a device, not a file. Put the project's configuration file at that path. The baseline uses the same
+wording with `baseline` in place of `configuration`. On Windows a directory may show the next message instead.
+
+**`Could not read configuration .secretloop.json: it cannot be read.`** — the file exists but could not be opened
+or read, for example because of its permissions. The message does not say which error occurred; check the file's
+permissions and that the account running SecretLoop can read it.
+
 **`N file(s) not scanned — larger than maxFileSizeBytes`** — raise
 `maxFileSizeBytes` in `.secretloop.json` if those files matter.
 

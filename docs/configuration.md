@@ -5,6 +5,10 @@ CLI, the VS Code extension and the MCP server. Only that filename is read; there
 is no fallback to any other name. A documented template ships in the repository
 as `.secretloop.example.json`.
 
+**Unreleased:** a `.secretloop.json` that is not a regular file (a named pipe, a directory or a device) is refused by
+name instead of being read. The CLI and the MCP server refuse; the VS Code extension shows a warning and scans with
+defaults. A symlink to an ordinary file is still followed, as it was before.
+
 Applies to **published 0.6.0**. [Recording why](#recording-why) — rule scopes on
 a suppression directive, recorded reasons, and the reason fields in the baseline
 and project file — is new in 0.6.0: 0.5.1 reads a bare `secretloop:allow` and
