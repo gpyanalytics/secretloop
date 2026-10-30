@@ -7,6 +7,14 @@ does when it runs, so it was not released on its own. It will ship with the next
 one that changes SecretLoop's behaviour, unless a security or compatibility fix calls for an earlier release. That
 release's version number and date are not decided.*
 
+- **Fixed (security hardening): a configuration or baseline file that is not a regular file is refused, not waited on.**
+  `.secretloop.json` and the baseline were opened and read without checking what they were, so a named pipe at either
+  path blocked the scan indefinitely. The file is now opened without blocking and its type is checked on the same
+  descriptor before anything is read. A refusal names the file: `Could not read configuration .secretloop.json: it is
+  not a regular file.` A file that cannot be opened or read gets `...: it cannot be read.`, which also replaces the
+  misleading "not valid JSON" message that such a file used to report. Neither message carries an absolute path or
+  operating-system text. A symlink to an ordinary file loads as before. The VS Code extension warns and scans with
+  defaults rather than refusing. On Windows a FIFO cannot exist on an NTFS path, so the type check is the whole check.
 - **Changed (security hardening): the VS Code extension verifies only files of the open workspace.** With
   `secretloop.enableLiveVerification` on, a document outside every workspace folder (a temporary file, another
   tool's transcript, a file of another project, or any file in a window with no folder) is still scanned and keeps

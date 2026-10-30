@@ -132,7 +132,9 @@ A baseline stores fingerprints, never values. A fingerprint is
 `path:rule-id:digest`, where the digest is a truncated SHA-256 of the value, or
 of the secret-free context for rules whose capture can be a human-chosen
 password. Reformatting a file does not resurrect an accepted finding; moving the
-value, changing it, or a rule reporting it under a different id does. A corrupt
+value, changing it, or a rule reporting it under a different id does. A baseline that is not a regular file is refused by
+name too:
+`Could not read baseline .secretloop-baseline.json: it is not a regular file.` A corrupt
 baseline is refused by name: `Could not parse .secretloop-baseline.json: …`.
 
 ## The scope sentence

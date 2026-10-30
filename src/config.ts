@@ -1,4 +1,11 @@
-import { readFileSync, existsSync } from "fs";
+import {
+  readFileSync,
+  existsSync,
+  openSync,
+  closeSync,
+  fstatSync,
+  constants as fsConstants,
+} from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { baseExcludePaths, generatedExcludePaths } from "./rules";
@@ -178,6 +185,57 @@ export function isFixturePath(relPath: string): boolean {
 
 export const CONFIG_FILENAME = ".secretloop.json";
 
+export class ConfigReadError extends Error {
+  constructor(
+    readonly code: "unreadable" | "not-regular",
+    message: string
+  ) {
+    super(message);
+    this.name = "ConfigReadError";
+  }
+}
+
+/**
+ * Reads a file only when it is a regular file, judged on the descriptor that is read.
+ *
+ * A FIFO at a config or baseline path has no bytes to give: an open for reading waits
+ * for a writer, so `loadConfig` never returned on one. `O_NONBLOCK` makes the open of a
+ * FIFO return at once, and the type is checked on that same open file, so the read can
+ * only ever be of what was judged. The repository is untrusted input, so a file named
+ * `.secretloop.json` can be anything. Windows has no FIFO and no such flag.
+ *
+ * The message names the file and the category and nothing else: no absolute path and no
+ * OS error text, because these messages reach MCP clients and editor warnings.
+ */
+function readRegularFile(file: string, name: string, label: string): string {
+  const unreadable = () =>
+    new ConfigReadError("unreadable", `Could not read ${label} ${name}: it cannot be read.`);
+  let fd: number;
+  try {
+    fd = openSync(file, fsConstants.O_RDONLY | (fsConstants.O_NONBLOCK ?? 0));
+  } catch {
+    throw unreadable();
+  }
+  try {
+    if (!fstatSync(fd).isFile()) {
+      throw new ConfigReadError("not-regular", `Could not read ${label} ${name}: it is not a regular file.`);
+    }
+    return readFileSync(fd, "utf8");
+  } catch (err) {
+    if (err instanceof ConfigReadError) throw err;
+    throw unreadable();
+  } finally {
+    // The outcome above is already decided. Closing a read-only descriptor can fail
+    // only for reasons that do not change what was read, and a close error here must
+    // neither surface raw nor replace a pending ConfigReadError.
+    try {
+      closeSync(fd);
+    } catch {
+      // not reported; see above
+    }
+  }
+}
+
 export interface ResolvedConfigFile {
   path: string;
 }
@@ -213,9 +271,10 @@ export function loadConfigWithSource(repoRoot: string): LoadedConfig {
   if (!found) return { config: { ...defaultConfig }, raw: null };
   const name = path.basename(found.path);
 
+  const text = readRegularFile(found.path, name, "configuration");
   let raw: Partial<SecretLoopConfig>;
   try {
-    raw = JSON.parse(readFileSync(found.path, "utf8")) as Partial<SecretLoopConfig>;
+    raw = JSON.parse(text) as Partial<SecretLoopConfig>;
   } catch {
     // The parser's own message quotes the bytes around the error, and this file
     // can now carry suppression reasons. A message that says where the file is
@@ -552,9 +611,10 @@ export function loadBaseline(file: string): LoadedBaseline {
   }
   // Named like loadConfig's, so a corrupt baseline says which file and why
   // instead of surfacing a bare token error from somewhere in the call stack.
+  const text = readRegularFile(file, path.basename(file), "baseline");
   let parsed: any;
   try {
-    parsed = JSON.parse(readFileSync(file, "utf8"));
+    parsed = JSON.parse(text);
   } catch {
     // Same reason as loadConfigWithSource: a baseline entry can carry a reason,
     // and V8's parse errors quote the surrounding bytes.
