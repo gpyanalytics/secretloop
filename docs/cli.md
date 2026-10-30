@@ -183,6 +183,16 @@ without an interactive terminal, so it cannot be piped or scripted, and an input
 that ends (Ctrl-D) is a no. Approval is one credential, one file, one provider,
 one use, five minutes. See [Verification](verification.md#the-consent-gate).
 
+The prompt replaces control characters, bidi formatting characters and the
+Unicode line and paragraph separators with `?` in the file name, the provider and
+the masked value, so a file name cannot reorder what is shown. Carriage returns
+and other C0 controls were already replaced before this change; the C1, bidi and
+separator characters are the new part. Where `approve` echoes a fingerprint back,
+as it does when no request matches, the same replacement applies. The question
+itself (`Send this credential to <provider>? [y/N]`) and the decision are
+unchanged, and the approval is recorded against the credential's commitment,
+never against the displayed text.
+
 ## Inspecting fixtures and test data
 
 To look at what the generic entropy heuristic finds in test, fixture and mock

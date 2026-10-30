@@ -1353,10 +1353,15 @@ export function sanitizeForDisplay(text: string): string {
     // OSC and the other ESC-introduced forms, terminated by BEL or ST
     .replace(/\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)?/g, "")
     .replace(/\u001b[@-Z\\-_]/g, "")
-    // whatever is left that a terminal would still act on
-    .replace(/[\u0000-\u001f\u007f]/g, "?");
+    // whatever is left that a terminal would still act on: C0 and C1 controls,
+    // bidi formatting characters, and the line and paragraph separators
+    .replace(/[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029]|[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "?");
+  // A high surrogate at the cut would be left without its low half. Cutting one unit
+  // earlier keeps the pair whole, and the cap is still never exceeded.
+  const last = stripped.charCodeAt(DISPLAY_MAX - 1);
+  const cut = last >= 0xd800 && last <= 0xdbff ? DISPLAY_MAX - 1 : DISPLAY_MAX;
   return stripped.length > DISPLAY_MAX
-    ? `${stripped.slice(0, DISPLAY_MAX)}... (${stripped.length} characters, truncated)`
+    ? `${stripped.slice(0, cut)}... (${stripped.length} characters, truncated)`
     : stripped;
 }
 
