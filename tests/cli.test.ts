@@ -1028,6 +1028,30 @@ test("a --output and a --write-baseline path are echoed escaped", () => {
   });
 });
 
+test("a plain scan without --verify sends nothing, while the same scan with --verify does", () => {
+  withFetchSpy((run) => {
+    const repo = mkdtempSync(path.join(tmpdir(), "secretloop-plain-"));
+    try {
+      writeFileSync(path.join(repo, "app.js"), `const t = "${VERIFIABLE}";\n`, "utf8");
+
+      // The control: the spy must see the --verify run, or an empty `sent` below
+      // would prove nothing about the plain scan.
+      const verifying = run(["scan", "--path", repo, "--verify"]);
+      assert.ok(
+        verifying.sent.some((u) => u.includes("api.github.com")),
+        `control: the spy recorded nothing for --verify: ${JSON.stringify(verifying.sent)}`
+      );
+
+      const plain = run(["scan", "--path", repo]);
+      assert.notStrictEqual(plain.status, 2, `plain scan was refused: ${plain.stderr}`);
+      assert.ok(plain.stdout.includes("app.js"), "the plain scan did not report the planted file");
+      assert.deepStrictEqual(plain.sent, [], `a scan without --verify contacted a provider: ${JSON.stringify(plain.sent)}`);
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  });
+});
+
 test("an ordinary error is printed exactly as before", () => {
   withDir((dir) => {
     const missing = path.join(dir, "plain-missing");

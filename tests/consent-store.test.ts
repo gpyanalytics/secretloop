@@ -392,4 +392,50 @@ test("a store path that is a regular file is refused as not-a-directory", async 
   });
 });
 
+// The existing approval tests all answer "y". These pin the other side of the
+// prompt: anything that is not a clean "y" is a denial, and a denial must leave
+// no record behind and must not reach the provider.
+test("explicit denial: every answer other than y discards the record and sends nothing", async () => {
+  await withWorkspace(async (ctx) => {
+    for (const answer of ["n", "", "yes", "no"]) {
+      const label = JSON.stringify(answer);
+      const first = await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint }) as any;
+      assert.strictEqual(first.payload.state, "CONSENT_REQUIRED", `${label}: call 1 must prompt`);
+
+      const io = fakeTTY(answer);
+      assert.strictEqual(await runApprove(ctx.fingerprint, io), 0, `${label}: ${io.errs.join("")}`);
+      assert.ok(io.outs.join("").includes("Denied. Nothing was sent"), `${label}: no denial text`);
+      assert.strictEqual(consent.listRecords().length, 0, `${label}: a record survived the denial`);
+      assert.strictEqual(wire.count, 0, `${label}: a provider request was made`);
+    }
+
+    const after = await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint }) as any;
+    assert.strictEqual(after.payload.state, "CONSENT_REQUIRED", "a denial must not leave an approval behind");
+    assert.strictEqual(wire.count, 0);
+  });
+});
+
+test("non-TTY approve is refused with exit 2, shows no decision, and leaves the record pending", async () => {
+  await withWorkspace(async (ctx) => {
+    const first = await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint }) as any;
+    assert.strictEqual(first.payload.state, "CONSENT_REQUIRED");
+
+    // "y" is offered on purpose: a piped or scripted answer must still be refused.
+    const io = fakeTTY("y");
+    io.isTTY = false;
+    assert.strictEqual(await runApprove(ctx.fingerprint, io), 2);
+    assert.match(io.errs.join(""), /interactive terminal/);
+    assert.strictEqual(io.outs.join(""), "", "a refused approve printed a decision");
+    assert.strictEqual(wire.count, 0);
+
+    const records = consent.listRecords();
+    assert.strictEqual(records.length, 1);
+    assert.strictEqual(records[0].state, "pending", "a non-TTY refusal approved the record");
+
+    const again = await toolVerify({ path: ctx.root, fingerprint: ctx.fingerprint }) as any;
+    assert.strictEqual(again.payload.state, "CONSENT_REQUIRED", "the refused approval must not reach the provider");
+    assert.strictEqual(wire.count, 0);
+  });
+});
+
 finish();
