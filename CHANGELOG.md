@@ -7,6 +7,12 @@ does when it runs, so it was not released on its own. It will ship with the next
 one that changes SecretLoop's behaviour, unless a security or compatibility fix calls for an earlier release. That
 release's version number and date are not decided.*
 
+- **Fixed (security hardening): the approval prompt shows control and bidi characters as `?`.** `secretloop approve`
+  printed the file name, the provider and the value without replacing C1 controls, bidi formatting characters, or the
+  Unicode line and paragraph separators. A file name could reorder what the prompt displayed. The no-match line of
+  `secretloop approve` echoed the fingerprint it was given the same way, so a fingerprint with a C1 control could write
+  one to the terminal. Those characters are now shown as `?`, the convention already used for C0 controls. The question,
+  the recorded decision and the raw credential are unchanged.
 - **Fixed (security hardening): a configuration or baseline file that is not a regular file is refused, not waited on.**
   `.secretloop.json` and the baseline were opened and read without checking what they were, so a named pipe at either
   path blocked the scan indefinitely. The file is now opened without blocking and its type is checked on the same
