@@ -96,16 +96,20 @@ export function startupFailureLine(err: unknown): string {
  * decision you cannot observe is one you cannot verify — and that reasoning
  * applies harder here, where the caller is an autonomous client rather than a
  * person who chose to click something. Every invocation is recorded with its
- * arguments and its result counts.
+ * result counts, and with the names of what it asked for, as far as this
+ * server knows them.
  *
- * Never a value, never a finding, never a line of repository text. The
- * arguments this server accepts are paths, globs, filters and fingerprints,
- * none of which is secret material; the results are reduced to counts before
- * they get here.
+ * Never a value the client sent, never a finding, never a line of repository
+ * text. Paths, globs, filters, fingerprints and revision ranges are client
+ * values, and a fingerprint is a stable identifier that can be correlated
+ * across logs, so none of them is written here. A refusal's text is not
+ * written either: it can quote any of those values back. What is written is a
+ * tool name the server knows, the argument names its schema declares, and
+ * counts, and how many launch roots there are. Anything else is "unrecognised"
+ * or a count.
  *
- * Those arguments, the tool's name and a notification's method come from the
- * client, and a refusal can quote a repository's .secretloop.json, so the JSON
- * goes through escapeForStderr: still one line per event, still valid JSON.
+ * The JSON still goes through escapeForStderr: still one line per event, still
+ * valid JSON.
  */
 function audit(event: string, detail: Record<string, unknown> = {}): void {
   process.stderr.write(
@@ -115,7 +119,7 @@ function audit(event: string, detail: Record<string, unknown> = {}): void {
 
 /** Result counts worth recording, derived without touching any value. */
 function auditCounts(result: ToolResult): Record<string, unknown> {
-  if (!result.ok) return { ok: false, refused: result.error };
+  if (!result.ok) return { ok: false, refusedLength: result.error.length };
   const p = result.payload;
   const summary = p.summary as { total?: number } | undefined;
   return {
@@ -324,6 +328,38 @@ const TOOLS = [
   },
 ];
 
+/**
+ * The names the audit trail may write from a client's request. Declared once,
+ * from the same TOOLS the client was shown, so the list cannot drift from the
+ * schema.
+ */
+const KNOWN_TOOLS = new Set(TOOLS.map((tool) => tool.name));
+const KNOWN_ARGUMENTS = new Set(
+  TOOLS.flatMap((tool) => Object.keys((tool.inputSchema as { properties?: object }).properties ?? {}))
+);
+/** The notifications the MCP specification defines for a client to send. Exact names only. */
+const KNOWN_METHODS = new Set([
+  "notifications/cancelled",
+  "notifications/initialized",
+  "notifications/progress",
+  "notifications/roots/list_changed",
+]);
+
+function knownTool(name: unknown): string {
+  return typeof name === "string" && KNOWN_TOOLS.has(name) ? name : "unrecognised";
+}
+
+export function knownMethod(method: unknown): string {
+  return typeof method === "string" && KNOWN_METHODS.has(method) ? method : "unrecognised";
+}
+
+/** The argument names the schema declares, and how many arguments there were in all. */
+function argumentSummary(args: Record<string, unknown>): Record<string, unknown> {
+  const keys = Object.keys(args);
+  const argKeys = keys.filter((key) => KNOWN_ARGUMENTS.has(key)).sort();
+  return { argCount: keys.length, argKeys, unknownArgCount: keys.length - argKeys.length };
+}
+
 async function dispatch(name: string, args: Record<string, unknown>): Promise<ToolResult> {
   switch (name) {
     case "secretloop_scan":
@@ -381,14 +417,14 @@ async function main(): Promise<void> {
   server.setNotificationHandler(RootsListChangedNotificationSchema, async () => {
     audit("roots/list_changed ignored", {
       reason: "allowed roots are fixed at launch and cannot be changed by a client",
-      allowedRoots: getAllowedRoots(),
+      allowedRootCount: getAllowedRoots().length,
     });
   });
 
   // Anything else the client sends unprompted. Recorded rather than dropped:
   // a notification nobody logged is a decision nobody can audit.
   server.fallbackNotificationHandler = async (notification) => {
-    audit("notification ignored", { method: notification.method });
+    audit("notification ignored", { method: knownMethod(notification.method) });
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
@@ -399,7 +435,7 @@ async function main(): Promise<void> {
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const name = request.params.name;
     const args = (request.params.arguments ?? {}) as Record<string, unknown>;
-    audit("tools/call", { tool: name, args });
+    audit("tools/call", { tool: knownTool(name), ...argumentSummary(args) });
     let result: ToolResult;
     try {
       result = await dispatch(name, args);
@@ -413,12 +449,12 @@ async function main(): Promise<void> {
           quoteUntrusted((err as Error)?.message ?? String(err)),
       };
     }
-    audit("tools/result", { tool: name, ...auditCounts(result) });
+    audit("tools/result", { tool: knownTool(name), ...auditCounts(result) });
     return toContent(result);
   });
 
   await server.connect(new StdioServerTransport());
-  audit("ready", { version, transport: "stdio", allowedRoots: getAllowedRoots() });
+  audit("ready", { version, transport: "stdio", allowedRootCount: getAllowedRoots().length });
 }
 
 // Only run as a program, for the same reason cli.ts guards this: importing the

@@ -37,6 +37,7 @@ import {
   quoteWithin,
   validateRevRange,
 } from "../src/mcp-core";
+import { knownMethod } from "../src/mcp";
 
 /**
  * The MCP layer's tests, against src/mcp-core.ts rather than a running server.
@@ -1542,19 +1543,159 @@ test("every stderr line is one audit event, with nothing a terminal or a CI log 
   assert.strictEqual(eventLines("ready").length, 1, "the ready line should print once");
 });
 
-test("each audit line's JSON reads back as exactly what the client and the launch line sent", () => {
+test("each audit line's JSON names only what the server knows, and says how much it did not", () => {
+  // The hostile tool name and method are not known, so they are written as
+  // "unrecognised". The hostile argument name is not declared by any schema, so
+  // it is counted and never written. The declared name "path" is written.
   const calls = eventLines("tools/call").map(auditDetail);
-  assert.deepStrictEqual(calls[0], { tool: HOSTILE_MCP, args: { path: HOSTILE_MCP } });
+  assert.deepStrictEqual(calls[0], { tool: "unrecognised", argCount: 1, argKeys: ["path"], unknownArgCount: 0 });
   assert.deepStrictEqual(calls[1], {
     tool: "secretloop_get_finding",
-    args: { fingerprint: HOSTILE_MCP, [HOSTILE_MCP]: HOSTILE_MCP, lone: loneSurrogate },
+    argCount: 3,
+    argKeys: ["fingerprint"],
+    unknownArgCount: 2,
   });
-  assert.deepStrictEqual(auditDetail(eventLines("notification ignored")[0]), { method: "notifications/" + HOSTILE_MCP });
+  assert.deepStrictEqual(auditDetail(eventLines("notification ignored")[0]), { method: "unrecognised" });
   const ready = auditDetail(eventLines("ready")[0]);
-  assert.ok(ready.allowedRoots.includes(path.resolve(hostileRoot)), `the launch root was not logged: ${JSON.stringify(ready)}`);
+  assert.strictEqual(ready.allowedRootCount, 1, `the launch roots were not counted: ${JSON.stringify(ready)}`);
   for (const result of eventLines("tools/result").map(auditDetail)) {
     assert.strictEqual(result.ok, false, "both calls are refusals");
-    assert.strictEqual(typeof result.refused, "string");
+    assert.strictEqual(typeof result.refusedLength, "number", "a refusal is counted, not written");
+    assert.ok(!("refused" in result), "a refusal's text reached the audit line");
+  }
+});
+
+// Inert sentinels in every position the old audit line wrote verbatim: a path,
+// a glob, a fingerprint, a revision range, and an argument name no schema
+// declares. Nothing here touches a repository or a provider.
+const SENTINELS = [
+  "SENTINEL_PATH_example/outside",
+  "SENTINEL_GLOB_**/*.env",
+  "sl-sentinel:example.env:generic-rule:0123456789abcdef",
+  "SENTINEL_REV_HEAD~3..HEAD",
+];
+const SENTINEL_KEY = "SENTINEL_KEY_undeclared";
+const SENTINEL_METHOD = "SENTINEL_METHOD_suffix";
+const sentinelRun = (() => {
+  const messages = [
+    {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "stderr-test", version: "0" } },
+    },
+    { jsonrpc: "2.0", method: "notifications/initialized" },
+    // A known notification the server does not handle itself, so it reaches the fallback.
+    { jsonrpc: "2.0", method: "notifications/progress", params: { progressToken: 1, progress: 1 } },
+    // A known name with a sentinel suffix: an exact match must not accept it.
+    { jsonrpc: "2.0", method: "notifications/progress " + SENTINEL_METHOD },
+    { jsonrpc: "2.0", method: "notifications/roots/list_changed" },
+    {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "tools/call",
+      params: { name: "secretloop_get_finding", arguments: { path: SENTINELS[0], fingerprint: SENTINELS[2] } },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "tools/call",
+      params: { name: "secretloop_scan", arguments: { path: SENTINELS[0], include: [SENTINELS[1]] } },
+    },
+    {
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: {
+        name: "secretloop_history_scan",
+        arguments: { path: SENTINELS[0], revRange: SENTINELS[3], [SENTINEL_KEY]: "v" },
+      },
+    },
+  ];
+  const input = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+  return spawnSync(process.execPath, [MCP_PATH, hostileRoot], { cwd: ROOT, input, encoding: "utf8", timeout: 20000 });
+})();
+const sentinelStderr = sentinelRun.stderr ?? "";
+
+test("sentinel argument values and undeclared argument names never reach stderr", () => {
+  assert.strictEqual(sentinelRun.status, 0, `exit ${sentinelRun.status}, stderr: ${JSON.stringify(sentinelStderr)}`);
+  for (const value of [...SENTINELS, SENTINEL_KEY, SENTINEL_METHOD]) {
+    assert.ok(!sentinelStderr.includes(value), `${value} reached stderr: ${sentinelStderr}`);
+  }
+});
+
+test("the launch roots are counted in the ready and roots lines, and never written", () => {
+  for (const stderr of [serverRun.stderr ?? "", sentinelStderr]) {
+    assert.ok(!stderr.includes(path.resolve(hostileRoot)), "a launch root was written to stderr");
+  }
+  const ready = auditDetail(sentinelStderr.split(/\r?\n/).find((l) => l.includes(" ready {")) ?? "{}");
+  assert.strictEqual(ready.allowedRootCount, 1, `ready: ${JSON.stringify(ready)}`);
+  assert.ok(!("allowedRoots" in ready), "ready still carries the raw roots");
+  const roots = sentinelStderr
+    .split(/\r?\n/)
+    .filter((l) => l.includes(" roots/list_changed ignored {"))
+    .map(auditDetail);
+  assert.strictEqual(roots.length, 1, "the roots notification should print one line");
+  assert.strictEqual(roots[0].allowedRootCount, 1);
+  assert.ok(!("allowedRoots" in roots[0]), "roots/list_changed still carries the raw roots");
+});
+
+test("the notification allowlist is exact: known names pass, and nothing that only looks known does", () => {
+  // Checked directly, because the SDK consumes the known progress and cancelled
+  // notifications itself, so a stdio run cannot reach the known-name branch.
+  for (const name of [
+    "notifications/cancelled",
+    "notifications/initialized",
+    "notifications/progress",
+    "notifications/roots/list_changed",
+  ]) {
+    assert.strictEqual(knownMethod(name), name, `a known method was not written: ${name}`);
+  }
+  const lookalikes: unknown[] = [
+    "notifications/progress " + SENTINEL_METHOD,
+    "notifications/progress/" + SENTINEL_METHOD,
+    "Notifications/progress",
+    " notifications/progress",
+    "notifications/",
+    "",
+    42,
+    undefined,
+    null,
+    { toString: () => "notifications/progress" },
+  ];
+  for (const candidate of lookalikes) {
+    assert.strictEqual(knownMethod(candidate), "unrecognised", `a lookalike was written: ${JSON.stringify(String(candidate))}`);
+  }
+});
+
+test("a notification that only looks known is written as unrecognised on the wire", () => {
+  const methods = sentinelStderr
+    .split(/\r?\n/)
+    .filter((l) => l.includes(" notification ignored {"))
+    .map((l) => auditDetail(l).method);
+  assert.ok(methods.includes("unrecognised"), `a suffixed method was not normalised: ${JSON.stringify(methods)}`);
+  assert.ok(
+    methods.every((m) => m === "unrecognised" || m === "notifications/progress"),
+    `a method outside the allowlist was written: ${JSON.stringify(methods)}`
+  );
+});
+
+test("the audit still says which tools ran, which declared arguments they had, and how many", () => {
+  const calls = sentinelStderr
+    .split(/\r?\n/)
+    .filter((l) => l.includes(" tools/call {"))
+    .map(auditDetail);
+  assert.strictEqual(calls.length, 3, "each call should be audited once");
+  assert.deepStrictEqual(calls[0], { tool: "secretloop_get_finding", argCount: 2, argKeys: ["fingerprint", "path"], unknownArgCount: 0 });
+  assert.deepStrictEqual(calls[1], { tool: "secretloop_scan", argCount: 2, argKeys: ["include", "path"], unknownArgCount: 0 });
+  assert.deepStrictEqual(calls[2], { tool: "secretloop_history_scan", argCount: 3, argKeys: ["path", "revRange"], unknownArgCount: 1 });
+});
+
+test("every audit line from the sentinel run parses as JSON", () => {
+  const lines = sentinelStderr.split(/\r?\n/).filter((l) => /^secretloop-mcp \S+ /.test(l));
+  assert.ok(lines.length >= 5, `too few audit lines: ${lines.length}`);
+  for (const line of lines) {
+    assert.doesNotThrow(() => auditDetail(line), `not valid JSON: ${JSON.stringify(line)}`);
   }
 });
 
