@@ -1498,7 +1498,9 @@ async function toolVerifyInner(input: VerifyInput): Promise<ToolResult> {
   try {
     config = loadConfig(root);
   } catch (err) {
-    return fail((err as Error).message);
+    // Quoted as the scan path quotes it: the message can carry the repository's
+    // own .secretloop.json text, which is not SecretLoop's voice to speak in.
+    return fail(quoteUntrusted((err as Error).message));
   }
 
   const id = recordId(input.fingerprint, root);

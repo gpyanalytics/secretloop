@@ -27,6 +27,7 @@ import {
   toolHistoryScan,
   toolListFindings,
   toolScan,
+  toolVerify,
   wrapUntrusted,
   setAllowedRoots,
   getAllowedRoots,
@@ -1164,6 +1165,19 @@ test("a config error quotes the file's own bytes", () => {
   });
   resetSessions();
   assertQuoted(toolScan({ path: regexDir }), INJECTION, "invalid allowValues pattern");
+});
+
+test("a config error on verify is quoted as it is on scan", async () => {
+  // Verify reads the same config before it looks at the session cache, so the
+  // same hostile echo is reachable with no scan run first. The refusal happens
+  // before any consent record is read or any provider is contacted.
+  const regexDir = repo("hostile-config-verify", {
+    ".secretloop.json": JSON.stringify({ allowValues: [`${INJECTION}(`] }),
+    "app.js": "const ok = 1;\n",
+  });
+  resetSessions();
+  const result = await toolVerify({ fingerprint: "inert-fingerprint", path: regexDir });
+  assertQuoted(result, INJECTION, "verify, invalid allowValues pattern");
 });
 
 test("a malformed config is refused, and whatever the parser said is wrapped", () => {
