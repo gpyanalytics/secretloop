@@ -86,6 +86,119 @@ echo "smoke: running a real scan in an empty directory"
 mkdir -p "$work/empty-scan"
 node package/out/cli.js scan --path "$work/empty-scan" >/dev/null
 
+# ---- outbound-call assertion, refusal path ---------------------------------
+#
+# The check below reads a field the product reports about itself. This one
+# watches the process: a preload wraps the Node APIs an outbound request would
+# use, records every attempt, and refuses it. The MCP server below is started
+# with the preload, so the refusal path exercised is the packaged bundle's, not
+# a mocked unit-test seam.
+#
+# What this establishes: no call through the instrumented APIs was attempted on
+# the paths exercised. What it does NOT establish: OS-level zero network egress.
+# A native addon, a child process that does not load the preload, or an API not
+# listed in the probe would be invisible here. Nothing in this script, its
+# output or the record may call this proof of zero egress.
+#
+# Inert values only. Every target is a `.invalid` name or 127.0.0.1, and every
+# attempt is refused before anything is sent. The log holds API names and hosts,
+# never arguments, headers or bodies.
+probe="$work/outbound-probe.js"
+outlog="$work/outbound.log"
+: > "$outlog"
+cat > "$probe" <<'PROBE'
+"use strict";
+// Preloaded with `node -r`. Records each instrumented outbound attempt to
+// $SECRETLOOP_OUTBOUND_LOG and refuses it. Writes a .loaded marker so the caller
+// can tell the preload really ran in the process it started.
+const fs = require("fs");
+const logFile = process.env.SECRETLOOP_OUTBOUND_LOG;
+if (logFile) fs.writeFileSync(logFile + ".loaded", "1\n");
+
+const label = (x) => {
+  if (x && typeof x === "object") {
+    if (typeof x.host === "string") return x.host;
+    if (typeof x.hostname === "string") return x.hostname;
+    if (typeof x.url === "string") x = x.url;
+    else return "object";
+  }
+  try { return new URL(String(x)).host; } catch { return "unparsed"; }
+};
+
+function refuse(api, target) {
+  if (logFile) fs.appendFileSync(logFile, api + " " + target + "\n");
+  const err = new Error("outbound attempt refused by smoke probe: " + api);
+  err.code = "ERR_SMOKE_OUTBOUND_REFUSED";
+  return err;
+}
+
+const wrap = (obj, name, api) => {
+  obj[name] = function (...args) { throw refuse(api, label(args[0])); };
+};
+const http = require("http");
+const https = require("https");
+const net = require("net");
+const tls = require("tls");
+const dns = require("dns");
+wrap(http, "request", "http.request");
+wrap(http, "get", "http.get");
+wrap(https, "request", "https.request");
+wrap(https, "get", "https.get");
+wrap(net, "connect", "net.connect");
+wrap(net, "createConnection", "net.connect");
+wrap(tls, "connect", "tls.connect");
+
+globalThis.fetch = function (...args) {
+  return Promise.reject(refuse("fetch", label(args[0])));
+};
+
+dns.lookup = function (hostname, ...rest) {
+  const cb = rest[rest.length - 1];
+  const err = refuse("dns.lookup", String(hostname));
+  if (typeof cb === "function") { process.nextTick(cb, err); return; }
+  throw err;
+};
+PROBE
+
+# Fails if any attempt was recorded. Prints the API names only.
+assert_no_outbound() {
+  if [ -s "$1" ]; then
+    echo "smoke: FAIL — outbound attempt(s) recorded: $(cut -d' ' -f1 "$1" | sort -u | tr '\n' ' ')" >&2
+    return 1
+  fi
+}
+
+# Positive controls: each API the probe claims to cover must be recorded when
+# called. A probe that silently misses an API would make the assertion empty.
+echo "smoke: outbound probe self-test (positive controls, refused locally)"
+ctl="$work/outbound-control.log"
+: > "$ctl"
+SECRETLOOP_OUTBOUND_LOG="$ctl" node -r "$probe" -e '
+  const attempt = (f) => { try { const p = f(); if (p && p.catch) p.catch(() => {}); } catch {} };
+  attempt(() => fetch("https://provider.invalid/"));
+  attempt(() => require("http").request("http://provider.invalid/"));
+  attempt(() => require("http").get("http://provider.invalid/"));
+  attempt(() => require("https").request("https://provider.invalid/"));
+  attempt(() => require("https").get("https://provider.invalid/"));
+  attempt(() => require("net").connect({ host: "127.0.0.1", port: 1 }));
+  attempt(() => require("tls").connect({ host: "provider.invalid", port: 443 }));
+  require("dns").lookup("provider.invalid", () => {});
+'
+[ -f "$ctl.loaded" ] || { echo "smoke: FAIL — positive control: the preload did not load" >&2; exit 1; }
+for api in fetch http.request http.get https.request https.get net.connect tls.connect dns.lookup; do
+  grep -q -F -e "$api " "$ctl" || { echo "smoke: FAIL — positive control: $api was not recorded" >&2; exit 1; }
+done
+
+# Negative control: a recorded attempt must make the assertion fail. An empty
+# log must pass it. Without both, the assertion could be vacuous.
+neg="$work/outbound-negative.log"
+printf 'fetch provider.invalid\n' > "$neg"
+if assert_no_outbound "$neg" 2>/dev/null; then
+  echo "smoke: FAIL — negative control: a recorded attempt passed the assertion" >&2
+  exit 1
+fi
+assert_no_outbound "$outlog"
+
 # The MCP server, over the transport a client actually speaks.
 #
 # Nothing in the unit suite exercises stdio: tests/mcp.test.ts calls mcp-core
@@ -95,7 +208,7 @@ node package/out/cli.js scan --path "$work/empty-scan" >/dev/null
 # reason this file runs the CLI rather than trusting `npm pack --dry-run`.
 echo "smoke: driving the MCP server over stdio"
 mkdir -p "$work/mcp-scan"
-MCP_SMOKE_WORK="$work" node - <<'NODE'
+SECRETLOOP_PROBE="$probe" SECRETLOOP_OUTBOUND_LOG="$outlog" MCP_SMOKE_WORK="$work" node - <<'NODE'
 const { spawn } = require("child_process");
 const { writeFileSync } = require("fs");
 const path = require("path");
@@ -117,9 +230,27 @@ writeFileSync(path.join(scanDir, "app.js"), `const t = "${token}";\n`, "utf8");
 const outside = require("fs").mkdtempSync(require("path").join(require("os").tmpdir(), "sl-outside-"));
 require("fs").writeFileSync(path.join(outside, "app.js"), `const t = "${token}";\n`, "utf8");
 
-const server = spawn("node", [path.join(work, "package", "out", "mcp.js"), scanDir], {
+// Started with the outbound probe preloaded (see the assertion above). The
+// probe path is one argv element, so a space in it cannot split the flag.
+const server = spawn("node", ["-r", process.env.SECRETLOOP_PROBE, path.join(work, "package", "out", "mcp.js"), scanDir], {
   stdio: ["pipe", "pipe", "inherit"],
 });
+
+// Fails if the probe did not load in the server, or if any outbound attempt was
+// recorded. The .loaded marker is what makes an empty log mean something: a
+// server that ignored the preload would otherwise produce an empty log too.
+const outboundCheck = (stage) => {
+  const fs = require("fs");
+  const outlog = process.env.SECRETLOOP_OUTBOUND_LOG;
+  if (!fs.existsSync(outlog + ".loaded")) {
+    fail("the outbound probe did not load in the server before " + stage);
+  }
+  const text = fs.readFileSync(outlog, "utf8").trim();
+  if (text) {
+    const apis = [...new Set(text.split("\n").map((l) => l.split(" ")[0]))];
+    fail("outbound attempt recorded during " + stage + ": " + apis.join(", "));
+  }
+};
 
 const pending = new Map();
 let buffer = "";
@@ -258,6 +389,9 @@ function fail(message) {
     fail("no approval instruction returned");
   }
   if (verifyText.includes(token)) fail("the credential crossed the stdio boundary");
+  // The refusal path itself: the first call asked for consent, so the server
+  // must have attempted no outbound call while answering it.
+  outboundCheck("the CONSENT_REQUIRED call");
 
   // The request wrote a real pending record under ~/.secretloop, because the
   // consent directory is deliberately NOT overridable from the environment:
@@ -277,6 +411,7 @@ function fail(message) {
   require("fs").rmSync(rec, { force: true });
 
   require("fs").rmSync(outside, { recursive: true, force: true });
+  outboundCheck("the whole MCP round trip");
   server.kill();
   console.log(
     "smoke: MCP round-trip ok — 5 tools, 1 finding, value redacted on the wire, " +
