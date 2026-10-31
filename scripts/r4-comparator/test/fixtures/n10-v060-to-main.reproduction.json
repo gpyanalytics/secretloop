@@ -1,0 +1,538 @@
+{
+  "schema": "r4-reproduction-1",
+  "note": "Historical reproduction of the frozen N10 compare (compare.v0.6.0-vs-main.txt, recorded 2026-10-03). Pinned to the exact base and candidate bytes of each report. Not release approval: the comparator applies these only when given --reproduction, and labels every use as reproduction. Generated from the frozen evidence; regenerate only by the same procedure, never to match a new run.",
+  "approvals": [
+    {
+      "id": "N10-01",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "A.hist.json",
+      "baseSha256": "fea5af646a95178b7ce96a5bb115c0e3e0d5b0bc2be3e4f07986366bd286185c",
+      "candidateSha256": "347b349addb9dc602eb4ff9e6c729346dd6cf1e550a569303413c96a36f7ee1a",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-02",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "A.named.hist.json",
+      "baseSha256": "fea5af646a95178b7ce96a5bb115c0e3e0d5b0bc2be3e4f07986366bd286185c",
+      "candidateSha256": "347b349addb9dc602eb4ff9e6c729346dd6cf1e550a569303413c96a36f7ee1a",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-03",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "A.named.tree.json",
+      "baseSha256": "46ed47d5c4d630213abb130c3e63f0559e3421eb72981e24a04f7cd74b5938ce",
+      "candidateSha256": "f1e91edfb22e3e3ddbc07deff219022020e1433df66802d7284e68e2aa80cb5b",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-04",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "A.named.tree.json",
+      "baseSha256": "46ed47d5c4d630213abb130c3e63f0559e3421eb72981e24a04f7cd74b5938ce",
+      "candidateSha256": "f1e91edfb22e3e3ddbc07deff219022020e1433df66802d7284e68e2aa80cb5b",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "191 file(s)",
+      "to": "191 file(s); 573 descriptor(s) opened for content: identity 573 verified; kernel path 573 unavailable; kernel path after read 191 unavailable, 382 not reached"
+    },
+    {
+      "id": "N10-05",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "A.named.tree.json",
+      "baseSha256": "46ed47d5c4d630213abb130c3e63f0559e3421eb72981e24a04f7cd74b5938ce",
+      "candidateSha256": "f1e91edfb22e3e3ddbc07deff219022020e1433df66802d7284e68e2aa80cb5b",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 573,
+        "identity": {
+          "verified": 573,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 573,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 191,
+          "failed": 0,
+          "notReached": 382
+        }
+      }
+    },
+    {
+      "id": "N10-06",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "A.tree.json",
+      "baseSha256": "f6ae74266dae1bd89344316a6b919985a74c43587501fbf17746c24e104ebb9a",
+      "candidateSha256": "40a7b907c26a4febfff5a61af2b62345a827a0f0f39bb4740650030daacd527d",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-07",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "A.tree.json",
+      "baseSha256": "f6ae74266dae1bd89344316a6b919985a74c43587501fbf17746c24e104ebb9a",
+      "candidateSha256": "40a7b907c26a4febfff5a61af2b62345a827a0f0f39bb4740650030daacd527d",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "190 file(s)",
+      "to": "190 file(s); 570 descriptor(s) opened for content: identity 570 verified; kernel path 570 unavailable; kernel path after read 190 unavailable, 380 not reached"
+    },
+    {
+      "id": "N10-08",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "A.tree.json",
+      "baseSha256": "f6ae74266dae1bd89344316a6b919985a74c43587501fbf17746c24e104ebb9a",
+      "candidateSha256": "40a7b907c26a4febfff5a61af2b62345a827a0f0f39bb4740650030daacd527d",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 570,
+        "identity": {
+          "verified": 570,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 570,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 190,
+          "failed": 0,
+          "notReached": 380
+        }
+      }
+    },
+    {
+      "id": "N10-09",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "fixtures.tree.json",
+      "baseSha256": "467254979f20262b6127484ec79aee41fa4af28253ba15478c5b2187301a635d",
+      "candidateSha256": "5483baff5b7c87b9990c5383e427674bef11cd33bafc2f08835b0760f28dd62e",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-10",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "fixtures.tree.json",
+      "baseSha256": "467254979f20262b6127484ec79aee41fa4af28253ba15478c5b2187301a635d",
+      "candidateSha256": "5483baff5b7c87b9990c5383e427674bef11cd33bafc2f08835b0760f28dd62e",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "208 file(s); 11 finding(s) suppressed by inline directives, 7 with a recorded reason; 17 file(s) not scanned — binary",
+      "to": "208 file(s); 11 finding(s) suppressed by inline directives, 7 with a recorded reason; 17 file(s) not scanned — binary; 675 descriptor(s) opened for content: identity 675 verified; kernel path 675 unavailable; kernel path after read 225 unavailable, 450 not reached"
+    },
+    {
+      "id": "N10-11",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "fixtures.tree.json",
+      "baseSha256": "467254979f20262b6127484ec79aee41fa4af28253ba15478c5b2187301a635d",
+      "candidateSha256": "5483baff5b7c87b9990c5383e427674bef11cd33bafc2f08835b0760f28dd62e",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 675,
+        "identity": {
+          "verified": 675,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 675,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 225,
+          "failed": 0,
+          "notReached": 450
+        }
+      }
+    },
+    {
+      "id": "N10-12",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "gitea.hist.json",
+      "baseSha256": "07ee7fbc9e1030d1ec539bcf97739dc51c917157be332ba3c3b4b963aec7759a",
+      "candidateSha256": "c719152881661d6386eb36df3a46b4969a79efe253a848779c3525dd9a4931be",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-13",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "gitea.tree.json",
+      "baseSha256": "b4ebabce45a8f1996e6fbca696e3d120af029e300fc76f53e6ae1a25e8961827",
+      "candidateSha256": "f4eb3218e7fa50ac338eb1e456b6bc408ad4973672b71bf321b9471b4e3d75af",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-14",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "gitea.tree.json",
+      "baseSha256": "b4ebabce45a8f1996e6fbca696e3d120af029e300fc76f53e6ae1a25e8961827",
+      "candidateSha256": "f4eb3218e7fa50ac338eb1e456b6bc408ad4973672b71bf321b9471b4e3d75af",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "5795 file(s); 2 generated file(s) excluded by default (--include-generated to scan them); 7 file(s) excluded (symlinks resolving outside the scan root); 2 file(s) not scanned — larger than maxFileSizeBytes (raise it in .secretloop.json to cover them); 440 file(s) not scanned — binary; 8 archive(s) opened — 8 member(s) scanned",
+      "to": "5795 file(s); 2 generated file(s) excluded by default (--include-generated to scan them); 7 file(s) excluded (symlinks resolving outside the scan root); 2 file(s) not scanned — larger than maxFileSizeBytes (raise it in .secretloop.json to cover them); 440 file(s) not scanned — binary; 8 archive(s) opened — 8 member(s) scanned; 18699 descriptor(s) opened for content: identity 18697 verified, 2 not reached; kernel path 18697 unavailable, 2 not reached; kernel path after read 6235 unavailable, 12464 not reached"
+    },
+    {
+      "id": "N10-15",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "gitea.tree.json",
+      "baseSha256": "b4ebabce45a8f1996e6fbca696e3d120af029e300fc76f53e6ae1a25e8961827",
+      "candidateSha256": "f4eb3218e7fa50ac338eb1e456b6bc408ad4973672b71bf321b9471b4e3d75af",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 18699,
+        "identity": {
+          "verified": 18697,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 2
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 18697,
+          "failed": 0,
+          "notReached": 2
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 6235,
+          "failed": 0,
+          "notReached": 12464
+        }
+      }
+    },
+    {
+      "id": "N10-16",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "openapi-directory.hist.json",
+      "baseSha256": "57fcef53dfa69f9af3209217a87ecb36c3fefc873564d1e60654474d27ec463f",
+      "candidateSha256": "27fe0ef8df33d38e9aa8f8654d08427e64bba7dcd21e3c00767e1f81ff7c8d75",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-17",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "openapi-directory.tree.json",
+      "baseSha256": "3fa7d562f5e0597662f62248b0518fbc29b181e9e6a65c9e4993f5ce168ade7b",
+      "candidateSha256": "5194b6c2acbe0c296d6bada43eb450877e13851607d0829a966da258bfb54ef2",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-18",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "openapi-directory.tree.json",
+      "baseSha256": "3fa7d562f5e0597662f62248b0518fbc29b181e9e6a65c9e4993f5ce168ade7b",
+      "candidateSha256": "5194b6c2acbe0c296d6bada43eb450877e13851607d0829a966da258bfb54ef2",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "4054 file(s); 93 file(s) not scanned — larger than maxFileSizeBytes (raise it in .secretloop.json to cover them); 5 file(s) not scanned — binary",
+      "to": "4054 file(s); 93 file(s) not scanned — larger than maxFileSizeBytes (raise it in .secretloop.json to cover them); 5 file(s) not scanned — binary; 12270 descriptor(s) opened for content: identity 12177 verified, 93 not reached; kernel path 12177 unavailable, 93 not reached; kernel path after read 4059 unavailable, 8211 not reached"
+    },
+    {
+      "id": "N10-19",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "openapi-directory.tree.json",
+      "baseSha256": "3fa7d562f5e0597662f62248b0518fbc29b181e9e6a65c9e4993f5ce168ade7b",
+      "candidateSha256": "5194b6c2acbe0c296d6bada43eb450877e13851607d0829a966da258bfb54ef2",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 12270,
+        "identity": {
+          "verified": 12177,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 93
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 12177,
+          "failed": 0,
+          "notReached": 93
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 4059,
+          "failed": 0,
+          "notReached": 8211
+        }
+      }
+    },
+    {
+      "id": "N10-20",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "openapi-specification.hist.json",
+      "baseSha256": "dbf840b2906f31422b388d31dec45689a9e65e358d5753ace104c46393e761d2",
+      "candidateSha256": "408f760b306cd54984bed9c9c86a2fa20f34fc0374e3a0cd8c2acbc2d9afcd6e",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-21",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "openapi-specification.tree.json",
+      "baseSha256": "a47d8b2d4ae80d5a84cd93411ff1921354c4ad88c1a2b09ef60ae2fa16040a93",
+      "candidateSha256": "774b274fe6c170c3cf8600a69e720549ac678c606472121630e215a8c82df509",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-22",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "openapi-specification.tree.json",
+      "baseSha256": "a47d8b2d4ae80d5a84cd93411ff1921354c4ad88c1a2b09ef60ae2fa16040a93",
+      "candidateSha256": "774b274fe6c170c3cf8600a69e720549ac678c606472121630e215a8c82df509",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "117 file(s)",
+      "to": "117 file(s); 351 descriptor(s) opened for content: identity 351 verified; kernel path 351 unavailable; kernel path after read 117 unavailable, 234 not reached"
+    },
+    {
+      "id": "N10-23",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "openapi-specification.tree.json",
+      "baseSha256": "a47d8b2d4ae80d5a84cd93411ff1921354c4ad88c1a2b09ef60ae2fa16040a93",
+      "candidateSha256": "774b274fe6c170c3cf8600a69e720549ac678c606472121630e215a8c82df509",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 351,
+        "identity": {
+          "verified": 351,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 351,
+          "failed": 0,
+          "notReached": 0
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 117,
+          "failed": 0,
+          "notReached": 234
+        }
+      }
+    },
+    {
+      "id": "N10-24",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "stripe-openapi.hist.json",
+      "baseSha256": "96739552b0a6d03dcb97b71235d0174131935f83f96e8602512e1bfcef8a6531",
+      "candidateSha256": "fc8cacdb9b164fd99ad78c6c90640ca977860bea957eef24c16f9147d4034af9",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-25",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: schemaVersion 4 -> 5 (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "stripe-openapi.tree.json",
+      "baseSha256": "7f8966dabd4b69694e73307c314f2812f797433bb09b57e5db45ee8c5388d541",
+      "candidateSha256": "accc63efcfbad999a29bf30d70905c10145196a0fd73883a40d29932e898c214",
+      "match": {
+        "path": "schemaVersion"
+      },
+      "from": 4,
+      "to": 5
+    },
+    {
+      "id": "N10-26",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: summary.scope on tree scan (0.7.0 intended metadata change).",
+      "category": "json-changed",
+      "report": "stripe-openapi.tree.json",
+      "baseSha256": "7f8966dabd4b69694e73307c314f2812f797433bb09b57e5db45ee8c5388d541",
+      "candidateSha256": "accc63efcfbad999a29bf30d70905c10145196a0fd73883a40d29932e898c214",
+      "match": {
+        "path": "summary.scope"
+      },
+      "from": "30 file(s); 16 file(s) not scanned — larger than maxFileSizeBytes (raise it in .secretloop.json to cover them)",
+      "to": "30 file(s); 16 file(s) not scanned — larger than maxFileSizeBytes (raise it in .secretloop.json to cover them); 106 descriptor(s) opened for content: identity 90 verified, 16 not reached; kernel path 90 unavailable, 16 not reached; kernel path after read 30 unavailable, 76 not reached"
+    },
+    {
+      "id": "N10-27",
+      "status": "historical-reproduction",
+      "reason": "Frozen N10 record: openedFileChecks added on tree scan (0.7.0 intended metadata change).",
+      "category": "json-added",
+      "report": "stripe-openapi.tree.json",
+      "baseSha256": "7f8966dabd4b69694e73307c314f2812f797433bb09b57e5db45ee8c5388d541",
+      "candidateSha256": "accc63efcfbad999a29bf30d70905c10145196a0fd73883a40d29932e898c214",
+      "match": {
+        "path": "summary.coverage.openedFileChecks"
+      },
+      "to": {
+        "opened": 106,
+        "identity": {
+          "verified": 90,
+          "refused": 0,
+          "unavailable": 0,
+          "failed": 0,
+          "notReached": 16
+        },
+        "kernelPath": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 90,
+          "failed": 0,
+          "notReached": 16
+        },
+        "kernelPathAfterRead": {
+          "verified": 0,
+          "refused": 0,
+          "unavailable": 30,
+          "failed": 0,
+          "notReached": 76
+        }
+      }
+    }
+  ]
+}
