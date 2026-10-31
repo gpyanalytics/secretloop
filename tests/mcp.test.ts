@@ -1641,8 +1641,9 @@ test("the launch roots are counted in the ready and roots lines, and never writt
 });
 
 test("the notification allowlist is exact: known names pass, and nothing that only looks known does", () => {
-  // Checked directly, because the SDK consumes the known progress and cancelled
-  // notifications itself, so a stdio run cannot reach the known-name branch.
+  // Checked directly: in a stdio run the SDK consumed the progress notification
+  // itself, so it never reached the fallback handler. The known-name branch is
+  // therefore tested directly.
   for (const name of [
     "notifications/cancelled",
     "notifications/initialized",
