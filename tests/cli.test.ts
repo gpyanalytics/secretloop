@@ -7,10 +7,15 @@ import {
   validateArgs,
   validateRoot,
   describeScope,
+  sanitizeForDisplay,
+  runApprove,
+  ApproveIO,
   HELP,
 } from "../src/cli";
+import * as consent from "../src/consent";
+import { loadConfig } from "../src/config";
 import { checkNodeVersion, MIN_NODE } from "../src/node-guard";
-import { Finding } from "../src/scanner";
+import { Finding, scanText } from "../src/scanner";
 import { test, suite, finish, assert, skip } from "./harness";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { spawnSync } from "child_process";
@@ -1054,6 +1059,213 @@ test("an ordinary error is printed exactly as before", () => {
     assert.strictEqual(r.status, 2);
     assert.strictEqual(r.stderr, `secretloop: ${missing} does not exist.\n`);
   });
+});
+
+// The approval prompt prints a file name from the scanned repository. A control
+// that a terminal acts on must not reach it; each one becomes "?", the same
+// convention as the C0 controls.
+suite("approval prompt sanitizer");
+
+const hex = (c: string) => `U+${c.charCodeAt(0).toString(16).padStart(4, "0")}`;
+
+test("C1 controls are replaced, including the single-character CSI at U+009B", () => {
+  for (const c of ["\u0080", "\u0085", "\u009b", "\u009f"]) {
+    assert.strictEqual(sanitizeForDisplay(`a${c}b`), "a?b", `${hex(c)} was printed as is`);
+  }
+});
+
+test("bidi formatting controls are replaced so a name cannot reorder what is shown", () => {
+  const bidi = ["\u061c", "\u200e", "\u200f", "\u202a", "\u202b", "\u202c", "\u202d", "\u202e", "\u2066", "\u2067", "\u2068", "\u2069"];
+  for (const c of bidi) {
+    assert.strictEqual(sanitizeForDisplay(`x${c}y`), "x?y", `${hex(c)} was printed as is`);
+  }
+});
+
+test("the line and paragraph separators U+2028 and U+2029 are replaced", () => {
+  for (const c of ["\u2028", "\u2029"]) {
+    assert.strictEqual(sanitizeForDisplay(`a${c}b`), "a?b", `${hex(c)} was printed as is`);
+  }
+});
+
+test("ordinary ASCII and non-Latin file names print unchanged", () => {
+  for (const name of ["config/app.js", "src/café/データ/ファイル.ts", "naïve résumé.txt"]) {
+    assert.strictEqual(sanitizeForDisplay(name), name);
+  }
+});
+
+test("escape sequences are removed whole and bare control bytes become ?", () => {
+  assert.strictEqual(sanitizeForDisplay("a\u001b[2K\u001b[1Gb"), "ab");
+  assert.strictEqual(sanitizeForDisplay("a\u0007b\u0000c\u007fd"), "a?b?c?d");
+});
+
+test("text longer than the cap is cut and says how long it was", () => {
+  const long = "a".repeat(200);
+  assert.strictEqual(sanitizeForDisplay(long), `${"a".repeat(160)}... (200 characters, truncated)`);
+});
+
+test("a lone surrogate is replaced", () => {
+  const high = String.fromCharCode(0xd83d);
+  const low = String.fromCharCode(0xde00);
+  assert.strictEqual(sanitizeForDisplay(`a${high}b`), "a?b", "a lone high surrogate was printed as is");
+  assert.strictEqual(sanitizeForDisplay(`a${low}b`), "a?b", "a lone low surrogate was printed as is");
+});
+
+test("a valid surrogate pair is kept whole", () => {
+  const emoji = String.fromCodePoint(0x1f600);
+  assert.strictEqual(sanitizeForDisplay(`a${emoji}b`), `a${emoji}b`);
+  // Exactly at the cap: 158 units plus the pair's two units is 160, so nothing is cut.
+  const atCap = "a".repeat(158) + emoji;
+  assert.strictEqual(sanitizeForDisplay(atCap), atCap);
+});
+
+test("truncation never leaves a lone high surrogate at the cut", () => {
+  const emoji = String.fromCodePoint(0x1f600);
+  // The pair starts at unit 160 and the cap falls between its two halves.
+  const out = sanitizeForDisplay("a".repeat(159) + emoji + "tail");
+  const body = out.split("... (")[0];
+  assert.strictEqual(body, "a".repeat(159), `unexpected truncated body: ${JSON.stringify(body)}`);
+  const last = body.charCodeAt(body.length - 1);
+  assert.ok(!(last >= 0xd800 && last <= 0xdbff), "a lone high surrogate was left at the cut");
+});
+
+suite("approval prompt, end to end");
+
+test("runApprove prints a file name with a bidi override with the override replaced", async () => {
+  const RLO = String.fromCharCode(0x202e);
+  const base = mkdtempSync(path.join(tmpdir(), "sl-approve-bidi-"));
+  try {
+    const root = path.join(base, "repo");
+    mkdirSync(root);
+    const cred = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+    const name = `rev${RLO}exe.js`;
+    writeFileSync(path.join(root, name), `const t = "${cred}";\n`, "utf8");
+    const config = loadConfig(root);
+    const finding = scanText(readFileSync(path.join(root, name), "utf8"), { config, filePath: name }).find(
+      (f) => f.ruleId === "github-token"
+    );
+    assert.ok(finding, "the fixture produced no github-token finding");
+    const fingerprint = String(finding.fingerprint);
+    consent.setConsentRootForTests(path.join(base, "store"));
+    consent.writeRecord({
+      version: consent.CONSENT_VERSION,
+      id: consent.recordId(fingerprint, root),
+      state: "pending",
+      fingerprint,
+      path: root,
+      file: name,
+      line: 1,
+      ruleId: "github-token",
+      provider: "GitHub",
+      commitment: consent.commitmentOf(cred),
+      createdAt: new Date().toISOString(),
+    });
+    const outs: string[] = [];
+    // Answer "n": the prompt is printed and nothing is sent.
+    const io: ApproveIO = { isTTY: true, out: (m) => outs.push(m), err: () => {}, ask: async () => "n" };
+    await runApprove(fingerprint, io);
+    const shown = outs.join("");
+    assert.ok(shown.includes("location:  rev?exe.js:1"), `the location line was not sanitized:\n${shown}`);
+    assert.ok(!shown.includes(RLO), "the bidi override reached the approval prompt");
+  } finally {
+    consent.setConsentRootForTests(undefined);
+    rmSync(base, { recursive: true, force: true });
+  }
+});
+
+// The approval prompt is the trust anchor, so these pin what it asks, what an
+// affirmative answer records, and what a fingerprint echo shows. Each case uses
+// its own consent root, so the real store is never touched.
+function pendingApproval(file: string): { base: string; root: string; cred: string; fingerprint: string } {
+  const base = mkdtempSync(path.join(tmpdir(), "sl-approve-pending-"));
+  try {
+    return buildPending(base, file);
+  } catch (err) {
+    // A failed setup must not leave the consent root pointing at a directory that is about to go.
+    consent.setConsentRootForTests(undefined);
+    rmSync(base, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+function buildPending(base: string, file: string): { base: string; root: string; cred: string; fingerprint: string } {
+  const root = path.join(base, "repo");
+  mkdirSync(root);
+  const cred = "ghp_16C7e42F292c6912E7710c838347Ae178B4a";
+  writeFileSync(path.join(root, file), `const t = "${cred}";\n`, "utf8");
+  const config = loadConfig(root);
+  const finding = scanText(readFileSync(path.join(root, file), "utf8"), { config, filePath: file }).find(
+    (f) => f.ruleId === "github-token"
+  );
+  assert.ok(finding, "the fixture produced no github-token finding");
+  const fingerprint = String(finding.fingerprint);
+  consent.setConsentRootForTests(path.join(base, "store"));
+  consent.writeRecord({
+    version: consent.CONSENT_VERSION,
+    id: consent.recordId(fingerprint, root),
+    state: "pending",
+    fingerprint,
+    path: root,
+    file,
+    line: 1,
+    ruleId: "github-token",
+    provider: "GitHub",
+    commitment: consent.commitmentOf(cred),
+    createdAt: new Date().toISOString(),
+  });
+  return { base, root, cred, fingerprint };
+}
+
+test("an affirmative answer approves the record with the commitment of the raw credential", async () => {
+  const fx = pendingApproval("app.js");
+  try {
+    const io: ApproveIO = { isTTY: true, out: () => {}, err: () => {}, ask: async () => "y" };
+    assert.strictEqual(await runApprove(fx.fingerprint, io), 0);
+    const after = consent.findByFingerprint(fx.fingerprint);
+    assert.strictEqual(after.length, 1, "the record is not in the store after an affirmative answer");
+    assert.strictEqual(after[0].state, "approved");
+    assert.strictEqual(after[0].commitment, consent.commitmentOf(fx.cred), "the approval does not commit to the raw value");
+  } finally {
+    consent.setConsentRootForTests(undefined);
+    rmSync(fx.base, { recursive: true, force: true });
+  }
+});
+
+test("the consent question names the provider and keeps its exact wording", async () => {
+  const fx = pendingApproval("app.js");
+  try {
+    const asked: string[] = [];
+    const io: ApproveIO = {
+      isTTY: true,
+      out: () => {},
+      err: () => {},
+      ask: async (prompt) => {
+        asked.push(prompt);
+        return "n";
+      },
+    };
+    await runApprove(fx.fingerprint, io);
+    assert.deepStrictEqual(asked, ["Send this credential to GitHub? [y/N] "]);
+  } finally {
+    consent.setConsentRootForTests(undefined);
+    rmSync(fx.base, { recursive: true, force: true });
+  }
+});
+
+test("a fingerprint echoed back with a C1 control is printed sanitized", async () => {
+  const base = mkdtempSync(path.join(tmpdir(), "sl-approve-fp-"));
+  try {
+    consent.setConsentRootForTests(path.join(base, "store"));
+    const c1 = String.fromCharCode(0x9b);
+    const errs: string[] = [];
+    const io: ApproveIO = { isTTY: true, out: () => {}, err: (m) => errs.push(m), ask: async () => "n" };
+    assert.strictEqual(await runApprove(`fp${c1}31m`, io), 2);
+    const text = errs.join("");
+    assert.ok(text.includes("no pending verification request for fp?31m."), `unexpected output: ${text}`);
+    assert.ok(!text.includes(c1), "the C1 control was echoed to the terminal");
+  } finally {
+    consent.setConsentRootForTests(undefined);
+    rmSync(base, { recursive: true, force: true });
+  }
 });
 
 finish();
