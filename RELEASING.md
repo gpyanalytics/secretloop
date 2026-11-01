@@ -90,6 +90,39 @@ Run against the **built artifacts**, not the source tree.
       release on a fixed corpus, unless the diff is the explicitly intended
       new rules. Build the prior release in a separate worktree and compare
       ruleId, file, line, fingerprint, severity, confidence and value.
+- [ ] **R4 comparator: release PASS is exit 0 and nothing else.**
+      `scripts/r4-comparator/compare-fail-closed.js` exits 0 PASS, 1 FAIL,
+      2 BLOCK, 3 PASS-REPRODUCTION, 64 usage. A comparison counts as release
+      evidence only when all of these hold:
+      - it ran **without** `--reproduction`;
+      - it exited 0;
+      - the first line of its output is exactly
+        `R4 comparator verdict: PASS`, compared as a whole line;
+      - when it ran with `--out <dir>`, `<dir>/delta-record.json` parses as
+        JSON whose `verdict` is the string `"PASS"` and whose
+        `reproduction.sha256` is `null`. Check the parsed values, not the
+        text: the record is compact JSON, so a search for a spaced string
+        such as `"verdict": "PASS"` rejects a genuine PASS. For example,
+        `node -e 'const r = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); process.exit(r.verdict === "PASS" && r.reproduction.sha256 === null ? 0 : 1)' <dir>/delta-record.json`.
+        The comparator writes `delta-record.json` and `summary.txt` only
+        when given `--out`; without it there is no record to check, and the
+        exit code and first line are the evidence.
+
+      Exit 3 means a historical reproduction still matches the bytes it was
+      pinned to; it is **never** release PASS. Never gate on the word "PASS"
+      appearing anywhere in the output: the summary line of a reproduction
+      run, `R4 comparator verdict: PASS-REPRODUCTION`, contains it too.
+- [ ] **N10 historical reproduction — mandatory here, optional in CI.** CI
+      runs `npm run test:comparator` without the frozen N10 record, and its
+      three historical cases are the allowed skips there. Here they must run:
+      `R4_N10_ROOT=<frozen n10-detection-fingerprint-stability record>
+      npm run test:comparator:n10`, with `NODE_OPTIONS` unset. The runner
+      exits 0 only when every result passed and each of the three cases
+      appended its id to a fresh receipt after its assertions passed, so a
+      test-runner filter or a skip cannot pass it. A direct `node --test` or
+      `R4_REQUIRE_N10=1 npm run test:comparator` run is not this evidence.
+      Without a usable record the command fails rather than skips. The
+      record is read and hashed, never written or regenerated.
 - [ ] **No vacuous tests.** Any test touched or added this cycle FAILS when
       its property is broken (RED-checked). A test that passes either way is
       worse than no test, because it is counted.

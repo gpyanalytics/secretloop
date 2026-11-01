@@ -54,6 +54,13 @@ jobs:
           test "$(stat -c %a "$R/pending/$ID.json")" = "600"
           echo "SECRETLOOP_FOREIGN_RECORD_FIXTURE=$R" >> "$GITHUB_ENV"
       - run: npm test
+      - name: R4 comparator tests (every result accounted; allowed skips are the 3 historical N10 cases only)
+        # run-comparator-tests.js fails the step on any failure, on any skip outside its allowlist, and
+        # on a non-empty NODE_OPTIONS. The frozen N10 record is not in the repository, so R4_N10_ROOT is
+        # unset here and its three historical cases are the allowed skips. The historical reproduction
+        # is the release-checklist step `npm run test:comparator:n10` (RELEASING.md section 4), and its
+        # comparator exit 3 is never release PASS.
+        run: npm run test:comparator
 
   test-windows:
     # NATIVE WINDOWS EXECUTION. Until this job existed, every Windows claim in
@@ -103,6 +110,11 @@ jobs:
       # lets that guard pass.
       - run: npm run compile
       - run: npm test
+      # The same comparator step as the Linux `test` job; see the note there. On Windows the allowlist
+      # also admits the 5 symbolic-link controls and the POSIX signal control, which skip by design
+      # and still run on Linux.
+      - name: R4 comparator tests (every result accounted; allowed skips are the 3 historical N10 cases, 5 symbolic-link controls and 1 POSIX signal control)
+        run: npm run test:comparator
 
   test-windows-two-user:
     # THE CASE A SECOND ACCOUNT IS NEEDED FOR.

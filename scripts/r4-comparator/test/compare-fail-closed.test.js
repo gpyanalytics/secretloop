@@ -1,8 +1,13 @@
 "use strict";
-// Run with: node --test scripts/r4-comparator/test/
+// Run with: npm run test:comparator (routine), or npm run test:comparator:n10 (release checklist).
+// Both go through run-comparator-tests.js, which accounts for every reported result.
 // Synthetic controls write only under a session-local scratch directory: R4_TEST_TMP if set, else a
 // fresh directory under the system temp directory. The frozen N10 evidence is read and hashed before
-// and after, never written; its tests skip, and say so, if the record is absent.
+// and after, never written.
+//
+// The N10 record lives outside the repository, and its location comes only from R4_N10_ROOT. Without
+// it the three historical N10 cases skip and name the reason. With R4_REQUIRE_N10=1 a missing or
+// unusable record fails those cases instead, so a checklist run cannot pass on a skip.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const crypto = require("crypto");
@@ -14,8 +19,9 @@ const { compare, exitCodeFor } = require("../compare-fail-closed.js");
 
 const HERE = path.resolve(__dirname, "..");
 const CLI = path.join(HERE, "compare-fail-closed.js");
-const N10 = process.env.R4_N10_ROOT || "/Users/mac/Documents/GPY/secretloop-benchmark/n10-detection-fingerprint-stability";
-const N10_AVAILABLE = fs.existsSync(path.join(N10, "MANIFEST.txt"));
+const N10 = process.env.R4_N10_ROOT ? path.resolve(process.env.R4_N10_ROOT) : null;
+const N10_REQUIRE = process.env.R4_REQUIRE_N10;
+const N10_PROBLEM = n10Problem();
 const SCRATCH = process.env.R4_TEST_TMP || fs.mkdtempSync(path.join(os.tmpdir(), "r4-comparator-tests-"));
 const POSIX = process.platform !== "win32";
 const REPRO = path.join(__dirname, "fixtures", "n10-v060-to-main.reproduction.json");
@@ -859,6 +865,65 @@ test("the record is deterministic: two runs produce byte-identical output", () =
 
 // ---------------------------------------------------------------- frozen N10 evidence
 
+// Why the frozen N10 record cannot be used, or null when it can. Only its shape is checked here: its
+// bytes are checked by the comparison itself, which BLOCKs on any payload that differs from MANIFEST.txt.
+function n10Problem() {
+  if (!N10) return "R4_N10_ROOT is not set";
+  const is = (rel, kind) => {
+    try {
+      return fs.lstatSync(path.join(N10, rel))[kind]();
+    } catch {
+      return false;
+    }
+  };
+  if (!is(".", "isDirectory")) return `R4_N10_ROOT is not a real directory: ${N10}`;
+  if (!is("MANIFEST.txt", "isFile")) return `no regular MANIFEST.txt under R4_N10_ROOT: ${N10}`;
+  for (const dir of ["evidence/main", "evidence/v0.6.0"]) {
+    if (!is(dir, "isDirectory")) return `no ${dir} directory under R4_N10_ROOT: ${N10}`;
+  }
+  return null;
+}
+
+// The three historical N10 cases, by the id each records when it runs to completion.
+const N10_CASES = ["n10-reproduction", "n10-without-reproduction", "n10-tamper-refused"];
+const N10_RAN = new Set();
+
+// A historical N10 case. It runs when the record is usable. Otherwise it fails under R4_REQUIRE_N10=1
+// and skips, naming the reason, when R4_REQUIRE_N10 is unset. Any other value, the empty string
+// included, fails, so a misspelt requirement cannot quietly become a skip. A case that runs to
+// completion records its id, and appends it to R4_N10_RECEIPT when the runner provides one.
+function n10Test(id, name, fn) {
+  if (N10_REQUIRE !== undefined && N10_REQUIRE !== "1") {
+    return test(name, () => assert.fail(`R4_REQUIRE_N10 must be 1 or unset, not ${JSON.stringify(N10_REQUIRE)}`));
+  }
+  if (N10_PROBLEM === null) {
+    return test(name, () => {
+      fn();
+      N10_RAN.add(id);
+      if (process.env.R4_N10_RECEIPT) fs.appendFileSync(process.env.R4_N10_RECEIPT, `${id}\n`);
+    });
+  }
+  if (N10_REQUIRE === "1") {
+    return test(name, () => assert.fail(`R4_REQUIRE_N10=1, but the frozen N10 record cannot be used: ${N10_PROBLEM}`));
+  }
+  return test(name, { skip: `historical N10 case not run: ${N10_PROBLEM} (R4_REQUIRE_N10=1 makes this a failure)` }, fn);
+}
+
+// With R4_REQUIRE_N10 set to any value, this process fails unless all three cases ran to completion.
+// A test-runner filter (--test-name-pattern, --test-skip-pattern, --test-only) removes cases without
+// failing them, and this is what notices. It cannot notice a run in which this file never loads, such
+// as a --test-shard that leaves it out: run-comparator-tests.js refuses NODE_OPTIONS and checks the
+// receipt for that.
+if (N10_REQUIRE !== undefined) {
+  process.on("exit", () => {
+    const missing = N10_CASES.filter((id) => !N10_RAN.has(id));
+    if (missing.length > 0) {
+      process.stderr.write(`R4_REQUIRE_N10 is set, but these historical N10 cases did not run to completion: ${missing.join(", ")}\n`);
+      process.exitCode = 1;
+    }
+  });
+}
+
 const frozenFiles = () => {
   const out = [];
   for (const dir of ["evidence/main", "evidence/v0.6.0"]) {
@@ -877,7 +942,7 @@ const n10Args = (candidate) => ({
   manifests: [path.join(N10, "MANIFEST.txt")],
 });
 
-test("N10 reproduction: PASS-REPRODUCTION, 27 recorded differences, zero finding-level differences, frozen evidence unchanged", { skip: !N10_AVAILABLE && "frozen N10 record not present" }, () => {
+n10Test("n10-reproduction", "N10 reproduction: PASS-REPRODUCTION, 27 recorded differences, zero finding-level differences, frozen evidence unchanged", () => {
   const before = frozenFiles();
   const args = { ...n10Args(path.join(N10, "evidence/main")), reproduction: REPRO };
   const r = compare(args);
@@ -892,13 +957,13 @@ test("N10 reproduction: PASS-REPRODUCTION, 27 recorded differences, zero finding
   assert.deepEqual(frozenFiles(), before, "frozen N10 evidence changed during the comparison");
 });
 
-test("N10 without the reproduction is FAIL, with 27 unapproved metadata differences", { skip: !N10_AVAILABLE && "frozen N10 record not present" }, () => {
+n10Test("n10-without-reproduction", "N10 without the reproduction is FAIL, with 27 unapproved metadata differences", () => {
   const r = compare(n10Args(path.join(N10, "evidence/main")));
   EXPECT_FAIL(r);
   assert.equal(r.record.unapprovedCount, 27);
 });
 
-test("N10 reproduction refuses a changed finding in a scratch copy: the pinned bytes no longer match", { skip: !N10_AVAILABLE && "frozen N10 record not present" }, () => {
+n10Test("n10-tamper-refused", "N10 reproduction refuses a changed finding in a scratch copy: the pinned bytes no longer match", () => {
   const root = scratch("n10-inject");
   const cand = path.join(root, "candidate");
   fs.mkdirSync(cand, { recursive: true });
