@@ -1,0 +1,31 @@
+{
+  "schema": "r4-inventory-1",
+  "reports": [
+    { "file": "A.tree.json", "kind": "json" },
+    { "file": "A.tree.err", "kind": "stderr" },
+    { "file": "A.hist.json", "kind": "json" },
+    { "file": "A.hist.err", "kind": "stderr" },
+    { "file": "A.named.tree.json", "kind": "json" },
+    { "file": "A.named.tree.err", "kind": "stderr" },
+    { "file": "A.named.hist.json", "kind": "json" },
+    { "file": "A.named.hist.err", "kind": "stderr" },
+    { "file": "fixtures.tree.json", "kind": "json" },
+    { "file": "fixtures.tree.err", "kind": "stderr" },
+    { "file": "gitea.tree.json", "kind": "json" },
+    { "file": "gitea.tree.err", "kind": "stderr" },
+    { "file": "gitea.hist.json", "kind": "json" },
+    { "file": "gitea.hist.err", "kind": "stderr" },
+    { "file": "openapi-directory.tree.json", "kind": "json" },
+    { "file": "openapi-directory.tree.err", "kind": "stderr" },
+    { "file": "openapi-directory.hist.json", "kind": "json" },
+    { "file": "openapi-directory.hist.err", "kind": "stderr" },
+    { "file": "openapi-specification.tree.json", "kind": "json" },
+    { "file": "openapi-specification.tree.err", "kind": "stderr" },
+    { "file": "openapi-specification.hist.json", "kind": "json" },
+    { "file": "openapi-specification.hist.err", "kind": "stderr" },
+    { "file": "stripe-openapi.tree.json", "kind": "json" },
+    { "file": "stripe-openapi.tree.err", "kind": "stderr" },
+    { "file": "stripe-openapi.hist.json", "kind": "json" },
+    { "file": "stripe-openapi.hist.err", "kind": "stderr" }
+  ]
+}
